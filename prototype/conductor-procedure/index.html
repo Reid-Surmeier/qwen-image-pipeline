@@ -1,0 +1,826 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Conductor procedure prototype</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #18201c;
+      --muted: #5f6c65;
+      --paper: #f4f1e9;
+      --panel: #fffdf7;
+      --line: #d8d4ca;
+      --accent: #176b4d;
+      --accent-soft: #dcece5;
+      --warn: #9b5a16;
+      --warn-soft: #f6e8d4;
+      --danger: #a33737;
+      --danger-soft: #f6dddd;
+      --shadow: 0 12px 30px rgba(24, 32, 28, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--paper);
+      color: var(--ink);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.45;
+    }
+
+    main {
+      width: min(1240px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 44px 0 80px;
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+    h1 { font-size: clamp(2rem, 4vw, 3.5rem); line-height: 1.02; max-width: 900px; }
+    h2 { font-size: 1.25rem; margin-bottom: 16px; }
+    h3 { font-size: 0.95rem; margin-bottom: 8px; }
+
+    .eyebrow {
+      color: var(--accent);
+      font-size: 0.76rem;
+      font-weight: 800;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+    }
+
+    .intro {
+      max-width: 920px;
+      margin-bottom: 28px;
+      font-size: 1.08rem;
+      color: #334039;
+    }
+
+    .question {
+      padding: 18px 20px;
+      border-left: 4px solid var(--accent);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+      margin: 24px 0 32px;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.75fr);
+      gap: 20px;
+      align-items: start;
+    }
+
+    .stack { display: grid; gap: 20px; }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 20px;
+      box-shadow: var(--shadow);
+    }
+
+    .state-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .state-card {
+      min-height: 104px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: #fff;
+    }
+
+    .state-card.wide { grid-column: 1 / -1; }
+
+    .label {
+      display: block;
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 750;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+
+    .value { font-weight: 700; }
+    .detail { margin-top: 5px; color: var(--muted); font-size: 0.88rem; }
+
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      border-radius: 99px;
+      padding: 4px 9px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 0.8rem;
+      font-weight: 800;
+    }
+
+    .status.warn { background: var(--warn-soft); color: var(--warn); }
+    .status.danger { background: var(--danger-soft); color: var(--danger); }
+
+    .actions {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 9px;
+    }
+
+    button {
+      appearance: none;
+      border: 1px solid #bfc6c1;
+      border-radius: 9px;
+      background: #fff;
+      color: var(--ink);
+      padding: 10px 12px;
+      font: inherit;
+      font-size: 0.88rem;
+      font-weight: 680;
+      text-align: left;
+      cursor: pointer;
+    }
+
+    button:hover { border-color: var(--accent); background: #f8fbf9; }
+    button:focus-visible { outline: 3px solid rgba(23, 107, 77, 0.25); outline-offset: 2px; }
+    button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+    button.danger { color: var(--danger); border-color: #d8b1b1; }
+    button:disabled { opacity: 0.42; cursor: not-allowed; }
+
+    .group-title {
+      grid-column: 1 / -1;
+      margin: 8px 0 -1px;
+      color: var(--muted);
+      font-size: 0.72rem;
+      font-weight: 800;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .timeline {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      gap: 10px;
+      max-height: 500px;
+      overflow: auto;
+    }
+
+    .timeline li {
+      border-left: 3px solid var(--line);
+      padding: 1px 0 1px 12px;
+      font-size: 0.87rem;
+    }
+
+    .timeline li:last-child { border-color: var(--accent); }
+    .timeline strong { display: block; margin-bottom: 2px; }
+    .timeline span { color: var(--muted); }
+
+    .tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-bottom: 14px;
+    }
+
+    .tab[aria-selected="true"] {
+      background: var(--accent-soft);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .walkthrough {
+      display: grid;
+      gap: 12px;
+    }
+
+    .walkthrough-copy { color: var(--muted); }
+
+    .steps {
+      display: grid;
+      gap: 8px;
+      counter-reset: step;
+    }
+
+    .step {
+      display: grid;
+      grid-template-columns: 30px 1fr;
+      gap: 8px;
+      align-items: stretch;
+    }
+
+    .step::before {
+      counter-increment: step;
+      content: counter(step);
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      font-size: 0.78rem;
+      font-weight: 800;
+    }
+
+    .step button.done { background: var(--accent-soft); border-color: #a7cbbb; }
+    .step button.current { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(23, 107, 77, 0.12); }
+
+    .change-note {
+      margin: 0 0 14px;
+      padding: 10px 12px;
+      border-radius: 9px;
+      background: var(--accent-soft);
+      color: #24553f;
+      font-size: 0.88rem;
+      font-weight: 650;
+    }
+
+    .change-note.warn { background: var(--warn-soft); color: #744413; }
+    .change-note.danger { background: var(--danger-soft); color: #772f2f; }
+
+    .procedure {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 8px;
+    }
+
+    .procedure span {
+      border: 1px solid var(--line);
+      border-radius: 99px;
+      padding: 5px 8px;
+      color: var(--muted);
+      font-size: 0.78rem;
+    }
+
+    .procedure span.active { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+    .procedure span.done { color: #406052; background: #edf5f1; }
+
+    .footer-note { margin-top: 22px; color: var(--muted); font-size: 0.82rem; }
+
+    @media (max-width: 860px) {
+      .layout { grid-template-columns: 1fr; }
+      .state-grid { grid-template-columns: 1fr; }
+      .state-card.wide { grid-column: auto; }
+    }
+
+    @media (max-width: 560px) {
+      main { width: min(100% - 20px, 1240px); padding-top: 26px; }
+      .actions { grid-template-columns: 1fr; }
+      .panel { padding: 15px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="eyebrow">Throwaway logic prototype · Wayfinder</p>
+    <h1>Can the Conductor choose the right procedure—and know when to stop?</h1>
+    <p class="intro">Drive an autonomous generation procedure through ordinary and awkward cases. Watch how it chooses references, generation, Assembly, verification, continuation, and genuine human gates without relying on hidden issue history.</p>
+
+    <section class="question">
+      <strong>Question this prototype answers</strong>
+      <p style="margin:8px 0 0">Does the agreed high-level architecture feel correct when the Conductor works inside an application repository, coordinates its specialists, refuses unsafe shortcuts, and ends with either a trustworthy verified candidate or a clear blocked/failed result?</p>
+    </section>
+
+    <section class="panel" style="margin-bottom:20px">
+      <h2>Guided walkthroughs</h2>
+      <div class="tabs" id="scenarioTabs" role="tablist"></div>
+      <div class="walkthrough" id="walkthrough"></div>
+    </section>
+
+    <div class="layout">
+      <div class="stack">
+        <section class="panel">
+          <h2>Current procedure state</h2>
+          <p id="changeNote" class="change-note">Choose a walkthrough or load a Project Contract.</p>
+          <div class="state-grid" id="stateGrid"></div>
+        </section>
+
+        <section class="panel">
+          <h2>Free play</h2>
+          <p class="detail">Try actions in the wrong order. The Conductor should explain its refusal rather than silently doing something unsafe.</p>
+          <div class="actions" id="freePlay"></div>
+        </section>
+      </div>
+
+      <aside class="stack">
+        <section class="panel">
+          <h2>Procedure</h2>
+          <div class="procedure" id="procedure"></div>
+        </section>
+
+        <section class="panel">
+          <h2>Evidence trail</h2>
+          <ol class="timeline" id="timeline"></ol>
+        </section>
+      </aside>
+    </div>
+
+    <p class="footer-note">Prototype only. It uses invented in-memory cases, performs no provider calls, stores nothing, and is not production behavior.</p>
+  </main>
+
+  <script>
+    // Portable logic module: pure state + action -> next state.
+    const ConductorModel = (() => {
+      const stages = [
+        "Project understanding",
+        "Reference planning",
+        "Procedure plan",
+        "Generation",
+        "Human choice",
+        "Assembly",
+        "Verification",
+        "Final approval"
+      ];
+
+      function initialState() {
+        return {
+          task: "None loaded",
+          objective: "Waiting for an application Project Contract",
+          procedureStatus: "Waiting",
+          currentStage: "Project understanding",
+          selectedPath: "Not selected",
+          pathReason: "The Conductor has not examined an objective or its authorities.",
+          references: {
+            appearance: "Unknown",
+            behavior: "Unknown",
+            reachesModel: "Not checked"
+          },
+          specialists: {
+            referenceResearch: "Waiting",
+            generation: "Waiting",
+            assembly: "Waiting",
+            verification: "Waiting"
+          },
+          assemblyRequired: false,
+          donorChosen: false,
+          attempt: "No provider submission",
+          retry: "Not applicable",
+          spend: "£0 / no request submitted",
+          humanDecision: "None needed",
+          outcome: "Not started",
+          lastChange: "Choose a walkthrough or load a Project Contract.",
+          tone: "normal",
+          events: [{ title: "Ready", detail: "No application work has begun." }]
+        };
+      }
+
+      function note(state, title, detail, tone = "normal") {
+        return {
+          ...state,
+          lastChange: detail,
+          tone,
+          events: [...state.events, { title, detail }]
+        };
+      }
+
+      function refuse(state, reason) {
+        return note(state, "Action refused", reason, "danger");
+      }
+
+      function resetFor(task) {
+        const base = initialState();
+        if (task === "image") {
+          return note({
+            ...base,
+            task: "Reference-preserving image edit",
+            objective: "Add one missing visual element while preserving the authoritative interface.",
+            procedureStatus: "Understanding the project",
+            outcome: "In progress",
+            references: { appearance: "Declared, not inspected", behavior: "Not required", reachesModel: "Not checked" }
+          }, "Project Contract loaded", "The Conductor found an image-edit objective and must inspect the declared visual authority.");
+        }
+        return note({
+          ...base,
+          task: "Seedance motion task",
+          objective: "Animate an existing icon according to a real motion reference.",
+          procedureStatus: "Understanding the project",
+          outcome: "In progress",
+          references: { appearance: "Declared, not inspected", behavior: "Required, missing", reachesModel: "Not checked" }
+        }, "Project Contract loaded", "The Conductor found a motion task and knows that appearance and behavior need separate authorities.");
+      }
+
+      function reduce(state, action) {
+        switch (action.type) {
+          case "RESET": return initialState();
+          case "LOAD_IMAGE": return resetFor("image");
+          case "LOAD_VIDEO": return resetFor("video");
+
+          case "INSPECT_AUTHORITIES": {
+            if (state.task === "None loaded") return refuse(state, "There is no Project Contract to inspect.");
+            if (state.task === "Reference-preserving image edit") {
+              return note({
+                ...state,
+                procedureStatus: "References understood",
+                currentStage: "Reference planning",
+                references: { appearance: "Authoritative source present", behavior: "Not required", reachesModel: "Not yet" },
+                specialists: { ...state.specialists, referenceResearch: "Complete" }
+              }, "Authorities inspected", "Existing interface pixels are authoritative, so the Conductor will preserve them and generate only the missing element.");
+            }
+            return note({
+              ...state,
+              procedureStatus: "Blocked on reference research",
+              currentStage: "Reference planning",
+              references: { appearance: "Authoritative source present", behavior: "Required, missing", reachesModel: "No" },
+              specialists: { ...state.specialists, referenceResearch: "Searching for behavior authority" },
+              humanDecision: "None—reference research is agent-owned",
+              outcome: "Blocked: missing motion authority"
+            }, "Reference gap found", "The appearance source is usable, but no authoritative motion video exists yet. Generation is blocked.", "warn");
+          }
+
+          case "FIND_VIDEO": {
+            if (state.task !== "Seedance motion task") return refuse(state, "A motion reference is not required for this task.");
+            return note({
+              ...state,
+              procedureStatus: "Reference found, not transmitted",
+              references: { ...state.references, behavior: "Authoritative video found", reachesModel: "No" },
+              specialists: { ...state.specialists, referenceResearch: "Complete" },
+              outcome: "Blocked: reference not in model request"
+            }, "Motion authority found", "The source video is recorded and justified, but the procedure still refuses generation until that exact reference reaches the model request.", "warn");
+          }
+
+          case "ATTACH_VIDEO": {
+            if (state.task !== "Seedance motion task") return refuse(state, "This task has no motion-video requirement.");
+            if (state.references.behavior !== "Authoritative video found") return refuse(state, "Find and justify an authoritative motion video before attaching one.");
+            return note({
+              ...state,
+              procedureStatus: "References ready",
+              references: { ...state.references, reachesModel: "Yes—identity and source match" },
+              outcome: "In progress"
+            }, "Reference transmission proven", "The exact authoritative video is now part of the actual model request, not merely mentioned in prose.");
+          }
+
+          case "PLAN": {
+            if (state.task === "None loaded") return refuse(state, "Load a Project Contract before asking for a procedure plan.");
+            if (state.task === "Reference-preserving image edit" && state.references.appearance !== "Authoritative source present") {
+              return refuse(state, "The Conductor cannot plan before inspecting the declared visual authority.");
+            }
+            if (state.task === "Seedance motion task" && state.references.reachesModel !== "Yes—identity and source match") {
+              return note({
+                ...state,
+                procedureStatus: "Blocked before generation",
+                currentStage: "Reference planning",
+                outcome: "Blocked: required reference absent from request"
+              }, "Plan refused", "The task says to use a motion reference, but the actual request does not contain the proven video. The Conductor will not substitute a text description.", "danger");
+            }
+            if (state.task === "Reference-preserving image edit") {
+              return note({
+                ...state,
+                procedureStatus: "Plan ready",
+                currentStage: "Procedure plan",
+                selectedPath: "Bounded generation → human donor choice → Assembly → verification",
+                pathReason: "Most required pixels already exist; the model may create only the missing material.",
+                assemblyRequired: true,
+                specialists: { ...state.specialists, generation: "Planned", assembly: "Required", verification: "Required" },
+                outcome: "Ready to execute"
+              }, "Procedure selected", "The Conductor chose Assembly because authoritative pixels already exist and must not be redrawn.");
+            }
+            return note({
+              ...state,
+              procedureStatus: "Plan ready",
+              currentStage: "Procedure plan",
+              selectedPath: "Reference-bound Seedance generation → verification → final approval",
+              pathReason: "The task requires new motion, and the exact appearance and behavior authorities are present.",
+              assemblyRequired: false,
+              specialists: { ...state.specialists, generation: "Planned", verification: "Required" },
+              outcome: "Ready to execute"
+            }, "Procedure selected", "The Conductor chose the Seedance path only after proving the motion reference reaches the request.");
+          }
+
+          case "START_GENERATION": {
+            if (state.procedureStatus !== "Plan ready" && state.procedureStatus !== "Safe to continue") {
+              return refuse(state, "Generation requires a complete, reference-checked plan.");
+            }
+            return note({
+              ...state,
+              procedureStatus: "Generating",
+              currentStage: "Generation",
+              specialists: { ...state.specialists, generation: "Working" },
+              attempt: "Attempt recorded before submission",
+              retry: "Forbidden unless reconciled safe",
+              spend: "Possibly spent from submission onward",
+              outcome: "In progress"
+            }, "Generation started", "The attempt and no-retry posture were recorded before contacting the provider.");
+          }
+
+          case "GENERATION_RETURNED": {
+            if (state.procedureStatus !== "Generating") return refuse(state, "There is no active generation to complete.");
+            if (state.assemblyRequired) {
+              return note({
+                ...state,
+                procedureStatus: "Waiting for donor choice",
+                currentStage: "Human choice",
+                specialists: { ...state.specialists, generation: "Candidate produced" },
+                attempt: "Provider response recorded",
+                retry: "Not needed",
+                spend: "Actual cost recorded",
+                humanDecision: "Choose the visually acceptable donor",
+                outcome: "Blocked: genuine subjective decision"
+              }, "Candidate produced", "Generation is complete, but Assembly cannot choose a subjective donor on your behalf.", "warn");
+            }
+            return note({
+              ...state,
+              procedureStatus: "Ready for verification",
+              currentStage: "Verification",
+              specialists: { ...state.specialists, generation: "Candidate produced", verification: "Ready" },
+              attempt: "Provider response recorded",
+              retry: "Not needed",
+              spend: "Actual cost recorded",
+              outcome: "Candidate awaiting checks"
+            }, "Candidate produced", "The output and provider evidence are recorded. It is not complete until verification passes.");
+          }
+
+          case "CHOOSE_DONOR": {
+            if (state.procedureStatus !== "Waiting for donor choice") return refuse(state, "A donor choice is not currently required.");
+            return note({
+              ...state,
+              procedureStatus: "Ready for Assembly",
+              currentStage: "Assembly",
+              donorChosen: true,
+              humanDecision: "Satisfied: donor selected",
+              outcome: "In progress"
+            }, "Human decision recorded", "The selected donor and its evidence are frozen; deterministic Assembly may now continue.");
+          }
+
+          case "ASSEMBLE": {
+            if (!state.assemblyRequired) return refuse(state, "The selected procedure does not require Assembly.");
+            if (!state.donorChosen) return refuse(state, "Assembly cannot continue until the genuine donor-choice gate is satisfied.");
+            return note({
+              ...state,
+              procedureStatus: "Ready for verification",
+              currentStage: "Verification",
+              specialists: { ...state.specialists, assembly: "Complete", verification: "Ready" },
+              outcome: "Assembled candidate awaiting checks"
+            }, "Assembly complete", "Only the declared region was replaced; the authoritative surrounding pixels remain owned by the source.");
+          }
+
+          case "VERIFY_PASS": {
+            if (state.procedureStatus !== "Ready for verification" && state.procedureStatus !== "Correction ready to check") {
+              return refuse(state, "There is no complete candidate ready for verification.");
+            }
+            return note({
+              ...state,
+              procedureStatus: "Verified—waiting for final approval",
+              currentStage: "Final approval",
+              specialists: { ...state.specialists, verification: "Passed" },
+              humanDecision: "Final subjective visual approval",
+              outcome: "Verified candidate—not yet approved"
+            }, "Verification passed", "Deterministic and task-specific checks passed. The tool may say verified; only the owner may say visually approved.", "warn");
+          }
+
+          case "VERIFY_FAIL": {
+            if (state.procedureStatus !== "Ready for verification") return refuse(state, "There is no candidate ready to test.");
+            const owner = state.assemblyRequired ? "Assembly" : "Generation";
+            return note({
+              ...state,
+              procedureStatus: "Correction required",
+              currentStage: owner,
+              specialists: { ...state.specialists, verification: "Failed", [owner.toLowerCase()]: "Owns correction" },
+              outcome: `Failed verification—routed to ${owner}`,
+              humanDecision: "None—the failed check identifies the responsible specialist"
+            }, "Verification failed", `The failure is classified and routed to ${owner}; the Conductor will not blindly regenerate the whole result.`, "danger");
+          }
+
+          case "CORRECT": {
+            if (state.procedureStatus !== "Correction required") return refuse(state, "No classified correction is currently required.");
+            return note({
+              ...state,
+              procedureStatus: "Correction ready to check",
+              currentStage: "Verification",
+              specialists: { ...state.specialists, assembly: state.assemblyRequired ? "Corrected" : state.specialists.assembly, generation: state.assemblyRequired ? state.specialists.generation : "Corrected", verification: "Ready to repeat" },
+              outcome: "Corrected candidate awaiting checks"
+            }, "Owned correction applied", "Only the specialist responsible for the failed check changed its work; the evidence trail remains intact.");
+          }
+
+          case "APPROVE": {
+            if (state.procedureStatus !== "Verified—waiting for final approval") return refuse(state, "Final approval is available only for a verified candidate.");
+            return note({
+              ...state,
+              procedureStatus: "Complete",
+              currentStage: "Final approval",
+              humanDecision: "Satisfied: owner approved",
+              outcome: "Approved result with complete provenance"
+            }, "Final approval recorded", "The application now owns an approved result and the evidence explaining how it was produced.");
+          }
+
+          case "AMBIGUOUS_TIMEOUT": {
+            if (state.procedureStatus !== "Generating") return refuse(state, "An ambiguous provider timeout can occur only after a submission has begun.");
+            return note({
+              ...state,
+              procedureStatus: "Blocked for reconciliation",
+              currentStage: "Generation",
+              specialists: { ...state.specialists, generation: "Provider state unknown" },
+              attempt: "Possibly billed request preserved",
+              retry: "Unsafe—explicitly forbidden",
+              spend: "Unknown; counted as spent",
+              humanDecision: "None—reconciliation is agent-owned",
+              outcome: "Blocked: ambiguous provider result"
+            }, "Ambiguous provider failure", "The provider may have accepted the request. The Conductor preserves the attempt and blocks every retry until reconciliation.", "danger");
+          }
+
+          case "TRY_RETRY": {
+            if (state.retry === "Unsafe—explicitly forbidden") {
+              return refuse(state, "Retry refused: this request may already have been billed or may still complete. Reconcile the original attempt first.");
+            }
+            return refuse(state, "No justified retry is currently available.");
+          }
+
+          case "RECONCILE": {
+            if (state.procedureStatus !== "Blocked for reconciliation") return refuse(state, "There is no ambiguous attempt to reconcile.");
+            return note({
+              ...state,
+              procedureStatus: "Safe to continue",
+              currentStage: "Generation",
+              attempt: "Original request confirmed not accepted",
+              retry: "One deliberate continuation allowed",
+              spend: "Confirmed £0 for original attempt",
+              outcome: "Ready to continue from recorded state"
+            }, "Attempt reconciled", "Evidence confirms the provider never accepted the original request. A deliberate continuation is now safe.");
+          }
+
+          case "SUBSTITUTE": {
+            return refuse(state, "Silent substitution refused: no approved rule proves another model or reference is equivalent for this purpose.");
+          }
+
+          default: return refuse(state, "Unknown action.");
+        }
+      }
+
+      return { initialState, reduce, stages };
+    })();
+
+    const actions = [
+      { group: "Project", label: "Load image-edit Project Contract", type: "LOAD_IMAGE" },
+      { group: "Project", label: "Load Seedance Project Contract", type: "LOAD_VIDEO" },
+      { group: "Project", label: "Inspect declared authorities", type: "INSPECT_AUTHORITIES" },
+      { group: "References", label: "Find authoritative motion video", type: "FIND_VIDEO" },
+      { group: "References", label: "Put exact video in model request", type: "ATTACH_VIDEO" },
+      { group: "Plan", label: "Ask Conductor to choose procedure", type: "PLAN", primary: true },
+      { group: "Execution", label: "Start planned generation", type: "START_GENERATION" },
+      { group: "Execution", label: "Record returned candidate", type: "GENERATION_RETURNED" },
+      { group: "Execution", label: "Choose donor (human)", type: "CHOOSE_DONOR" },
+      { group: "Execution", label: "Run deterministic Assembly", type: "ASSEMBLE" },
+      { group: "Checks", label: "Verification passes", type: "VERIFY_PASS" },
+      { group: "Checks", label: "Verification fails", type: "VERIFY_FAIL" },
+      { group: "Checks", label: "Apply owned correction", type: "CORRECT" },
+      { group: "Checks", label: "Approve final visual result (human)", type: "APPROVE" },
+      { group: "Awkward cases", label: "Provider times out ambiguously", type: "AMBIGUOUS_TIMEOUT", danger: true },
+      { group: "Awkward cases", label: "Try to submit the same request again", type: "TRY_RETRY", danger: true },
+      { group: "Awkward cases", label: "Reconcile original attempt as not accepted", type: "RECONCILE" },
+      { group: "Awkward cases", label: "Quietly substitute another model", type: "SUBSTITUTE", danger: true },
+      { group: "Reset", label: "Reset everything", type: "RESET" }
+    ];
+
+    const scenarios = [
+      {
+        id: "assembly",
+        name: "Existing pixels → Assembly",
+        description: "An application wants one missing element added without redrawing its existing interface. Watch for the explicit donor choice and mandatory Assembly.",
+        steps: ["LOAD_IMAGE", "INSPECT_AUTHORITIES", "PLAN", "START_GENERATION", "GENERATION_RETURNED", "CHOOSE_DONOR", "ASSEMBLE", "VERIFY_PASS", "APPROVE"]
+      },
+      {
+        id: "video",
+        name: "Missing motion reference",
+        description: "A Seedance task names a desired motion but supplies no authoritative video. Watch the Conductor research the gap and prove the reference reaches the actual request.",
+        steps: ["LOAD_VIDEO", "INSPECT_AUTHORITIES", "PLAN", "FIND_VIDEO", "ATTACH_VIDEO", "PLAN", "START_GENERATION", "GENERATION_RETURNED", "VERIFY_PASS", "APPROVE"]
+      },
+      {
+        id: "timeout",
+        name: "Ambiguous provider failure",
+        description: "A paid request times out after submission. Watch the procedure count it as possibly spent, refuse a duplicate, and continue only after reconciliation.",
+        steps: ["LOAD_IMAGE", "INSPECT_AUTHORITIES", "PLAN", "START_GENERATION", "AMBIGUOUS_TIMEOUT", "TRY_RETRY", "RECONCILE", "START_GENERATION", "GENERATION_RETURNED"]
+      },
+      {
+        id: "verification",
+        name: "Verification routes correction",
+        description: "A candidate is assembled but fails its checks. Watch the failure return to the specialist that owns it instead of restarting the whole run.",
+        steps: ["LOAD_IMAGE", "INSPECT_AUTHORITIES", "PLAN", "START_GENERATION", "GENERATION_RETURNED", "CHOOSE_DONOR", "ASSEMBLE", "VERIFY_FAIL", "CORRECT", "VERIFY_PASS", "APPROVE"]
+      },
+      {
+        id: "human",
+        name: "Genuine human gate",
+        description: "The tool can verify evidence but cannot choose subjective visual taste. Watch it stop precisely at donor selection and final approval.",
+        steps: ["LOAD_IMAGE", "INSPECT_AUTHORITIES", "PLAN", "START_GENERATION", "GENERATION_RETURNED", "ASSEMBLE", "CHOOSE_DONOR", "ASSEMBLE", "VERIFY_PASS", "APPROVE"]
+      }
+    ];
+
+    let state = ConductorModel.initialState();
+    let activeScenario = scenarios[0];
+    let scenarioStep = 0;
+
+    const actionByType = Object.fromEntries(actions.map(action => [action.type, action]));
+
+    function dispatch(type, fromWalkthrough = false) {
+      state = ConductorModel.reduce(state, { type });
+      if (fromWalkthrough) scenarioStep += 1;
+      render();
+    }
+
+    function statusClass(status) {
+      if (/Blocked|Failed|refused|Unsafe/i.test(status)) return "danger";
+      if (/Waiting|unknown|missing|not yet/i.test(status)) return "warn";
+      return "";
+    }
+
+    function card(label, value, detail = "", wide = false) {
+      const cls = statusClass(`${value} ${detail}`);
+      return `<article class="state-card ${wide ? "wide" : ""}">
+        <span class="label">${label}</span>
+        <div class="value"><span class="status ${cls}">${value}</span></div>
+        ${detail ? `<div class="detail">${detail}</div>` : ""}
+      </article>`;
+    }
+
+    function renderState() {
+      document.getElementById("changeNote").className = `change-note ${state.tone === "danger" ? "danger" : state.tone === "warn" ? "warn" : ""}`;
+      document.getElementById("changeNote").textContent = state.lastChange;
+      document.getElementById("stateGrid").innerHTML = [
+        card("Application task", state.task, state.objective, true),
+        card("Conductor status", state.procedureStatus, `Current stage: ${state.currentStage}`),
+        card("Selected procedure", state.selectedPath, state.pathReason),
+        card("Appearance authority", state.references.appearance),
+        card("Behavior authority", state.references.behavior),
+        card("Reference reaches model", state.references.reachesModel),
+        card("Generation", state.specialists.generation),
+        card("Assembly", state.specialists.assembly, state.assemblyRequired ? "Required by the plan" : "Not required by the selected path"),
+        card("Verification", state.specialists.verification),
+        card("Provider attempt", state.attempt, `Retry posture: ${state.retry}`),
+        card("Spend", state.spend),
+        card("Human decision", state.humanDecision),
+        card("Classified outcome", state.outcome, "Verified and approved remain different states.", true)
+      ].join("");
+    }
+
+    function renderProcedure() {
+      const current = ConductorModel.stages.indexOf(state.currentStage);
+      document.getElementById("procedure").innerHTML = ConductorModel.stages.map((stage, index) => {
+        const cls = index < current ? "done" : index === current ? "active" : "";
+        return `<span class="${cls}">${stage}</span>`;
+      }).join("");
+    }
+
+    function renderTimeline() {
+      document.getElementById("timeline").innerHTML = [...state.events].reverse().map(event =>
+        `<li><strong>${event.title}</strong><span>${event.detail}</span></li>`
+      ).join("");
+    }
+
+    function renderActions() {
+      let group = "";
+      document.getElementById("freePlay").innerHTML = actions.map(action => {
+        const heading = action.group !== group ? `<div class="group-title">${action.group}</div>` : "";
+        group = action.group;
+        const cls = action.primary ? "primary" : action.danger ? "danger" : "";
+        return `${heading}<button class="${cls}" data-action="${action.type}">${action.label}</button>`;
+      }).join("");
+      document.querySelectorAll("#freePlay [data-action]").forEach(button => {
+        button.addEventListener("click", () => dispatch(button.dataset.action));
+      });
+    }
+
+    function renderTabs() {
+      document.getElementById("scenarioTabs").innerHTML = scenarios.map(scenario =>
+        `<button class="tab" role="tab" aria-selected="${scenario.id === activeScenario.id}" data-scenario="${scenario.id}">${scenario.name}</button>`
+      ).join("");
+      document.querySelectorAll("[data-scenario]").forEach(button => {
+        button.addEventListener("click", () => {
+          activeScenario = scenarios.find(scenario => scenario.id === button.dataset.scenario);
+          scenarioStep = 0;
+          state = ConductorModel.initialState();
+          render();
+        });
+      });
+    }
+
+    function renderWalkthrough() {
+      const stepButtons = activeScenario.steps.map((type, index) => {
+        const action = actionByType[type];
+        const cls = index < scenarioStep ? "done" : index === scenarioStep ? "current" : "";
+        return `<div class="step"><button class="${cls}" data-walk-index="${index}" data-walk-action="${type}" ${index !== scenarioStep ? "disabled" : ""}>${action.label}</button></div>`;
+      }).join("");
+      document.getElementById("walkthrough").innerHTML = `
+        <div>
+          <h3>${activeScenario.name}</h3>
+          <p class="walkthrough-copy">${activeScenario.description}</p>
+        </div>
+        <div class="steps">${stepButtons}</div>`;
+      const current = document.querySelector(`[data-walk-index="${scenarioStep}"]`);
+      if (current) current.addEventListener("click", () => dispatch(current.dataset.walkAction, true));
+    }
+
+    function render() {
+      renderTabs();
+      renderWalkthrough();
+      renderState();
+      renderProcedure();
+      renderTimeline();
+      renderActions();
+    }
+
+    render();
+  </script>
+</body>
+</html>
