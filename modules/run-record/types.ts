@@ -1,21 +1,13 @@
 import { Context, type Effect } from "effect"
 
-import type { PlannedRun } from "../run-contract/index.js"
+import type { LinkedRunRelationship, PlannedRun } from "../run-contract/index.js"
 import type { RunRecordError } from "./errors.js"
 
-export type RunLink = Readonly<{
-  parentRunId: string
-  parentFailureEventSha256: string
-  relation: "retry-after-definitive-pre-submit-failure"
-}>
+export type RunLink = LinkedRunRelationship
 
 export type ReserveRun = Readonly<{
   plannedRun: PlannedRun
   payloadSha256: string
-  estimatedMaximumCostUsd: string
-  maximumCount: number
-  maximumSpendUsd: string
-  linkedFrom?: RunLink
 }>
 
 export type ProviderEvidenceInput = Readonly<{
@@ -75,6 +67,9 @@ export const submissionPermitBrand = Symbol("SubmissionPermit")
 export type SubmissionPermit = Readonly<{
   runId: string
   attemptId: string
+  use: <Success, Error, Requirements>(
+    submission: Effect.Effect<Success, Error, Requirements>,
+  ) => Effect.Effect<Success, Error | RunRecordError, Requirements>
   [submissionPermitBrand]: true
 }>
 

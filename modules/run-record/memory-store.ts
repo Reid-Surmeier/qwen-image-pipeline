@@ -1,15 +1,15 @@
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 
 import { RunRecordError } from "./errors.js"
+import { RunRecordStore } from "./types.js"
 import type {
   RunRecordStoreService,
   StoredRunRecord,
   StoreOperation,
 } from "./types.js"
 
-export type MemoryRunRecordStore = Readonly<{
-  service: RunRecordStoreService
-  submissionCalls: number
+export type MemoryRunRecordHarness = Readonly<{
+  layer: Layer.Layer<RunRecordStoreService>
   failNext: (operation: StoreOperation) => void
   mutate: (runId: string, mutation: (record: {
     request: Uint8Array
@@ -19,7 +19,7 @@ export type MemoryRunRecordStore = Readonly<{
   }) => void) => void
 }>
 
-export const makeMemoryRunRecordStore = (): MemoryRunRecordStore => {
+export const makeMemoryRunRecordHarness = (): Effect.Effect<MemoryRunRecordHarness> => Effect.sync(() => {
   const records = new Map<string, {
     request: Uint8Array
     events: Uint8Array
@@ -117,9 +117,8 @@ export const makeMemoryRunRecordStore = (): MemoryRunRecordStore => {
   }
 
   return {
-    service,
-    submissionCalls: 0,
+    layer: Layer.succeed(RunRecordStore, service),
     failNext: (operation) => { failing = operation },
     mutate: (runId, mutation) => mutation(get(runId)),
   }
-}
+})

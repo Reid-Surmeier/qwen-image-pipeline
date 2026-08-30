@@ -24,10 +24,11 @@ export const load: (
 ) => Effect.Effect<RunRecordView, RunRecordError, RunRecordStoreService> = loadRun
 
 export { RunRecordError } from "./errors.js"
-export { makeFileRunRecordStore } from "./file-store.js"
-export { makeMemoryRunRecordStore } from "./memory-store.js"
+export { fileRunRecordLayer } from "./file-store.js"
+export { makeMemoryRunRecordHarness } from "./memory-store.js"
+export type { MemoryRunRecordHarness } from "./memory-store.js"
 export type { RunRecordErrorCode } from "./errors.js"
-export { RunRecordClock, RunRecordStore } from "./types.js"
+export { RunRecordClock } from "./types.js"
 export type {
   ProviderEvidenceInput,
   RecordOperation,
@@ -38,6 +39,5 @@ export type {
   RunRecordPhase,
   RunRecordStoreService,
   RunRecordView,
-  StoreOperation,
   SubmissionPermit,
 } from "./types.js"

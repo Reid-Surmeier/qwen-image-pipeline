@@ -5,4 +5,4 @@
 - Errors: `modules/run-record/errors.ts`
 - Acceptance: `modules/run-record/run-record.test.ts`
 
-Run Record is the only production writer of Run evidence. `reserve` creates one durable attempt from a Planned Run, `record` applies a legal write-once operation, and `load` verifies and replays authority. A submission permit exists only in memory after the first durable submission-may-have-started event; reload never recreates it. Run Record does not call Generation or declare Approval.
+Run Record is the only production writer of Run evidence. `reserve` creates one durable attempt from a Planned Run, `record` applies a legal write-once operation, and `load` verifies and replays authority. Production callers provide the filesystem adapter through `fileRunRecordLayer`; the storage writer and its Context tag stay inside the module. A submission permit exists only in memory after the first durable submission-may-have-started event, rejects a second use, and is never recreated by reload. Run Record does not call Generation or declare Approval.

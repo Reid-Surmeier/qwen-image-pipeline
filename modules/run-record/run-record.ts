@@ -3,6 +3,7 @@ import { createHash } from "node:crypto"
 import { Effect } from "effect"
 
 import { RunRecordError } from "./errors.js"
+import type { CanonicalRunRequest } from "../run-contract/index.js"
 import type {
   RecordOperation,
   RecordResult,
@@ -11,6 +12,7 @@ import type {
   RunLink,
   RunRecordStoreService,
   RunRecordView,
+  StoredRunRecord,
 } from "./types.js"
 import {
   RunRecordClock,
@@ -81,7 +83,7 @@ const encodeView = (view: RunRecordView): Uint8Array => bytes(canonicalJson(view
 const isSha256 = (value: string): boolean => /^[a-f0-9]{64}$/.test(value)
 const isIdentifier = (value: string): boolean => /^[a-z0-9][a-z0-9._-]{0,127}$/.test(value)
 
-const validateReservation = (input: ReserveRun): void => {
+const validateReservation = (input: ReserveRun): CanonicalRunRequest => {
   const { plannedRun } = input
   if (plannedRun.state !== "planned") {
     throw new RunRecordError("INVALID_PLANNED_RUN", "Only a Planned Run may be reserved.")
@@ -89,26 +91,29 @@ const validateReservation = (input: ReserveRun): void => {
   if (sha256(plannedRun.canonicalRequest) !== plannedRun.requestSha256) {
     throw new RunRecordError("REQUEST_HASH_MISMATCH", "The canonical request no longer matches its planned digest.")
   }
+  let canonicalRequest: unknown
+  try {
+    canonicalRequest = JSON.parse(plannedRun.canonicalRequest)
+  } catch {
+    throw new RunRecordError("REQUEST_HASH_MISMATCH", "The canonical request is not valid JSON.")
+  }
+  if (
+    canonicalRequest === null ||
+    typeof canonicalRequest !== "object" ||
+    Array.isArray(canonicalRequest) ||
+    canonicalJson(canonicalRequest as JsonValue) !== plannedRun.canonicalRequest ||
+    canonicalJson(canonicalRequest as JsonValue) !== canonicalJson(plannedRun.request as unknown as JsonValue)
+  ) {
+    throw new RunRecordError("REQUEST_HASH_MISMATCH", "The Planned Run object disagrees with its authoritative canonical bytes.")
+  }
+  const request = canonicalRequest as CanonicalRunRequest
   if (!isSha256(input.payloadSha256)) {
     throw new RunRecordError("RESERVATION_OUTSIDE_PLAN", "The payload digest must be a lowercase SHA-256.")
   }
-  if (
-    input.estimatedMaximumCostUsd !== plannedRun.request.estimatedMaximumCostUsd ||
-    input.maximumCount !== plannedRun.request.requestedCount ||
-    input.maximumSpendUsd !== plannedRun.request.budgetCeilingUsd
-  ) {
-    throw new RunRecordError(
-      "RESERVATION_OUTSIDE_PLAN",
-      "Attempt count and spend evidence must exactly match the immutable request.",
-    )
-  }
+  return request
 }
 
-const runIdentity = (requestSha256: string, linkedFrom?: RunLink): string =>
-  `run-${sha256(canonicalJson({
-    requestSha256,
-    linkedFrom: linkedFrom === undefined ? null : linkedFrom,
-  } as unknown as JsonValue)).slice(0, 24)}`
+const runIdentity = (requestSha256: string): string => `run-${requestSha256.slice(0, 24)}`
 
 const parseEvents = (value: Uint8Array): ReadonlyArray<RunEvent> => {
   const raw = Buffer.from(value).toString("utf8")
@@ -273,33 +278,37 @@ const decodeStoredView = (value: Uint8Array): RunRecordView => {
   }
 }
 
+const assertDerivedViewConsistent = (stored: StoredRunRecord, view: RunRecordView): RunRecordView | undefined => {
+  if (stored.state === undefined) return undefined
+  const derived = decodeStoredView(stored.state)
+  if (
+    derived.chainHeadSha256 === view.chainHeadSha256 &&
+    canonicalJson(derived as unknown as JsonValue) !== canonicalJson(view as unknown as JsonValue)
+  ) {
+    throw new RunRecordError(
+      "DERIVED_VIEW_CONTRADICTION",
+      "The derived state claims the current event head but disagrees with replay.",
+      "repair-evidence",
+    )
+  }
+  return derived
+}
+
 export const reserveRun = (
   input: ReserveRun,
 ): Effect.Effect<RunRecordView, RunRecordError, RunRecordStoreService | RunRecordClockService> => Effect.gen(function*() {
-  yield* Effect.try({
+  const request = yield* Effect.try({
     try: () => validateReservation(input),
     catch: (error) => error instanceof RunRecordError
       ? error
       : new RunRecordError("INVALID_PLANNED_RUN", "The Planned Run could not be validated."),
   })
   const store = yield* RunRecordStore
-  if (input.linkedFrom !== undefined) {
-    const parentStored = yield* store.read(input.linkedFrom.parentRunId)
-    const parentEvents = yield* Effect.try({
-      try: () => parseEvents(parentStored.events),
-      catch: (error) => error instanceof RunRecordError
-        ? error
-        : new RunRecordError("LINK_NOT_ALLOWED", "The parent Run journal could not be read."),
-    })
-    const parent = yield* Effect.try({
-      try: () => replay(input.linkedFrom!.parentRunId, parentStored.request, parentEvents, parentStored.evidence),
-      catch: (error) => error instanceof RunRecordError
-        ? error
-        : new RunRecordError("LINK_NOT_ALLOWED", "The parent Run could not be verified."),
-    })
+  if (request.linkedRun !== undefined) {
+    const parent = yield* loadRun(request.linkedRun.parentRunId)
     if (
       parent.phase !== "definitive_pre_submit_failure" ||
-      parent.chainHeadSha256 !== input.linkedFrom.parentFailureEventSha256
+      parent.chainHeadSha256 !== request.linkedRun.parentFailureEventSha256
     ) {
       return yield* Effect.fail(new RunRecordError(
         "LINK_FAILURE_MISMATCH",
@@ -310,7 +319,7 @@ export const reserveRun = (
   }
   const clock = yield* RunRecordClock
   const timestamp = yield* clock.now()
-  const runId = runIdentity(input.plannedRun.requestSha256, input.linkedFrom)
+  const runId = runIdentity(input.plannedRun.requestSha256)
   const attemptId = `attempt-${runId.slice(4)}-1`
   const firstEvent = makeEvent({
     schemaVersion: "1",
@@ -324,10 +333,10 @@ export const reserveRun = (
       requestSha256: input.plannedRun.requestSha256,
       attemptId,
       payloadSha256: input.payloadSha256,
-      estimatedMaximumCostUsd: input.estimatedMaximumCostUsd,
-      maximumCount: input.maximumCount,
-      maximumSpendUsd: input.maximumSpendUsd,
-      linkedFrom: input.linkedFrom === undefined ? null : input.linkedFrom,
+      estimatedMaximumCostUsd: request.estimatedMaximumCostUsd,
+      maximumCount: request.requestedCount,
+      maximumSpendUsd: request.budgetCeilingUsd,
+      linkedFrom: request.linkedRun === undefined ? null : request.linkedRun,
     },
   })
   const view = replay(runId, bytes(input.plannedRun.canonicalRequest), [firstEvent])
@@ -344,11 +353,8 @@ export const reserveRun = (
         if (
           existing.requestSha256 !== input.plannedRun.requestSha256 ||
           existing.payloadSha256 !== input.payloadSha256 ||
-          existing.estimatedMaximumCostUsd !== input.estimatedMaximumCostUsd ||
-          existing.maximumCount !== input.maximumCount ||
-          existing.maximumSpendUsd !== input.maximumSpendUsd ||
           canonicalJson((existing.linkedFrom ?? null) as unknown as JsonValue) !==
-            canonicalJson((input.linkedFrom ?? null) as unknown as JsonValue)
+            canonicalJson((request.linkedRun ?? null) as unknown as JsonValue)
         ) {
           return Effect.fail(new RunRecordError("RUN_ID_CONFLICT", "The existing Run identity belongs to different immutable evidence."))
         }
@@ -359,13 +365,14 @@ export const reserveRun = (
 })
 
 const valueHasSecret = (value: unknown, key?: string): boolean => {
-  if (key !== undefined && /(?:credential|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|password|secret|token|authorization)/i.test(key)) {
+  if (key !== undefined && /^(?:credential|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|password|secret|authorization|(?:access|refresh|id)?[_-]?token)$/i.test(key)) {
     return true
   }
   if (typeof value === "string") {
     return /(?:sk-|gh[pousr]_|Bearer\s+)[A-Za-z0-9_-]{6,}/i.test(value) ||
       /-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(value) ||
-      /https?:\/\/[^/\s:@]+:[^/\s@]+@/i.test(value)
+      /https?:\/\/[^/\s:@]+:[^/\s@]+@/i.test(value) ||
+      /https?:\/\/[^\s?]+\?[^\s#]*(?:api[_-]?key|access[_-]?key|password|secret|authorization|(?:access|refresh|id)?[_-]?token)=[^&#\s]+/i.test(value)
   }
   if (Array.isArray(value)) return value.some((child) => valueHasSecret(child))
   if (value !== null && typeof value === "object") {
@@ -408,6 +415,12 @@ export const recordOperation = (
     catch: (error) => error instanceof RunRecordError
       ? error
       : new RunRecordError("EVENT_CHAIN_BROKEN", "The event journal could not be replayed.", "repair-evidence"),
+  })
+  yield* Effect.try({
+    try: () => assertDerivedViewConsistent(stored, current),
+    catch: (error) => error instanceof RunRecordError
+      ? error
+      : new RunRecordError("DERIVED_VIEW_CONTRADICTION", "The derived state view could not be read.", "repair-evidence"),
   })
   const expectedKind = operation._tag === "SubmissionMayHaveStarted"
     ? "submission_may_have_started"
@@ -535,12 +548,30 @@ export const recordOperation = (
   })
   yield* store.appendEvent(operation.runId, current.chainHeadSha256, encodeEvent(event))
   const next = replay(operation.runId, stored.request, [...events, event])
-  yield* store.writeState(operation.runId, encodeView(next))
+  let consumed = false
+  const usePermit = <Success, Error, Requirements>(
+    submission: Effect.Effect<Success, Error, Requirements>,
+  ): Effect.Effect<Success, Error | RunRecordError, Requirements> => Effect.suspend<
+    Success,
+    Error | RunRecordError,
+    Requirements
+  >(() => {
+    if (consumed) {
+      return Effect.fail(new RunRecordError(
+        "DUPLICATE_SUBMISSION_BLOCKED",
+        "The in-process Submission Permit was already consumed.",
+        "reconcile",
+      ))
+    }
+    consumed = true
+    return submission
+  })
   return {
     _tag: "SubmissionPermitIssued" as const,
     permit: immutable({
       runId: operation.runId,
       attemptId: next.attemptId,
+      use: usePermit,
       [submissionPermitBrand]: true as const,
     }),
     view: next,
@@ -567,23 +598,13 @@ export const loadRun = (
       ? error
       : new RunRecordError("EVENT_CHAIN_BROKEN", "The event journal could not be replayed.", "repair-evidence"),
   })
-  if (stored.state !== undefined) {
-    const derived = yield* Effect.try({
-      try: () => decodeStoredView(stored.state!),
-      catch: (error) => error instanceof RunRecordError
-        ? error
-        : new RunRecordError("DERIVED_VIEW_CONTRADICTION", "The derived state view could not be read.", "repair-evidence"),
-    })
-    if (
-      derived.chainHeadSha256 === view.chainHeadSha256 &&
-      canonicalJson(derived as unknown as JsonValue) !== canonicalJson(view as unknown as JsonValue)
-    ) {
-      return yield* Effect.fail(new RunRecordError(
-        "DERIVED_VIEW_CONTRADICTION",
-        "The derived state claims the current event head but disagrees with replay.",
-        "repair-evidence",
-      ))
-    }
+  const derived = yield* Effect.try({
+    try: () => assertDerivedViewConsistent(stored, view),
+    catch: (error) => error instanceof RunRecordError
+      ? error
+      : new RunRecordError("DERIVED_VIEW_CONTRADICTION", "The derived state view could not be read.", "repair-evidence"),
+  })
+  if (derived !== undefined) {
     if (derived.chainHeadSha256 !== view.chainHeadSha256) {
       yield* store.writeState(runId, encodeView(view))
     }

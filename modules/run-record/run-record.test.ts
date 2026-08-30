@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, readdir, rm, symlink, unlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
@@ -18,30 +18,33 @@ import {
 import { makeFixture } from "../../tests/control-plane-fixture.js"
 import {
   RunRecordClock,
-  RunRecordStore,
+  fileRunRecordLayer,
   load,
-  makeFileRunRecordStore,
+  makeMemoryRunRecordHarness,
   record,
   reserve,
+  type MemoryRunRecordHarness,
   type RunRecordClockService,
+  type RunLink,
   type RunRecordStoreService,
 } from "./index.js"
-import { makeMemoryRunRecordStore } from "./memory-store.js"
 
 const clock: RunRecordClockService = {
   now: () => Effect.succeed("2026-08-30T12:00:00.000Z"),
 }
 
+const memoryHarness = (): Promise<MemoryRunRecordHarness> =>
+  Effect.runPromise(makeMemoryRunRecordHarness())
+
 const reservationFor = (planned: PlannedRun) => ({
   plannedRun: planned,
   payloadSha256: planned.requestSha256,
-  estimatedMaximumCostUsd: planned.request.estimatedMaximumCostUsd,
-  maximumCount: planned.request.requestedCount,
-  maximumSpendUsd: planned.request.budgetCeilingUsd,
 })
 
-const plannedRun = async (): Promise<PlannedRun> => {
-  const fixture = makeFixture("qwen-image")
+const plannedRun = async (linkedRun?: RunLink): Promise<PlannedRun> => {
+  const fixture = makeFixture("qwen-image", linkedRun === undefined
+    ? {}
+    : { objective: (objective) => { objective.linkedRun = linkedRun } })
   return Effect.runPromise(
     compilePlannedRun(fixture.documents).pipe(
       Effect.provideService(ApplicationFiles, fixture.files),
@@ -53,23 +56,17 @@ const plannedRun = async (): Promise<PlannedRun> => {
 
 test("reserves and reloads the immutable request before any submission", async () => {
   const planned = await plannedRun()
-  const memory = makeMemoryRunRecordStore()
-  const input = {
-    plannedRun: planned,
-    payloadSha256: planned.requestSha256,
-    estimatedMaximumCostUsd: planned.request.estimatedMaximumCostUsd,
-    maximumCount: planned.request.requestedCount,
-    maximumSpendUsd: planned.request.budgetCeilingUsd,
-  }
+  const memory = await memoryHarness()
+  const input = reservationFor(planned)
 
   const reserved = await Effect.runPromise(
     reserve(input).pipe(
-      Effect.provideService(RunRecordStore, memory.service),
+      Effect.provide(memory.layer),
       Effect.provideService(RunRecordClock, clock),
     ),
   )
   const reloaded = await Effect.runPromise(
-    load(reserved.runId).pipe(Effect.provideService(RunRecordStore, memory.service)),
+    load(reserved.runId).pipe(Effect.provide(memory.layer)),
   )
 
   assert.equal(reloaded.phase, "reserved")
@@ -80,21 +77,14 @@ test("reserves and reloads the immutable request before any submission", async (
   assert.equal(reloaded.retryState, "same-run-submission-available")
   assert.match(reloaded.attemptId, /^attempt-[a-f0-9]+-1$/)
   assert.match(reloaded.chainHeadSha256, /^[a-f0-9]{64}$/)
-  assert.equal(memory.submissionCalls, 0)
 })
 
 test("persists submission uncertainty before issuing one non-replayable permit", async () => {
   const planned = await plannedRun()
-  const memory = makeMemoryRunRecordStore()
+  const memory = await memoryHarness()
   const reserved = await Effect.runPromise(
-    reserve({
-      plannedRun: planned,
-      payloadSha256: planned.requestSha256,
-      estimatedMaximumCostUsd: planned.request.estimatedMaximumCostUsd,
-      maximumCount: planned.request.requestedCount,
-      maximumSpendUsd: planned.request.budgetCeilingUsd,
-    }).pipe(
-      Effect.provideService(RunRecordStore, memory.service),
+    reserve(reservationFor(planned)).pipe(
+      Effect.provide(memory.layer),
       Effect.provideService(RunRecordClock, clock),
     ),
   )
@@ -105,7 +95,7 @@ test("persists submission uncertainty before issuing one non-replayable permit",
       runId: reserved.runId,
       operationId: "submit-once",
     }).pipe(
-      Effect.provideService(RunRecordStore, memory.service),
+      Effect.provide(memory.layer),
       Effect.provideService(RunRecordClock, clock),
     ),
   )
@@ -113,16 +103,16 @@ test("persists submission uncertainty before issuing one non-replayable permit",
   if (marked._tag !== "SubmissionPermitIssued") return
 
   let adapterCalls = 0
-  const fakeAdapter = async () => {
-    const visibleBeforeCall = await Effect.runPromise(
-      load(reserved.runId).pipe(Effect.provideService(RunRecordStore, memory.service)),
-    )
+  const fakeAdapter = (permit: typeof marked.permit) => permit.use(Effect.gen(function*() {
+    const visibleBeforeCall = yield* load(reserved.runId)
     assert.equal(visibleBeforeCall.phase, "submission_may_have_started")
     assert.equal(visibleBeforeCall.spendState, "possibly_spent")
     assert.equal(visibleBeforeCall.retryState, "reconcile-only")
     adapterCalls += 1
-  }
-  await fakeAdapter()
+  })).pipe(Effect.provide(memory.layer))
+  await Effect.runPromise(fakeAdapter(marked.permit))
+  const reusedPermit = await Effect.runPromise(Effect.flip(fakeAdapter(marked.permit)))
+  assert.equal(reusedPermit.code, "DUPLICATE_SUBMISSION_BLOCKED")
 
   const replay = await Effect.runPromise(
     record({
@@ -130,7 +120,7 @@ test("persists submission uncertainty before issuing one non-replayable permit",
       runId: reserved.runId,
       operationId: "submit-once",
     }).pipe(
-      Effect.provideService(RunRecordStore, memory.service),
+      Effect.provide(memory.layer),
       Effect.provideService(RunRecordClock, clock),
     ),
   )
@@ -143,29 +133,141 @@ test("persists submission uncertainty before issuing one non-replayable permit",
       runId: reserved.runId,
       operationId: "submit-twice",
     })).pipe(
-      Effect.provideService(RunRecordStore, memory.service),
+      Effect.provide(memory.layer),
       Effect.provideService(RunRecordClock, clock),
     ),
   )
   assert.equal(duplicate.code, "DUPLICATE_SUBMISSION_BLOCKED")
 })
 
+test("rejects reservation fields forged outside the canonical request bytes", async () => {
+  const planned = await plannedRun()
+  const memory = await memoryHarness()
+  const forged = {
+    ...planned,
+    request: { ...planned.request, requestedCount: 4, budgetCeilingUsd: "9.99" },
+  }
+  const error = await Effect.runPromise(Effect.flip(
+    reserve({
+      plannedRun: forged,
+      payloadSha256: planned.requestSha256,
+    }).pipe(
+      Effect.provide(memory.layer),
+      Effect.provideService(RunRecordClock, clock),
+    ),
+  ))
+  assert.equal(error.code, "REQUEST_HASH_MISMATCH")
+})
+
+test("the durable marker is the final Run Record write before its permit is returned", async () => {
+  const planned = await plannedRun()
+  const memory = await memoryHarness()
+  const reserved = await Effect.runPromise(reserve(reservationFor(planned)).pipe(
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, clock),
+  ))
+  memory.failNext("write-state")
+  const marked = await Effect.runPromise(record({
+    _tag: "SubmissionMayHaveStarted",
+    runId: reserved.runId,
+    operationId: "marker-has-no-trailing-write",
+  }).pipe(
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, clock),
+  ))
+  assert.equal(marked._tag, "SubmissionPermitIssued")
+})
+
+test("a contradictory current-head view blocks record operations, not only load", async () => {
+  const planned = await plannedRun()
+  const memory = await memoryHarness()
+  const reserved = await Effect.runPromise(reserve(reservationFor(planned)).pipe(
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, clock),
+  ))
+  memory.mutate(reserved.runId, (stored) => {
+    if (stored.state === undefined) throw new Error("fixture state missing")
+    const state = JSON.parse(Buffer.from(stored.state).toString("utf8")) as Record<string, unknown>
+    stored.state = Buffer.from(JSON.stringify({ ...state, phase: "provider_evidence_received" }), "utf8")
+  })
+  const result = await Effect.runPromise(record({
+    _tag: "SubmissionMayHaveStarted",
+    runId: reserved.runId,
+    operationId: "blocked-by-false-view",
+  }).pipe(
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, clock),
+    Effect.match({ onFailure: (error) => error.code, onSuccess: () => "unexpected-success" }),
+  ))
+  assert.equal(result, "DERIVED_VIEW_CONTRADICTION")
+})
+
+test("sanitized token counts pass while credential query strings are refused", async () => {
+  const planned = await plannedRun()
+  const prepare = async (memory: MemoryRunRecordHarness, suffix: string) => {
+    const reserved = await Effect.runPromise(reserve(reservationFor(planned)).pipe(
+      Effect.provide(memory.layer),
+      Effect.provideService(RunRecordClock, clock),
+    ))
+    await Effect.runPromise(record({
+      _tag: "SubmissionMayHaveStarted",
+      runId: reserved.runId,
+      operationId: `secret-filter-submit-${suffix}`,
+    }).pipe(
+      Effect.provide(memory.layer),
+      Effect.provideService(RunRecordClock, clock),
+    ))
+    return reserved
+  }
+
+  const safeMemory = await memoryHarness()
+  const safeRun = await prepare(safeMemory, "safe")
+  const safeBody = Buffer.from('{"usage":{"prompt_tokens":42,"completion_tokens":7}}', "utf8")
+  const safe = await Effect.runPromise(record({
+    _tag: "CommitProviderEvidence",
+    runId: safeRun.runId,
+    operationId: "safe-token-counts",
+    evidence: {
+      mediaType: "application/json",
+      body: safeBody,
+      sha256: createHash("sha256").update(safeBody).digest("hex"),
+    },
+  }).pipe(
+    Effect.provide(safeMemory.layer),
+    Effect.provideService(RunRecordClock, clock),
+  ))
+  assert.equal(safe.view.phase, "provider_evidence_received")
+
+  const unsafeMemory = await memoryHarness()
+  const unsafeRun = await prepare(unsafeMemory, "unsafe")
+  const unsafeBody = Buffer.from('{"url":"https://provider.test/status?api_key=actual-private-value"}', "utf8")
+  const unsafe = await Effect.runPromise(record({
+    _tag: "CommitProviderEvidence",
+    runId: unsafeRun.runId,
+    operationId: "unsafe-query-credential",
+    evidence: {
+      mediaType: "application/json",
+      body: unsafeBody,
+      sha256: createHash("sha256").update(unsafeBody).digest("hex"),
+    },
+  }).pipe(
+    Effect.provide(unsafeMemory.layer),
+    Effect.provideService(RunRecordClock, clock),
+    Effect.match({ onFailure: (error) => error.code, onSuccess: () => "unexpected-success" }),
+  ))
+  assert.equal(unsafe, "SECRET_MATERIAL_DETECTED")
+})
+
 test("commits provider evidence write-once and replays its verified hash", async () => {
   const planned = await plannedRun()
-  const memory = makeMemoryRunRecordStore()
+  const memory = await memoryHarness()
   const provide = <Success, Error>(
     effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
   ): Effect.Effect<Success, Error> => effect.pipe(
-    Effect.provideService(RunRecordStore, memory.service),
+    Effect.provide(memory.layer),
     Effect.provideService(RunRecordClock, clock),
   )
-  const reserved = await Effect.runPromise(provide(reserve({
-    plannedRun: planned,
-    payloadSha256: planned.requestSha256,
-    estimatedMaximumCostUsd: planned.request.estimatedMaximumCostUsd,
-    maximumCount: planned.request.requestedCount,
-    maximumSpendUsd: planned.request.budgetCeilingUsd,
-  })))
+  const reserved = await Effect.runPromise(provide(reserve(reservationFor(planned))))
   await Effect.runPromise(provide(record({
     _tag: "SubmissionMayHaveStarted",
     runId: reserved.runId,
@@ -192,7 +294,7 @@ test("commits provider evidence write-once and replays its verified hash", async
   }])
 
   const reloaded = await Effect.runPromise(
-    load(reserved.runId).pipe(Effect.provideService(RunRecordStore, memory.service)),
+    load(reserved.runId).pipe(Effect.provide(memory.layer)),
   )
   assert.deepEqual(reloaded, committed.view)
 
@@ -212,20 +314,14 @@ test("commits provider evidence write-once and replays its verified hash", async
 
 test("a definitive pre-submit failure remains immutable and only supports a proved linked Run", async () => {
   const planned = await plannedRun()
-  const memory = makeMemoryRunRecordStore()
+  const memory = await memoryHarness()
   const provide = <Success, Error>(
     effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
   ): Effect.Effect<Success, Error> => effect.pipe(
-    Effect.provideService(RunRecordStore, memory.service),
+    Effect.provide(memory.layer),
     Effect.provideService(RunRecordClock, clock),
   )
-  const reservation = {
-    plannedRun: planned,
-    payloadSha256: planned.requestSha256,
-    estimatedMaximumCostUsd: planned.request.estimatedMaximumCostUsd,
-    maximumCount: planned.request.requestedCount,
-    maximumSpendUsd: planned.request.budgetCeilingUsd,
-  }
+  const reservation = reservationFor(planned)
   const original = await Effect.runPromise(provide(reserve(reservation)))
   const failed = await Effect.runPromise(provide(record({
     _tag: "DefinitivePreSubmitFailure",
@@ -243,19 +339,20 @@ test("a definitive pre-submit failure remains immutable and only supports a prov
     parentFailureEventSha256: failed.view.chainHeadSha256,
     relation: "retry-after-definitive-pre-submit-failure" as const,
   }
-  const successor = await Effect.runPromise(provide(reserve({ ...reservation, linkedFrom })))
+  const successorPlan = await plannedRun(linkedFrom)
+  const successor = await Effect.runPromise(provide(reserve(reservationFor(successorPlan))))
   assert.notEqual(successor.runId, original.runId)
   assert.deepEqual(successor.linkedFrom, linkedFrom)
   assert.equal(successor.phase, "reserved")
 
-  const falseLink = await Effect.runPromise(Effect.flip(provide(reserve({
-    ...reservation,
-    linkedFrom: { ...linkedFrom, parentFailureEventSha256: "0".repeat(64) },
-  }))))
+  const falseLinkPlan = await plannedRun({ ...linkedFrom, parentFailureEventSha256: "0".repeat(64) })
+  const falseLink = await Effect.runPromise(Effect.flip(
+    provide(reserve(reservationFor(falseLinkPlan))),
+  ))
   assert.equal(falseLink.code, "LINK_FAILURE_MISMATCH")
 
   const originalAfter = await Effect.runPromise(
-    load(original.runId).pipe(Effect.provideService(RunRecordStore, memory.service)),
+    load(original.runId).pipe(Effect.provide(memory.layer)),
   )
   assert.deepEqual(originalAfter, failed.view)
 })
@@ -263,24 +360,24 @@ test("a definitive pre-submit failure remains immutable and only supports a prov
 test("interruption at every persistence and network seam never creates a second submission", async () => {
   const planned = await plannedRun()
   const execute = <Success, Error>(
-    memory: ReturnType<typeof makeMemoryRunRecordStore>,
+    memory: MemoryRunRecordHarness,
     effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
   ): Promise<Success> => Effect.runPromise(effect.pipe(
-    Effect.provideService(RunRecordStore, memory.service),
+    Effect.provide(memory.layer),
     Effect.provideService(RunRecordClock, clock),
   ))
 
-  const beforeReservation = makeMemoryRunRecordStore()
+  const beforeReservation = await memoryHarness()
   beforeReservation.failNext("create")
   const createError = await Effect.runPromise(Effect.flip(
     reserve(reservationFor(planned)).pipe(
-      Effect.provideService(RunRecordStore, beforeReservation.service),
+      Effect.provide(beforeReservation.layer),
       Effect.provideService(RunRecordClock, clock),
     ),
   ))
   assert.equal(createError.code, "DURABILITY_FAILURE")
 
-  const beforeMarker = makeMemoryRunRecordStore()
+  const beforeMarker = await memoryHarness()
   const reservedBeforeMarker = await execute(beforeMarker, reserve(reservationFor(planned)))
   beforeMarker.failNext("append-event")
   const markerError = await Effect.runPromise(Effect.flip(
@@ -289,7 +386,7 @@ test("interruption at every persistence and network seam never creates a second 
       runId: reservedBeforeMarker.runId,
       operationId: "interrupted-marker",
     }).pipe(
-      Effect.provideService(RunRecordStore, beforeMarker.service),
+      Effect.provide(beforeMarker.layer),
       Effect.provideService(RunRecordClock, clock),
     ),
   ))
@@ -302,7 +399,7 @@ test("interruption at every persistence and network seam never creates a second 
   }))
   assert.equal(firstPermit._tag, "SubmissionPermitIssued")
 
-  const afterNetwork = makeMemoryRunRecordStore()
+  const afterNetwork = await memoryHarness()
   const reservedAfterNetwork = await execute(afterNetwork, reserve(reservationFor(planned)))
   const networkPermit = await execute(afterNetwork, record({
     _tag: "SubmissionMayHaveStarted",
@@ -311,11 +408,14 @@ test("interruption at every persistence and network seam never creates a second 
   }))
   assert.equal(networkPermit._tag, "SubmissionPermitIssued")
   let submissionCalls = 0
-  const ambiguousFakeAdapter = async () => {
-    submissionCalls += 1
-    throw new Error("simulated lost response")
+  const ambiguousFakeAdapter = () => {
+    if (networkPermit._tag !== "SubmissionPermitIssued") throw new Error("fixture permit missing")
+    return networkPermit.permit.use(Effect.sync(() => {
+      submissionCalls += 1
+      throw new Error("simulated lost response")
+    }))
   }
-  await assert.rejects(ambiguousFakeAdapter, /lost response/)
+  await assert.rejects(Effect.runPromise(ambiguousFakeAdapter()), /lost response/)
   assert.equal((await execute(afterNetwork, load(reservedAfterNetwork.runId))).phase, "submission_may_have_started")
   const secondPermitError = await Effect.runPromise(Effect.flip(
     record({
@@ -323,7 +423,7 @@ test("interruption at every persistence and network seam never creates a second 
       runId: reservedAfterNetwork.runId,
       operationId: "network-retry",
     }).pipe(
-      Effect.provideService(RunRecordStore, afterNetwork.service),
+      Effect.provide(afterNetwork.layer),
       Effect.provideService(RunRecordClock, clock),
     ),
   ))
@@ -333,7 +433,7 @@ test("interruption at every persistence and network seam never creates a second 
   const evidenceBody = Buffer.from('{"request_id":"fake-interruption","status":"accepted"}', "utf8")
   const evidenceSha256 = createHash("sha256").update(evidenceBody).digest("hex")
   for (const failedWrite of ["write-evidence", "append-event", "write-state"] as const) {
-    const memory = makeMemoryRunRecordStore()
+    const memory = await memoryHarness()
     const reserved = await execute(memory, reserve(reservationFor(planned)))
     await execute(memory, record({
       _tag: "SubmissionMayHaveStarted",
@@ -349,7 +449,7 @@ test("interruption at every persistence and network seam never creates a second 
         operationId: `evidence-after-${failedWrite}`,
         evidence: { mediaType: "application/json", body: evidenceBody, sha256: evidenceSha256 },
       }).pipe(
-        Effect.provideService(RunRecordStore, memory.service),
+        Effect.provide(memory.layer),
         Effect.provideService(RunRecordClock, clock),
       ),
     ))
@@ -377,11 +477,11 @@ test("a fresh process reloads the same hash-chained Run from an application file
   context.after(async () => rm(applicationRoot, { recursive: true, force: true }))
   const artifactRoot = "artifacts/qwen-pipeline"
   const planned = await plannedRun()
-  const firstStore = makeFileRunRecordStore(applicationRoot, artifactRoot)
+  const firstLayer = fileRunRecordLayer(applicationRoot, artifactRoot)
   const execute = <Success, Error>(
     effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
   ): Promise<Success> => Effect.runPromise(effect.pipe(
-    Effect.provideService(RunRecordStore, firstStore),
+    Effect.provide(firstLayer),
     Effect.provideService(RunRecordClock, clock),
   ))
 
@@ -405,41 +505,102 @@ test("a fresh process reloads the same hash-chained Run from an application file
   assert.equal((await readFile(join(runDirectory, "events.jsonl"), "utf8")).trimEnd().split("\n").length, 3)
   assert.deepEqual(await readFile(join(runDirectory, "provider-response.json")), body)
 
-  const freshStore = makeFileRunRecordStore(applicationRoot, artifactRoot)
+  const freshLayer = fileRunRecordLayer(applicationRoot, artifactRoot)
   const reloaded = await Effect.runPromise(
-    load(reserved.runId).pipe(Effect.provideService(RunRecordStore, freshStore)),
+    load(reserved.runId).pipe(Effect.provide(freshLayer)),
   )
   assert.deepEqual(reloaded, committed.view)
 
   const falseView = { ...reloaded, phase: "reserved" }
   await writeFile(join(runDirectory, "state.json"), JSON.stringify(falseView), "utf8")
   const contradiction = await Effect.runPromise(Effect.flip(
-    load(reserved.runId).pipe(Effect.provideService(RunRecordStore, freshStore)),
+    load(reserved.runId).pipe(Effect.provide(freshLayer)),
   ))
   assert.equal(contradiction.code, "DERIVED_VIEW_CONTRADICTION")
+})
+
+test("the filesystem adapter refuses symlink escapes before writing outside the application", async (context) => {
+  const applicationRoot = await mkdtemp(join(tmpdir(), "qwen-run-record-app-"))
+  const outsideRoot = await mkdtemp(join(tmpdir(), "qwen-run-record-outside-"))
+  context.after(async () => Promise.all([
+    rm(applicationRoot, { recursive: true, force: true }),
+    rm(outsideRoot, { recursive: true, force: true }),
+  ]))
+  await mkdir(join(applicationRoot, "artifacts"))
+  await symlink(outsideRoot, join(applicationRoot, "artifacts", "qwen-pipeline"), "dir")
+  const planned = await plannedRun()
+  const error = await Effect.runPromise(Effect.flip(
+    reserve(reservationFor(planned)).pipe(
+      Effect.provide(fileRunRecordLayer(applicationRoot, "artifacts/qwen-pipeline")),
+      Effect.provideService(RunRecordClock, clock),
+    ),
+  ))
+  assert.equal(error.code, "DURABILITY_FAILURE")
+  assert.deepEqual(await readdir(outsideRoot), [])
+})
+
+test("filesystem append locks leave a complete old or new journal and stale owners recover", async (context) => {
+  const applicationRoot = await mkdtemp(join(tmpdir(), "qwen-run-record-lock-"))
+  context.after(async () => rm(applicationRoot, { recursive: true, force: true }))
+  const layer = fileRunRecordLayer(applicationRoot, "artifacts/qwen-pipeline")
+  const planned = await plannedRun()
+  const reserved = await Effect.runPromise(reserve(reservationFor(planned)).pipe(
+    Effect.provide(layer),
+    Effect.provideService(RunRecordClock, clock),
+  ))
+  const directory = join(applicationRoot, "artifacts/qwen-pipeline/runs", reserved.runId)
+  const journalPath = join(directory, "events.jsonl")
+  const oldJournal = await readFile(journalPath)
+  await writeFile(join(directory, ".append.lock"), JSON.stringify({ pid: process.pid }), "utf8")
+  const locked = await Effect.runPromise(Effect.flip(record({
+    _tag: "SubmissionMayHaveStarted",
+    runId: reserved.runId,
+    operationId: "locked-append",
+  }).pipe(
+    Effect.provide(layer),
+    Effect.provideService(RunRecordClock, clock),
+  )))
+  assert.equal(locked.code, "IDEMPOTENCY_CONFLICT")
+  assert.deepEqual(await readFile(journalPath), oldJournal)
+
+  await unlink(join(directory, ".append.lock"))
+  await writeFile(join(directory, ".append.lock"), JSON.stringify({ pid: 2_147_483_647 }), "utf8")
+  await writeFile(join(directory, ".events.jsonl.interrupted.next"), "partial", "utf8")
+  const recovered = await Effect.runPromise(record({
+    _tag: "SubmissionMayHaveStarted",
+    runId: reserved.runId,
+    operationId: "locked-append",
+  }).pipe(
+    Effect.provide(layer),
+    Effect.provideService(RunRecordClock, clock),
+  ))
+  assert.equal(recovered._tag, "SubmissionPermitIssued")
+  const frames = (await readFile(journalPath, "utf8")).trimEnd().split("\n")
+  assert.equal(frames.length, 2)
+  for (const frame of frames) assert.doesNotThrow(() => JSON.parse(frame))
 })
 
 test("tampered requests, event chains, evidence, and illegal rewrites fail by name", async () => {
   const planned = await plannedRun()
   const execute = <Success, Error>(
-    memory: ReturnType<typeof makeMemoryRunRecordStore>,
+    memory: MemoryRunRecordHarness,
     effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
   ): Promise<Success> => Effect.runPromise(effect.pipe(
-    Effect.provideService(RunRecordStore, memory.service),
+    Effect.provide(memory.layer),
     Effect.provideService(RunRecordClock, clock),
   ))
 
-  const changedRequest = makeMemoryRunRecordStore()
+  const changedRequest = await memoryHarness()
   const requestRun = await execute(changedRequest, reserve(reservationFor(planned)))
   changedRequest.mutate(requestRun.runId, (stored) => {
     stored.request[0] = stored.request[0]! ^ 1
   })
   const requestError = await Effect.runPromise(Effect.flip(
-    load(requestRun.runId).pipe(Effect.provideService(RunRecordStore, changedRequest.service)),
+    load(requestRun.runId).pipe(Effect.provide(changedRequest.layer)),
   ))
   assert.equal(requestError.code, "REQUEST_TAMPERED")
 
-  const brokenEvents = makeMemoryRunRecordStore()
+  const brokenEvents = await memoryHarness()
   const eventRun = await execute(brokenEvents, reserve(reservationFor(planned)))
   brokenEvents.mutate(eventRun.runId, (stored) => {
     const event = JSON.parse(Buffer.from(stored.events).toString("utf8")) as Record<string, unknown>
@@ -447,11 +608,11 @@ test("tampered requests, event chains, evidence, and illegal rewrites fail by na
     stored.events = Buffer.from(`${JSON.stringify(event)}\n`, "utf8")
   })
   const chainError = await Effect.runPromise(Effect.flip(
-    load(eventRun.runId).pipe(Effect.provideService(RunRecordStore, brokenEvents.service)),
+    load(eventRun.runId).pipe(Effect.provide(brokenEvents.layer)),
   ))
   assert.equal(chainError.code, "EVENT_CHAIN_BROKEN")
 
-  const changedEvidence = makeMemoryRunRecordStore()
+  const changedEvidence = await memoryHarness()
   const evidenceRun = await execute(changedEvidence, reserve(reservationFor(planned)))
   await execute(changedEvidence, record({
     _tag: "SubmissionMayHaveStarted",
@@ -475,7 +636,7 @@ test("tampered requests, event chains, evidence, and illegal rewrites fail by na
     providerResponse[0] ^= 1
   })
   const evidenceError = await Effect.runPromise(Effect.flip(
-    load(evidenceRun.runId).pipe(Effect.provideService(RunRecordStore, changedEvidence.service)),
+    load(evidenceRun.runId).pipe(Effect.provide(changedEvidence.layer)),
   ))
   assert.equal(evidenceError.code, "EVIDENCE_HASH_MISMATCH")
 
@@ -490,7 +651,7 @@ test("tampered requests, event chains, evidence, and illegal rewrites fail by na
         sha256: createHash("sha256").update(body).digest("hex"),
       },
     }).pipe(
-      Effect.provideService(RunRecordStore, changedEvidence.service),
+      Effect.provide(changedEvidence.layer),
       Effect.provideService(RunRecordClock, clock),
     ),
   ))

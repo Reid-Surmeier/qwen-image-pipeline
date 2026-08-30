@@ -5,6 +5,7 @@ import { Effect } from "effect"
 import {
   PlanningIdentity,
   type CanonicalRunRequest,
+  type LinkedRunRelationship,
   type PlannedRun,
   type PlanningIdentityService,
   type RawPlanningDocuments,
@@ -218,6 +219,21 @@ const decodeCandidates = (objective: JsonRecord): ReadonlyArray<ReferenceCandida
     }
   })
 
+const decodeLinkedRun = (objective: JsonRecord): LinkedRunRelationship | undefined => {
+  if (objective.linkedRun === undefined) return undefined
+  const linkedRun = recordField(objective, "linkedRun")
+  const parentRunId = stringField(linkedRun, "parentRunId")
+  const parentFailureEventSha256 = stringField(linkedRun, "parentFailureEventSha256")
+  const relation = stringField(linkedRun, "relation")
+  if (!/^run-[a-f0-9]{24}$/.test(parentRunId) || !/^[a-f0-9]{64}$/.test(parentFailureEventSha256)) {
+    throw new RunContractError("DOCUMENT_INVALID", "linkedRun must name a valid parent Run and failure event SHA-256.")
+  }
+  if (relation !== "retry-after-definitive-pre-submit-failure") {
+    throw new RunContractError("DOCUMENT_INVALID", "linkedRun relation is unsupported.")
+  }
+  return { parentRunId, parentFailureEventSha256, relation }
+}
+
 export const compileDocuments = (
   input: RawPlanningDocuments,
 ): Effect.Effect<
@@ -308,6 +324,7 @@ export const compileDocuments = (
         requestedCount,
         estimatedCost,
         objectiveBudget,
+        linkedRun: decodeLinkedRun(objective),
         requirements: decodeRequirements(procedure),
         candidates: decodeCandidates(objective),
       }
@@ -347,6 +364,7 @@ export const compileDocuments = (
     estimatedMaximumCostUsd: formatCents(decoded.estimatedCost),
     budgetCeilingUsd: formatCents(decoded.objectiveBudget),
     outputRoot: decoded.outputRoot,
+    ...(decoded.linkedRun === undefined ? {} : { linkedRun: decoded.linkedRun }),
     references: referencePlan.references,
     tool: lock,
   })

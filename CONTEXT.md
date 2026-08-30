@@ -76,6 +76,10 @@ _Avoid_: Provider payload, loose request blob
 An immutable, hash-identified Run Request that passed planning but has not reserved an attempt or called Generation.
 _Avoid_: Attempt, submitted job
 
+**Linked Run**:
+A distinct Planned Run whose canonical Run Request names one parent Run and its exact definitive pre-submit failure event.
+_Avoid_: Retrying the same Planned Run, reservation-time parent override
+
 **Normal View**:
 The plain-language account of the objective, evidence, next action, spend risk, and remaining human decision returned for every planning result.
 _Avoid_: Debug dump, success banner
@@ -101,7 +105,7 @@ _Avoid_: Retry token, persisted credential
 - **Fidelity Checks** gate both **Assembly** and the **Interactive Replica**.
 - One **Planned Run** may create one **Attempt Reservation** in one **Run Record**.
 - One durable submission-may-have-started event may issue one in-process **Submission Permit**; replay issues none.
-- A definitively failed pre-submit **Run Record** remains immutable and may be named by a new linked **Run Record**.
+- A definitively failed pre-submit **Run Record** remains immutable and may be named by a distinct **Linked Run** whose relationship is fixed in its Run Request before reservation.
 
 ## Example dialogue
 

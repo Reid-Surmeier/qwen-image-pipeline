@@ -23,6 +23,12 @@ export type RawPlanningDocuments = Readonly<{
   objective: string
 }>
 
+export type LinkedRunRelationship = Readonly<{
+  parentRunId: string
+  parentFailureEventSha256: string
+  relation: "retry-after-definitive-pre-submit-failure"
+}>
+
 export type CanonicalRunRequest = Readonly<{
   schemaVersion: string
   applicationId: string
@@ -37,6 +43,7 @@ export type CanonicalRunRequest = Readonly<{
   estimatedMaximumCostUsd: string
   budgetCeilingUsd: string
   outputRoot: string
+  linkedRun?: LinkedRunRelationship
   references: ReadonlyArray<{
     slot: string
     applicationPath: string

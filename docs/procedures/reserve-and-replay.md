@@ -4,7 +4,7 @@ Use this procedure after `Conductor.plan` returns a Planned Run and before any a
 
 ## 1. Reserve
 
-Call `Run Record.reserve` with the unchanged Planned Run, sanitized payload SHA-256, estimated maximum cost, maximum count, and maximum spend. These values must exactly match the immutable request.
+Call `Run Record.reserve` with the unchanged Planned Run and sanitized payload SHA-256. Run Record derives the cost, count, spend ceiling, and any successor relationship only from the canonical Run Request; callers cannot restate or override them.
 
 Done when `reserve` returns a `reserved` view and the application Run directory contains a hash-verified `request.json`, a genesis `events.jsonl` event, `state.json`, and `outputs/`.
 
@@ -12,7 +12,7 @@ Done when `reserve` returns a `reserved` view and the application Run directory 
 
 Call `Run Record.record` with `SubmissionMayHaveStarted`. The module appends and synchronizes that event before returning the in-process Submission Permit.
 
-Pass that permit to the adapter once. A replayed operation returns the current view without a permit. A different submission operation returns `DUPLICATE_SUBMISSION_BLOCKED` and the existing attempt must be reconciled.
+Use that permit to invoke the adapter once. The permit itself rejects a second use. A replayed operation returns the current view without a permit. A different submission operation returns `DUPLICATE_SUBMISSION_BLOCKED` and the existing attempt must be reconciled.
 
 Done when the adapter has either returned sanitized evidence or the Run view says `possibly_spent / reconcile-only`.
 
@@ -24,7 +24,7 @@ Done when `load` returns `provider_evidence_received` and the evidence receipt m
 
 ## 4. Resume by replay
 
-Create a fresh filesystem adapter for the same application root and call `Run Record.load(runId)`. Authority is evaluated in this order:
+Provide a fresh `fileRunRecordLayer` for the same application root and call `Run Record.load(runId)`. Authority is evaluated in this order:
 
 1. immutable `request.json` bytes;
 2. the complete SHA-256 chain in `events.jsonl`;
@@ -42,6 +42,6 @@ A missing or changed authority produces a named integrity error. A derived view 
 | Submission marker, no evidence | Reconcile the existing attempt identity. |
 | Evidence file without its event | Replay the exact evidence operation or reconcile; keep the existing submission. |
 | Evidence receipt event | Reload and continue from recorded evidence. |
-| Definitive pre-submit failure | Plan and reserve a new Run linked to that exact failure event. |
+| Definitive pre-submit failure | Put the exact parent Run and failure-event hash in a new Objective, plan a distinct Run Request, then reserve that linked Run. |
 
 Every row preserves the existing Run. None turns uncertainty into another submission.

@@ -19,6 +19,11 @@ const entries = findTests(join(repository, "modules"))
   .map((entry) => entry.slice(repository.length + 1))
   .sort()
 
+if (entries.length === 0) {
+  console.error("No control-plane acceptance tests were discovered under modules/.")
+  process.exit(1)
+}
+
 process.on("exit", () => rmSync(outputDirectory, { recursive: true, force: true }))
 
 const configPath = join(repository, "tsconfig.json")
