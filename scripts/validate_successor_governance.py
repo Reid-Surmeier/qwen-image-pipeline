@@ -111,6 +111,8 @@ def validate_repository(root: Path) -> list[str]:
             problems.append("canonical baseline omits the deterministic command runner")
         if "VERIFY_PYTHON" in verify_text:
             problems.append("canonical baseline permits an environment-selected executable")
+        if "PYTHON_BIN=/usr/bin/python3.12" not in verify_text:
+            problems.append("canonical baseline does not pin its bootstrap interpreter")
         command_lines = [
             line.strip()
             for line in verify_text.splitlines()

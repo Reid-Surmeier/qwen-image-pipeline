@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import hashlib
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -37,6 +36,12 @@ NODE_COMMANDS = {
 }
 GIT_COMMANDS = {("diff", "--check")}
 
+TRUSTED_PYTHON = Path("/usr/bin/python3.12")
+TRUSTED_NODE = Path("/usr/bin/node")
+TRUSTED_GIT = Path("/usr/bin/git")
+TRUSTED_COMPILER = Path("/usr/bin/cc")
+TRUSTED_PATH = "/usr/bin:/bin"
+
 SAFE_CHILD_SCRIPTS = (
     "scripts/visual_gate.py",
     "scripts/audit_project_skills.py",
@@ -45,6 +50,7 @@ SAFE_CHILD_SCRIPTS = (
     "tests/baseline_guard/probe_python_udp.py",
     "tests/baseline_guard/probe_python_descendant.py",
     "tests/baseline_guard/probe_python_substitution.py",
+    "tests/baseline_guard/probe_python_stripped_environment.py",
     "tests/baseline_guard/probe_python_model.py",
     "tests/baseline_guard/probe_node_network.cjs",
     "tests/baseline_guard/probe_node_udp.cjs",
@@ -55,25 +61,12 @@ SAFE_CHILD_SCRIPTS = (
 def validate_command(command: Sequence[str]) -> None:
     if not command:
         raise ValueError("missing deterministic baseline command")
-    executable_path = shutil.which(command[0])
+    executable_path = Path(command[0]).resolve()
     executable = Path(command[0]).name
     arguments = tuple(command[1:])
-    is_current_python = (
-        executable_path is not None
-        and Path(executable_path).resolve() == Path(sys.executable).resolve()
-    )
-    selected_node = shutil.which("node")
-    selected_git = shutil.which("git")
-    is_selected_node = (
-        executable_path is not None
-        and selected_node is not None
-        and Path(executable_path).resolve() == Path(selected_node).resolve()
-    )
-    is_selected_git = (
-        executable_path is not None
-        and selected_git is not None
-        and Path(executable_path).resolve() == Path(selected_git).resolve()
-    )
+    is_current_python = executable_path == TRUSTED_PYTHON.resolve()
+    is_selected_node = executable_path == TRUSTED_NODE.resolve()
+    is_selected_git = executable_path == TRUSTED_GIT.resolve()
     allowed = (
         (is_current_python, arguments in PYTHON_COMMANDS),
         (is_selected_node, arguments in NODE_COMMANDS),
@@ -95,14 +88,22 @@ def _native_guard(repository: Path) -> Path:
     output = guard_directory / f"no_external_effects-{digest}.so"
     if output.is_file():
         return output
-    compiler = shutil.which("cc")
-    if compiler is None:
+    if not TRUSTED_COMPILER.is_file():
         raise RuntimeError(
             "the deterministic baseline requires a C compiler for process isolation"
         )
     temporary = output.with_suffix(f".{os.getpid()}.tmp")
     completed = subprocess.run(
-        [compiler, "-shared", "-fPIC", "-O2", "-o", temporary, source, "-ldl"],
+        [
+            TRUSTED_COMPILER,
+            "-shared",
+            "-fPIC",
+            "-O2",
+            "-o",
+            temporary,
+            source,
+            "-ldl",
+        ],
         capture_output=True,
         text=True,
         check=False,
@@ -122,10 +123,9 @@ def build_environment(source: Mapping[str, str], repository: Path) -> dict[str, 
         if name in source
     }
     guard_directory = repository / "tests" / "baseline_guard"
-    node = shutil.which("node")
-    git = shutil.which("git")
-    if node is None or git is None:
-        raise RuntimeError("the deterministic baseline requires Node and Git")
+    for executable in (TRUSTED_PYTHON, TRUSTED_NODE, TRUSTED_GIT):
+        if not executable.is_file():
+            raise RuntimeError(f"missing deterministic baseline tool: {executable}")
     environment.update(
         {
             "GIT_CONFIG_GLOBAL": os.devnull,
@@ -136,9 +136,10 @@ def build_environment(source: Mapping[str, str], repository: Path) -> dict[str, 
             "PYTHONUTF8": "1",
             "QWEN_BASELINE_OFFLINE": "1",
             "QWEN_BASELINE_REPOSITORY": str(repository.resolve()),
-            "QWEN_BASELINE_PYTHON": str(Path(sys.executable).resolve()),
-            "QWEN_BASELINE_NODE": str(Path(node).resolve()),
-            "QWEN_BASELINE_GIT": str(Path(git).resolve()),
+            "QWEN_BASELINE_PYTHON": str(TRUSTED_PYTHON.resolve()),
+            "QWEN_BASELINE_NODE": str(TRUSTED_NODE.resolve()),
+            "QWEN_BASELINE_GIT": str(TRUSTED_GIT.resolve()),
+            "PATH": TRUSTED_PATH,
             "QWEN_BASELINE_ALLOWED_SCRIPTS": os.pathsep.join(
                 str((repository / relative).resolve())
                 for relative in SAFE_CHILD_SCRIPTS

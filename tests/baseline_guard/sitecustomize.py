@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import importlib.abc
+import inspect
 import os
 import shutil
 import socket
 import subprocess
 import sys
-import threading
 from pathlib import Path
 
 
@@ -88,18 +88,17 @@ if os.environ.get("QWEN_BASELINE_OFFLINE") == "1":
             return _approved_git(arguments)
         return False
 
-    _spawn_state = threading.local()
     _original_popen = subprocess.Popen
+    _popen_signature = inspect.signature(_original_popen)
+    _guard_environment = dict(os.environ)
 
     class _OfflinePopen(_original_popen):
         def __init__(self, args: object, *popen_args: object, **popen_kwargs: object) -> None:
-            if not _approved_child(args, bool(popen_kwargs.get("shell", False))):
+            bound = _popen_signature.bind_partial(args, *popen_args, **popen_kwargs)
+            if not _approved_child(args, bool(bound.arguments.get("shell", False))):
                 raise PermissionError("descendant process is disabled in the deterministic baseline")
-            _spawn_state.approved = True
-            try:
-                super().__init__(args, *popen_args, **popen_kwargs)
-            finally:
-                _spawn_state.approved = False
+            bound.arguments["env"] = dict(_guard_environment)
+            super().__init__(*bound.args, **bound.kwargs)
 
     subprocess.Popen = _OfflinePopen
 

@@ -7,10 +7,7 @@
 
 set -uo pipefail
 
-PYTHON_BIN=python3.12
-if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
-  PYTHON_BIN=python3
-fi
+PYTHON_BIN=/usr/bin/python3.12
 
 cd "$(dirname "$0")/.."
 
@@ -32,9 +29,9 @@ run_check() {
 
 run_check "successor governance" "${DETERMINISTIC_RUNNER[@]}" "$PYTHON_BIN" scripts/validate_successor_governance.py
 run_check "python unit tests" "${DETERMINISTIC_RUNNER[@]}" "$PYTHON_BIN" -m unittest discover -s tests
-run_check "node tests" "${DETERMINISTIC_RUNNER[@]}" node --test tests/figma-mcp-client.test.mjs tests/figma-oauth-bootstrap.test.mjs
+run_check "node tests" "${DETERMINISTIC_RUNNER[@]}" /usr/bin/node --test tests/figma-mcp-client.test.mjs tests/figma-oauth-bootstrap.test.mjs
 run_check "python compilation" "${DETERMINISTIC_RUNNER[@]}" "$PYTHON_BIN" -m compileall -q qwen_ui_pipeline tests scripts
-run_check "git diff --check" "${DETERMINISTIC_RUNNER[@]}" git diff --check
+run_check "git diff --check" "${DETERMINISTIC_RUNNER[@]}" /usr/bin/git diff --check
 
 if [ "$failures" -ne 0 ]; then
   echo "verification failed: ${failures} check(s) reported errors" >&2
