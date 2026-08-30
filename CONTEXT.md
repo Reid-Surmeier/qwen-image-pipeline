@@ -1,6 +1,14 @@
-# Reference-Preserving UI Generation
+# Dependable Reference-Preserving Generation
 
-This context describes a repeatable system for transforming an existing interface while preserving its visual identity, then producing an interactive counterpart.
+This repository owns a reusable generation procedure, not any one application. Application repositories own their references, assets, generation and Assembly outputs, run records, and builds. The tool plans, enforces, executes, validates, and records work against application-owned inputs.
+
+## Repository responsibility
+
+- The **tool repository** defines contracts, procedure stages, adapters, checks, error classifications, provenance, and learnings.
+- An **application repository** supplies the project contract, authoritative references, requested outcome, and destination for every resulting artifact.
+- A run is complete only when it has a classified result, reproducibility evidence, and an explicit next action.
+
+This context describes a repeatable system for transforming an existing interface or video while preserving authoritative evidence and producing trustworthy outputs.
 
 ## Language
 
@@ -43,6 +51,14 @@ _Avoid_: Vibe check
 **Interactive Replica**:
 A working software view derived from an approved screen composition.
 _Avoid_: Screenshot, mockup
+
+**Project Contract**:
+The application-owned declaration of purpose, allowed operations, evidence sources, output destinations, approval rules, and compatible tool version.
+_Avoid_: Repository folklore, setup notes
+
+**Run Record**:
+The append-only application-owned evidence for one reserved attempt, including request, events, raw provider response, outputs, checks, failure, and provenance.
+_Avoid_: Console log, scratch folder
 
 ## Relationships
 

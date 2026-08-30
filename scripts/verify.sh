@@ -28,6 +28,7 @@ run_check() {
   fi
 }
 
+run_check "successor governance" "$PYTHON_BIN" scripts/validate_successor_governance.py
 run_check "python unit tests" "$PYTHON_BIN" -m unittest discover -s tests
 run_check "node tests" node --test tests/figma-mcp-client.test.mjs tests/figma-oauth-bootstrap.test.mjs
 run_check "python compilation" "$PYTHON_BIN" -m compileall -q qwen_ui_pipeline tests scripts
