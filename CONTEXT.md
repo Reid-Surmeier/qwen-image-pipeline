@@ -84,6 +84,14 @@ _Avoid_: Debug dump, success banner
 The append-only application-owned evidence for one reserved attempt, including request, events, raw provider response, outputs, checks, failure, and provenance.
 _Avoid_: Console log, scratch folder
 
+**Attempt Reservation**:
+The first durable Run Record event. It fixes the immutable request, attempt identity, payload digest, estimated maximum cost, maximum count and spend, and conservative retry state before submission can begin.
+_Avoid_: In-memory intent, provider call counter
+
+**Submission Permit**:
+A one-use, non-serializable capability returned only after the submission-may-have-started event is durable. Reload never recreates it.
+_Avoid_: Retry token, persisted credential
+
 ## Relationships
 
 - One **Reference Screen** has one or more **Edit Briefs**.
@@ -91,6 +99,9 @@ _Avoid_: Console log, scratch folder
 - An **Edit Brief** produces one or more **Render Passes**.
 - **Asset Passes** and **Screen Passes** feed **Assembly**.
 - **Fidelity Checks** gate both **Assembly** and the **Interactive Replica**.
+- One **Planned Run** may create one **Attempt Reservation** in one **Run Record**.
+- One durable submission-may-have-started event may issue one in-process **Submission Permit**; replay issues none.
+- A definitively failed pre-submit **Run Record** remains immutable and may be named by a new linked **Run Record**.
 
 ## Example dialogue
 

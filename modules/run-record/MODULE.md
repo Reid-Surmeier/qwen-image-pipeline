@@ -1,0 +1,8 @@
+# Run Record
+
+- Purpose: Own the immutable request, durable attempt reservation, hash-chained events, write-once evidence, and replay-derived view for one application Run.
+- Interface: `modules/run-record/index.ts`
+- Errors: `modules/run-record/errors.ts`
+- Acceptance: `modules/run-record/run-record.test.ts`
+
+Run Record is the only production writer of Run evidence. `reserve` creates one durable attempt from a Planned Run, `record` applies a legal write-once operation, and `load` verifies and replays authority. A submission permit exists only in memory after the first durable submission-may-have-started event; reload never recreates it. Run Record does not call Generation or declare Approval.

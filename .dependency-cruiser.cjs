@@ -1,6 +1,6 @@
 module.exports = {
   forbidden: [
-    ...["conductor", "reference-planning", "run-contract"].map((moduleName) => ({
+    ...["conductor", "reference-planning", "run-contract", "run-record"].map((moduleName) => ({
       name: `no-${moduleName}-reaching-inside-another-module`,
       comment: "Import another module through its index.ts interface, never its implementation.",
       severity: "error",

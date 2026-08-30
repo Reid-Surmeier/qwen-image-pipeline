@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -8,11 +8,16 @@ import ts from "typescript"
 
 const repository = dirname(dirname(fileURLToPath(import.meta.url)))
 const outputDirectory = mkdtempSync(join(repository, ".control-tests-"))
-const entries = [
-  "modules/conductor/conductor.test.ts",
-  "modules/reference-planning/reference-planning.test.ts",
-  "modules/run-contract/run-contract.test.ts",
-]
+const findTests = (directory) => readdirSync(directory, { withFileTypes: true })
+  .flatMap((entry) => {
+    const absolute = join(directory, entry.name)
+    if (entry.isDirectory()) return findTests(absolute)
+    return entry.isFile() && entry.name.endsWith(".test.ts") ? [absolute] : []
+  })
+
+const entries = findTests(join(repository, "modules"))
+  .map((entry) => entry.slice(repository.length + 1))
+  .sort()
 
 process.on("exit", () => rmSync(outputDirectory, { recursive: true, force: true }))
 

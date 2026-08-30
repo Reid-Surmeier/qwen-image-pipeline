@@ -6,7 +6,8 @@ import {
   ApplicationReadError,
   type ApplicationFilesService,
   type PlanningIdentityService,
-} from "../modules/conductor/index.js"
+  type RawPlanningDocuments,
+} from "../modules/run-contract/index.js"
 
 const PNG_BYTES = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nKsAAAAASUVORK5CYII=",
@@ -44,6 +45,7 @@ export const makeFixture = (
   files: ApplicationFilesService
   identity: PlanningIdentityService
   objectivePath: string
+  documents: RawPlanningDocuments
   reads: ReadonlyArray<string>
 }> => {
   const isVideo = mode === "seedance-video"
@@ -125,10 +127,15 @@ export const makeFixture = (
   mutation.objective?.(objective)
 
   const objectivePath = `objectives/${procedureId}.json`
+  const documents = {
+    projectContract: JSON.stringify(projectContract),
+    toolLock: JSON.stringify(toolLock),
+    objective: JSON.stringify(objective),
+  }
   const fileMap = new Map<string, Uint8Array>([
-    [".qwen-pipeline/project-contract.json", Buffer.from(JSON.stringify(projectContract))],
-    [".qwen-pipeline/tool-lock.json", Buffer.from(JSON.stringify(toolLock))],
-    [objectivePath, Buffer.from(JSON.stringify(objective))],
+    [".qwen-pipeline/project-contract.json", Buffer.from(documents.projectContract)],
+    [".qwen-pipeline/tool-lock.json", Buffer.from(documents.toolLock)],
+    [objectivePath, Buffer.from(documents.objective)],
     [referencePath, referenceBytes],
   ])
   mutation.files?.(fileMap)
@@ -146,6 +153,7 @@ export const makeFixture = (
     files,
     identity: { installedTool: FIXTURE_TOOL },
     objectivePath,
+    documents,
     reads,
   }
 }
