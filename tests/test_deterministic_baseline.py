@@ -15,8 +15,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 
 class DeterministicBaselineTests(unittest.TestCase):
     def test_only_the_documented_baseline_commands_are_allowed(self) -> None:
-        validate_command((sys.executable, "-m", "unittest", "discover", "-s", "tests"))
-        validate_command(("/usr/bin/git", "diff", "--check"))
+        validate_command(("@python", "-m", "unittest", "discover", "-s", "tests"))
+        validate_command(("@git", "diff", "--check"))
 
         with self.assertRaisesRegex(ValueError, "not part of the deterministic baseline"):
             validate_command(("curl", "https://openrouter.ai"))
@@ -38,9 +38,9 @@ class DeterministicBaselineTests(unittest.TestCase):
         self.assertIn("baseline_guard", environment["PYTHONPATH"])
         self.assertIn("no_external_effects.cjs", environment["NODE_OPTIONS"])
         self.assertIn("no_external_effects-", environment["LD_PRELOAD"])
-        self.assertEqual(environment["PATH"], "/usr/bin:/bin")
+        self.assertTrue(environment["PATH"].endswith(":/usr/bin:/bin"))
         self.assertEqual(environment["QWEN_BASELINE_PYTHON"], "/usr/bin/python3.12")
-        self.assertEqual(environment["QWEN_BASELINE_NODE"], "/usr/bin/node")
+        self.assertEqual(Path(environment["QWEN_BASELINE_NODE"]).name, "node")
         self.assertEqual(environment["QWEN_BASELINE_GIT"], "/usr/bin/git")
 
     def test_python_named_provider_is_not_accepted_as_the_interpreter(self) -> None:

@@ -37,10 +37,8 @@ NODE_COMMANDS = {
 GIT_COMMANDS = {("diff", "--check")}
 
 TRUSTED_PYTHON = Path("/usr/bin/python3.12")
-TRUSTED_NODE = Path("/usr/bin/node")
 TRUSTED_GIT = Path("/usr/bin/git")
 TRUSTED_COMPILER = Path("/usr/bin/cc")
-TRUSTED_PATH = "/usr/bin:/bin"
 
 SAFE_CHILD_SCRIPTS = (
     "scripts/visual_gate.py",
@@ -61,22 +59,41 @@ SAFE_CHILD_SCRIPTS = (
 def validate_command(command: Sequence[str]) -> None:
     if not command:
         raise ValueError("missing deterministic baseline command")
-    executable_path = Path(command[0]).resolve()
     executable = Path(command[0]).name
     arguments = tuple(command[1:])
-    is_current_python = executable_path == TRUSTED_PYTHON.resolve()
-    is_selected_node = executable_path == TRUSTED_NODE.resolve()
-    is_selected_git = executable_path == TRUSTED_GIT.resolve()
     allowed = (
-        (is_current_python, arguments in PYTHON_COMMANDS),
-        (is_selected_node, arguments in NODE_COMMANDS),
-        (is_selected_git, arguments in GIT_COMMANDS),
+        (command[0] == "@python", arguments in PYTHON_COMMANDS),
+        (command[0] == "@node", arguments in NODE_COMMANDS),
+        (command[0] == "@git", arguments in GIT_COMMANDS),
     )
     if not any(
         matches_executable and matches_arguments
         for matches_executable, matches_arguments in allowed
     ):
         raise ValueError(f"command is not part of the deterministic baseline: {executable}")
+
+
+def _trusted_node() -> Path:
+    candidates = [Path("/usr/bin/node")]
+    candidates.extend(
+        sorted(
+            Path("/opt/hostedtoolcache/node").glob("*/x64/bin/node"),
+            reverse=True,
+        )
+    )
+    for candidate in candidates:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate.resolve()
+    raise RuntimeError("missing deterministic baseline tool: Node")
+
+
+def _resolve_command(command: Sequence[str]) -> tuple[str, ...]:
+    executables = {
+        "@python": TRUSTED_PYTHON.resolve(),
+        "@node": _trusted_node(),
+        "@git": TRUSTED_GIT.resolve(),
+    }
+    return (str(executables[command[0]]), *command[1:])
 
 
 def _native_guard(repository: Path) -> Path:
@@ -123,7 +140,8 @@ def build_environment(source: Mapping[str, str], repository: Path) -> dict[str, 
         if name in source
     }
     guard_directory = repository / "tests" / "baseline_guard"
-    for executable in (TRUSTED_PYTHON, TRUSTED_NODE, TRUSTED_GIT):
+    node = _trusted_node()
+    for executable in (TRUSTED_PYTHON, TRUSTED_GIT):
         if not executable.is_file():
             raise RuntimeError(f"missing deterministic baseline tool: {executable}")
     environment.update(
@@ -137,9 +155,9 @@ def build_environment(source: Mapping[str, str], repository: Path) -> dict[str, 
             "QWEN_BASELINE_OFFLINE": "1",
             "QWEN_BASELINE_REPOSITORY": str(repository.resolve()),
             "QWEN_BASELINE_PYTHON": str(TRUSTED_PYTHON.resolve()),
-            "QWEN_BASELINE_NODE": str(TRUSTED_NODE.resolve()),
+            "QWEN_BASELINE_NODE": str(node),
             "QWEN_BASELINE_GIT": str(TRUSTED_GIT.resolve()),
-            "PATH": TRUSTED_PATH,
+            "PATH": f"{node.parent}:/usr/bin:/bin",
             "QWEN_BASELINE_ALLOWED_SCRIPTS": os.pathsep.join(
                 str((repository / relative).resolve())
                 for relative in SAFE_CHILD_SCRIPTS
@@ -162,7 +180,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
         return 2
     repository = Path(__file__).resolve().parents[1]
     completed = subprocess.run(
-        command,
+        _resolve_command(command),
         cwd=repository,
         env=build_environment(os.environ, repository),
         check=False,

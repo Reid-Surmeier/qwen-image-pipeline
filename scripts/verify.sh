@@ -28,11 +28,11 @@ run_check() {
   fi
 }
 
-run_check "successor governance" "${DETERMINISTIC_RUNNER[@]}" "$PYTHON_BIN" scripts/validate_successor_governance.py
-run_check "python unit tests" "${DETERMINISTIC_RUNNER[@]}" "$PYTHON_BIN" -m unittest discover -s tests
-run_check "node tests" "${DETERMINISTIC_RUNNER[@]}" /usr/bin/node --test tests/figma-mcp-client.test.mjs tests/figma-oauth-bootstrap.test.mjs
-run_check "python compilation" "${DETERMINISTIC_RUNNER[@]}" "$PYTHON_BIN" -m compileall -q qwen_ui_pipeline tests scripts
-run_check "git diff --check" "${DETERMINISTIC_RUNNER[@]}" /usr/bin/git diff --check
+run_check "successor governance" "${DETERMINISTIC_RUNNER[@]}" @python scripts/validate_successor_governance.py
+run_check "python unit tests" "${DETERMINISTIC_RUNNER[@]}" @python -m unittest discover -s tests
+run_check "node tests" "${DETERMINISTIC_RUNNER[@]}" @node --test tests/figma-mcp-client.test.mjs tests/figma-oauth-bootstrap.test.mjs
+run_check "python compilation" "${DETERMINISTIC_RUNNER[@]}" @python -m compileall -q qwen_ui_pipeline tests scripts
+run_check "git diff --check" "${DETERMINISTIC_RUNNER[@]}" @git diff --check
 
 if [ "$failures" -ne 0 ]; then
   echo "verification failed: ${failures} check(s) reported errors" >&2
