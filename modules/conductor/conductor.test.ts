@@ -102,3 +102,19 @@ test("a refusal view names the real objective and missing evidence", async () =>
   assert.match(result.normalView.evidence, /references\/neutral\.png/i)
   assert.match(result.normalView.evidence, /does not exist/i)
 })
+
+test("a secret-bearing objective is refused without echoing secret material", async () => {
+  for (const secret of [
+    "-----BEGIN PRIVATE KEY----- actual-private-material",
+    "https://operator:actual-password@example.test/reference.png",
+  ]) {
+    const { result } = await execute("qwen-image", {
+      objective: (objective) => (objective.summary = secret),
+    })
+    assert.equal(result._tag, "Refused")
+    if (result._tag !== "Refused") continue
+    assert.equal(result.refusal.code, "SECRET_MATERIAL_DETECTED")
+    assert.doesNotMatch(JSON.stringify(result.normalView), new RegExp(secret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
+    assert.match(result.normalView.objective, /could not be read safely/i)
+  }
+})

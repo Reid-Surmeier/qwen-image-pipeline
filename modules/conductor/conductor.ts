@@ -177,7 +177,10 @@ export const planObjective = (
       return Effect.succeed({
         _tag: "Refused" as const,
         refusal,
-        normalView: refusedView(refusal, describedObjective),
+        normalView: refusedView(
+          refusal,
+          refusal.code === "SECRET_MATERIAL_DETECTED" ? undefined : describedObjective,
+        ),
       })
     }),
   )
