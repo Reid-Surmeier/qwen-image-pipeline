@@ -20,11 +20,11 @@ Run `scripts/verify.sh` locally and in GitHub Actions. The baseline may inspect 
 
 ## 4. Release by tag
 
-`main` is release-only. Ruleset `21881100` requires a pull request and the `release-train` status, refuses deletion and force pushes, and gives no GitHub Actions bypass. The repository owner is the one explicit recovery bypass.
+`main` is release-only. Ruleset `21881100` requires a pull request and the `release-train` status, refuses deletion and force pushes, and gives no GitHub Actions bypass. The required status is emitted only for an annotated version tag with an exact current ship verdict and exactly one matching build PR. The repository owner is the one explicit recovery bypass.
 
-A version becomes a release only after the qualifying ticket proves the whole build, the owner makes any named decision, and `docs/releases/v<version>/REVIEW.md` says `verdict: ship` for the current exact SHA. Run `scripts/release_steward.py cut <version>` from the clean pushed `build/v<version>` line. It reruns the deterministic baseline and pushes only the matching tag.
+A version becomes a release only after the qualifying ticket proves the whole build, the owner makes any named decision, and fresh Standards and Spec review produces a receipt with `verdict: ship` for the current exact SHA. Keep that receipt outside the candidate tree and run `scripts/release_steward.py cut <version> --review-file <receipt>` from the clean pushed `build/v<version>` line. It reruns the deterministic baseline, embeds the receipt in the annotated tag, and pushes only that tag. `verify-tag` reads the same immutable receipt back from the tag; this avoids the impossible claim that a committed review file contains its own commit SHA.
 
-The tag starts the Release workflow. It revalidates the review evidence, runs Verify without provider credentials or paid effects, finds the open build pull request at that exact tag SHA, and merges it through the ordinary protected-main path. It then publishes `RELEASE.md` as the GitHub Release. A missing review, hold verdict, stale SHA, dirty tree, unpushed tip, gate failure, or conflicting tag refuses the cut.
+The tag starts both Release train and Release. Release train binds the required status to the tag, exact review, and exact open build PR. Release revalidates the evidence, runs Verify without provider credentials or paid effects, waits for the required status, and uses GitHub's head-commit match when merging through protected `main`. It then publishes `RELEASE.md` as the GitHub Release. A missing review, hold verdict, stale SHA, malformed version, lightweight tag, dirty tree, unpushed tip, gate failure, or conflicting tag refuses the cut.
 
 The exact ruleset create request and GitHub's returned record are in [`docs/releases/v0.3.0/`](../releases/v0.3.0/main-protection.md).
 
