@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/bash
 # Canonical deterministic repository baseline (Issue #18).
 #
 # Humans, agents, and GitHub Actions all run this same entry point. It must
@@ -6,10 +6,11 @@
 # paid or external effect.
 
 set -uo pipefail
+export PATH=/usr/bin:/bin
 
 PYTHON_BIN=/usr/bin/python3.12
 
-cd "$(dirname "$0")/.."
+cd "${0%/*}/.."
 
 DETERMINISTIC_RUNNER=("$PYTHON_BIN" scripts/run_deterministic_command.py --)
 
