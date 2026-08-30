@@ -56,6 +56,7 @@ GIT_COMMANDS = {("diff", "--check")}
 TRUSTED_PYTHON = Path("/usr/bin/python3.12")
 TRUSTED_GIT = Path("/usr/bin/git")
 TRUSTED_COMPILER = Path("/usr/bin/cc")
+TRUSTED_NODE_MAJOR = 22
 
 SAFE_CHILD_SCRIPTS = (
     "scripts/visual_gate.py",
@@ -91,18 +92,22 @@ def validate_command(command: Sequence[str]) -> None:
         raise ValueError(f"command is not part of the deterministic baseline: {executable}")
 
 
+def _toolcache_node_candidates(root: Path = Path("/opt/hostedtoolcache/node")) -> list[Path]:
+    return sorted(
+        root.glob(f"{TRUSTED_NODE_MAJOR}.*/x64/bin/node"),
+        reverse=True,
+    )
+
+
 def _trusted_node() -> Path:
     candidates = [Path("/usr/bin/node")]
-    candidates.extend(
-        sorted(
-            Path("/opt/hostedtoolcache/node").glob("*/x64/bin/node"),
-            reverse=True,
-        )
-    )
+    candidates.extend(_toolcache_node_candidates())
     for candidate in candidates:
         if candidate.is_file() and os.access(candidate, os.X_OK):
             return candidate.resolve()
-    raise RuntimeError("missing deterministic baseline tool: Node")
+    raise RuntimeError(
+        f"missing deterministic baseline tool: Node {TRUSTED_NODE_MAJOR}"
+    )
 
 
 def _resolve_command(command: Sequence[str]) -> tuple[str, ...]:

@@ -7,13 +7,33 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.run_deterministic_command import build_environment, validate_command
+from scripts.run_deterministic_command import (
+    TRUSTED_NODE_MAJOR,
+    _toolcache_node_candidates,
+    _trusted_node,
+    build_environment,
+    validate_command,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 class DeterministicBaselineTests(unittest.TestCase):
+    def test_node_resolution_cannot_drift_to_a_newer_toolcache_major(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            node22 = root / "22.23.0" / "x64" / "bin" / "node"
+            node24 = root / "24.19.0" / "x64" / "bin" / "node"
+            node22.parent.mkdir(parents=True)
+            node24.parent.mkdir(parents=True)
+            node22.touch()
+            node24.touch()
+
+            self.assertEqual(_toolcache_node_candidates(root), [node22])
+        self.assertEqual(TRUSTED_NODE_MAJOR, 22)
+        self.assertEqual(_trusted_node().name, "node")
+
     def test_only_the_documented_baseline_commands_are_allowed(self) -> None:
         validate_command(("@python", "-m", "unittest", "discover", "-s", "tests"))
         validate_command(("@git", "diff", "--check"))
