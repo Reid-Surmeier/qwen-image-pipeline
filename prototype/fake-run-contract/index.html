@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Throwaway prototype — fake Run contract</title>
+  <style>
+    :root { color-scheme: light; --ink:#17202a; --muted:#5c6670; --paper:#f7f5ef; --panel:#fff; --line:#d8d3c7; --accent:#2457d6; --good:#176b45; --bad:#a9382f; --warn:#8a5b00; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--paper); color:var(--ink); font:15px/1.45 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+    main { width:min(1180px,calc(100% - 32px)); margin:34px auto 64px; }
+    h1,h2,h3,p { margin-top:0; }
+    h1 { font-size:clamp(28px,4vw,46px); line-height:1.05; letter-spacing:-.035em; margin-bottom:12px; }
+    h2 { font-size:19px; margin-bottom:12px; }
+    h3 { font-size:14px; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); }
+    .eyebrow { color:var(--accent); font-weight:750; letter-spacing:.08em; text-transform:uppercase; font-size:12px; }
+    .intro { max-width:900px; font-size:17px; color:#333b44; }
+    .notice { border-left:4px solid var(--warn); background:#fff8e4; padding:12px 14px; margin:18px 0 24px; }
+    .tabs,.actions,.steps { display:flex; flex-wrap:wrap; gap:8px; }
+    button { border:1px solid var(--line); background:var(--panel); color:var(--ink); padding:9px 12px; border-radius:8px; font:inherit; cursor:pointer; }
+    button:hover { border-color:var(--accent); }
+    button.active,button.primary { background:var(--accent); border-color:var(--accent); color:white; }
+    button.done { background:#e8f5ee; border-color:#a7d2bc; color:var(--good); }
+    .scenario { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px; margin:12px 0 20px; }
+    .scenario p { color:var(--muted); max-width:900px; }
+    .grid { display:grid; grid-template-columns:repeat(12,1fr); gap:14px; }
+    .card { grid-column:span 4; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; min-width:0; }
+    .card.wide { grid-column:span 8; }
+    .card.full { grid-column:1/-1; }
+    dl { display:grid; grid-template-columns:minmax(110px,145px) 1fr; gap:7px 12px; margin:0; }
+    dt { color:var(--muted); }
+    dd { margin:0; overflow-wrap:anywhere; }
+    .badge { display:inline-block; border:1px solid var(--line); border-radius:999px; padding:2px 8px; font-size:12px; font-weight:700; }
+    .good { color:var(--good); border-color:#9bc9b1; background:#eef8f2; }
+    .bad { color:var(--bad); border-color:#e0aaa6; background:#fff0ef; }
+    .warn { color:var(--warn); border-color:#dfc17f; background:#fff8e4; }
+    .muted { color:var(--muted); }
+    .record { font:13px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; background:#f4f3ef; border-radius:8px; padding:12px; }
+    .events { width:100%; border-collapse:collapse; font-size:13px; }
+    .events th,.events td { text-align:left; vertical-align:top; border-bottom:1px solid #ece8df; padding:7px 6px; }
+    .events th { color:var(--muted); font-weight:650; }
+    .call { font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; background:#111827; color:#e5edf8; padding:12px; border-radius:8px; overflow-wrap:anywhere; }
+    .change { border-left:4px solid var(--accent); padding-left:12px; }
+    @media (max-width:850px) { .card,.card.wide { grid-column:1/-1; } main { width:min(100% - 20px,1180px); } }
+  </style>
+</head>
+<body>
+<main>
+  <p class="eyebrow">Throwaway logic prototype · no providers · no persistence</p>
+  <h1>Can two very different generations obey one trustworthy Run contract?</h1>
+  <p class="intro">Drive fake Qwen Image and Seedance Runs through the proposed public modules. Watch whether exact references reach the fake payload, evidence appears before and after the one submission, Assembly remains mandatory when pixels are owned, and unsafe retry or tampered history is refused through a named error.</p>
+  <div class="notice"><strong>This is not the pipeline.</strong> It is an in-memory state machine for judging the interface. It spends nothing, writes no Run files, and deliberately has no tests or production error handling.</div>
+
+  <h2>Guided walkthroughs</h2>
+  <div id="tabs" class="tabs"></div>
+  <section class="scenario">
+    <h2 id="scenarioTitle"></h2>
+    <p id="scenarioCopy"></p>
+    <div id="steps" class="steps"></div>
+  </section>
+
+  <h2>Free play</h2>
+  <div id="actions" class="actions"></div>
+
+  <h2 style="margin-top:26px">Full relevant state</h2>
+  <div class="grid">
+    <section class="card"><h3>Run</h3><dl id="runState"></dl></section>
+    <section class="card"><h3>Reference plan</h3><dl id="referenceState"></dl></section>
+    <section class="card"><h3>Provider attempt</h3><dl id="attemptState"></dl></section>
+    <section class="card wide"><h3>What just changed</h3><div id="changeState" class="change"></div></section>
+    <section class="card"><h3>Last public-interface exchange</h3><div id="interfaceState" class="call"></div></section>
+    <section class="card"><h3>Write-once Run Record view</h3><div id="recordState" class="record"></div></section>
+    <section class="card wide"><h3>Assembly and checks</h3><dl id="checkState"></dl></section>
+    <section class="card full"><h3>Append-only events</h3><table class="events"><thead><tr><th>#</th><th>Stage</th><th>Fact</th><th>Evidence</th></tr></thead><tbody id="eventState"></tbody></table></section>
+  </div>
+</main>
+
+<script>
+const RunMachine = (() => {
+  const H = {
+    baseline: "1111111111111111111111111111111111111111111111111111111111111111",
+    donor: "2222222222222222222222222222222222222222222222222222222222222222",
+    video: "3333333333333333333333333333333333333333333333333333333333333333",
+    output: "4444444444444444444444444444444444444444444444444444444444444444",
+    assembled: "5555555555555555555555555555555555555555555555555555555555555555"
+  };
+
+  function blank(mode="qwen") {
+    const isQwen = mode === "qwen";
+    return {
+      mode, runId: isQwen ? "run-qwen-fake-001" : "run-seedance-fake-001",
+      stage:"empty", outcome:"none", lastError:"none", trustworthy:true,
+      requestLocked:false, validated:false, eventChain:true,
+      reference:{kind:isQwen?"image":"video", role:isQwen?"authoritative baseline":"motion authority", path:isQwen?"artifacts/references/window.png":"artifacts/references/motion.mp4", sha256:isQwen?H.baseline:H.video, exists:isQwen, hashMatches:isQwen, payloadIncluded:isQwen, authority:isQwen?"approved source screen":"missing until attached"},
+      attempt:{id:"none", provider:"openrouter", model:isQwen?"qwen/image-3-pro":"bytedance/seedance-2.5", requested:1, completed:0, spend:"not_submitted", retry:"not_applicable", providerId:"none", estimate:isQwen?"$0.04":"$0.22", actual:"unknown"},
+      assembly:{required:isQwen, donorSelected:false, completed:false, baselineHash:isQwen?H.baseline:"n/a", donorHash:"none", outputHash:"none"},
+      checks:{payload:false, media:false, fidelity:isQwen?false:"not required", semantic:false},
+      files:{"request.json":false,"events.jsonl":false,"provider-response.json":false,"outputs/":false,"checks.json":false,"failure.json":false,"provenance.json":false,"outcome.json":false,"approval.json":false},
+      events:[], lastChange:"Choose an action or start a walkthrough.", lastInterface:"No module call yet."
+    };
+  }
+
+  function copy(state) { return JSON.parse(JSON.stringify(state)); }
+  function event(s, stage, fact, evidence) { s.events.push({n:s.events.length+1,stage,fact,evidence}); s.files["events.jsonl"]=true; }
+  function reject(s, error, why, iface="Conductor.advance") { s.lastError=error; s.lastChange=why; s.lastInterface=`${iface} -> ${error}`; return s; }
+  function requireStage(s, allowed, action) { if(!allowed.includes(s.stage)) return reject(s,"IllegalRunTransition",`${action} is illegal from “${s.stage}”.`); return null; }
+
+  function reduce(state, action) {
+    let s = action.type === "reset" ? blank(action.mode || state.mode) : copy(state);
+    if(action.type === "reset") return s;
+    if(!s.eventChain && action.type !== "reset") return reject(s,"BrokenEventChain","Run Record refused every transition because prior evidence was changed.","RunRecord.record");
+    s.lastError="none";
+    switch(action.type) {
+      case "plan":
+        if(requireStage(s,["empty"],"Planning")) return s;
+        s.stage="planned"; s.requestLocked=true; s.files["request.json"]=true;
+        event(s,"planned","Immutable request and reference plan recorded",s.runId);
+        s.lastChange="The plan exists before any adapter or spend."; s.lastInterface="Conductor.plan -> ReferencePlanning.planReferences -> RunRecord.record"; return s;
+      case "attach_video":
+        if(s.mode!=="seedance") return reject(s,"ReferenceKindMismatch","This action only applies to the Seedance Run.","ReferencePlanning.planReferences");
+        if(requireStage(s,["planned"],"Attaching a reference")) return s;
+        s.reference.exists=true; s.reference.hashMatches=true; s.reference.authority="licensed motion study";
+        event(s,"planned","Authoritative video located and hash-locked",s.reference.sha256.slice(0,12)+"…");
+        s.lastChange="The video now exists, but it is not yet proven inside the payload."; s.lastInterface="ReferencePlanning.planReferences -> ReferencePlanResult"; return s;
+      case "prove_payload":
+        if(requireStage(s,["planned"],"Payload proof")) return s;
+        if(!s.reference.exists || !s.reference.hashMatches) return reject(s,"ReferenceMissing","The payload cannot prove a missing or changed reference.","Generation.generate");
+        s.reference.payloadIncluded=true; s.checks.payload=true;
+        event(s,"planned","Sanitized payload proof contains exact reference",s.reference.sha256.slice(0,12)+"… at input_references[0]");
+        s.lastChange="The reference is now machine-proven in the exact fake provider field."; s.lastInterface="Generation.generate (preflight) -> PayloadProof"; return s;
+      case "validate":
+        if(requireStage(s,["planned"],"Validation")) return s;
+        if(!s.reference.exists) return reject(s,"ReferenceMissing","Validation stopped before an adapter because the required reference does not exist.","RunContract.validateRunRequest");
+        if(!s.reference.hashMatches) return reject(s,"EvidenceHashMismatch","Validation stopped because the reference bytes changed.","RunContract.validateRunRequest");
+        if(!s.reference.payloadIncluded) return reject(s,"PayloadReferenceMismatch","Validation stopped because the exact reference never reached the fake payload.","Generation.generate (preflight)");
+        s.stage="validated"; s.validated=true; s.checks.payload=true;
+        event(s,"validated","Contract, reference, capability, payload, and budget gates passed","request+payload digests");
+        s.lastChange="The Run may now reserve one attempt. No provider has been called."; s.lastInterface="RunContract.validateRunRequest -> ValidatedRunRequest"; return s;
+      case "reserve":
+        if(requireStage(s,["validated"],"Reservation")) return s;
+        s.stage="attempt_reserved"; s.attempt.id="attempt-001"; s.attempt.retry="unsafe";
+        event(s,"attempt_reserved","Attempt, request digest, count, and ceiling durably reserved","attempt-001 · "+s.attempt.estimate);
+        s.lastChange="Evidence now exists before the one submission."; s.lastInterface="RunRecord.record(ReserveAttempt) -> RunRecordView"; return s;
+      case "submit":
+        if(requireStage(s,["attempt_reserved"],"Submission")) return s;
+        s.stage="submission_may_have_started"; s.attempt.spend="possibly_spent"; s.attempt.retry="requires_reconciliation";
+        event(s,"submission_may_have_started","No-retry marker persisted before fake adapter call","attempt-001");
+        s.lastChange="From this point, silence is treated as possibly spent."; s.lastInterface="Conductor.advance -> Generation.generate (exactly once)"; return s;
+      case "provider_success":
+        if(requireStage(s,["submission_may_have_started"],"Provider completion")) return s;
+        s.stage="response_received"; s.attempt.spend="confirmed_spent"; s.attempt.retry="unsafe"; s.attempt.providerId=s.mode==="qwen"?"or-fake-image-001":"or-fake-video-job-001"; s.attempt.completed=1; s.attempt.actual=s.attempt.estimate; s.files["provider-response.json"]=true;
+        event(s,"response_received","Sanitized fake provider response captured",s.attempt.providerId);
+        s.lastChange="Provider success is evidence, not Run success."; s.lastInterface="Generation.generate -> GenerationResult"; return s;
+      case "persist":
+        if(requireStage(s,["response_received"],"Output persistence")) return s;
+        s.stage="outputs_persisted"; s.files["outputs/"]=true; s.checks.media=true;
+        event(s,"outputs_persisted","One output persisted with media metadata and hash",H.output.slice(0,12)+"…");
+        s.lastChange=s.assembly.required?"The generated image is a donor. Assembly is still required.":"The video is evidence-ready for checks."; s.lastInterface="RunRecord.record(PersistOutput) -> RunRecordView"; return s;
+      case "verify":
+        if(requireStage(s,["outputs_persisted","assembly_completed"],"Verification")) return s;
+        if(s.assembly.required && !s.assembly.completed) return reject(s,"AssemblyPlanInvalid","Verification refused the raw generation because authoritative pixels require Assembly.","Verification.verify");
+        s.stage="verified_candidate"; s.outcome="verified_candidate"; s.checks.media=true; s.checks.fidelity=s.assembly.required?true:"not required"; s.checks.semantic=true; s.files["checks.json"]=true; s.files["provenance.json"]=true; s.files["outcome.json"]=true;
+        event(s,"verified_candidate","All declared fake checks passed","checks.json + provenance.json");
+        s.lastChange="The tool may call this a Verified Candidate. It still cannot call it Approved."; s.lastInterface="Verification.verify -> VerificationReport; Conductor.advance -> verified_candidate"; return s;
+      case "select_donor":
+        if(s.mode!=="qwen") return reject(s,"AssemblyPlanInvalid","The Seedance walkthrough has no donor selection.","Assembly.assemble");
+        if(requireStage(s,["outputs_persisted"],"Donor selection")) return s;
+        s.stage="human_decision_required"; s.assembly.donorSelected=true; s.assembly.donorHash=H.donor;
+        event(s,"human_decision_required","Human selected the hash-locked donor",H.donor.slice(0,12)+"…");
+        s.lastChange="A genuine subjective choice is recorded; the unchanged Run can resume."; s.lastInterface="Conductor.advance -> human_decision_required"; return s;
+      case "assemble":
+        if(requireStage(s,["human_decision_required"],"Assembly")) return s;
+        if(!s.assembly.donorSelected) return reject(s,"AssemblyDonorMismatch","Assembly requires a recorded donor choice.","Assembly.assemble");
+        s.stage="assembly_completed"; s.assembly.completed=true; s.assembly.outputHash=H.assembled;
+        event(s,"assembly_completed","Deterministic region Assembly completed","baseline 111… + donor 222… -> 555…");
+        s.lastChange="Only the assembled candidate may proceed; raw generation remains a donor."; s.lastInterface="Assembly.assemble -> AssemblyResult"; return s;
+      case "timeout":
+        if(requireStage(s,["submission_may_have_started"],"Ambiguous timeout")) return s;
+        s.stage="blocked"; s.outcome="blocked"; s.lastError="AmbiguousProviderOutcome"; s.attempt.spend="possibly_spent"; s.attempt.retry="requires_reconciliation"; s.files["failure.json"]=true; s.files["outcome.json"]=true;
+        event(s,"blocked","Fake transport ended without definitive provider state","AmbiguousProviderOutcome");
+        s.lastChange="The Run is quarantined. A new session has no permission to submit again."; s.lastInterface="Generation.generate -> AmbiguousProviderOutcome; Conductor.advance -> blocked"; return s;
+      case "retry":
+        if(s.attempt.retry!=="safe_as_linked_run") return reject(s,"AmbiguousProviderOutcome","Retry refused. Reconcile the existing attempt; do not create another paid request.","Conductor.advance");
+        return reject(s,"LinkedRunRequired","A conclusively safe retry still starts a linked Run.","Conductor.plan");
+      case "tamper":
+        if(s.events.length===0) return reject(s,"RunNotFound","There is no event history to tamper with.","RunRecord.load");
+        s.eventChain=false; s.trustworthy=false; s.lastError="BrokenEventChain"; s.lastChange="A prior event digest was changed. The Record is no longer trustworthy."; s.lastInterface="RunRecord.load -> BrokenEventChain"; return s;
+      default: return reject(s,"InvalidConductorCommand","Unknown prototype action.");
+    }
+  }
+  return {blank,reduce};
+})();
+
+const scenarios = [
+  {id:"qwen", title:"Qwen edit — raw output cannot bypass Assembly", copy:"A baseline owns every pixel outside one edit region. Watch the fake provider succeed, then try to verify too early. The Run must refuse until a human selects the donor and deterministic Assembly finishes.", mode:"qwen", steps:[
+    ["plan","Plan the Run"],["validate","Validate request and payload"],["reserve","Reserve one attempt"],["submit","Mark submission may have started"],["provider_success","Capture fake response"],["persist","Persist donor output"],["verify","Try to verify raw generation (must refuse)"],["select_donor","Record donor decision"],["assemble","Perform deterministic Assembly"],["verify","Verify assembled candidate"]]},
+  {id:"seedance", title:"Seedance — a Markdown reference is not a payload reference", copy:"The request says motion authority is required, but the video begins missing. Validation must refuse. Locate it, prove its exact hash in the fake payload, then resume the same planned Run through a no-cost fake job.", mode:"seedance", steps:[
+    ["plan","Plan the Run"],["validate","Try validation with missing video"],["attach_video","Locate and hash authoritative video"],["validate","Try validation before payload inclusion"],["prove_payload","Prove exact video in payload"],["validate","Validate successfully"],["reserve","Reserve one attempt"],["submit","Mark submission may have started"],["provider_success","Capture fake job response"],["persist","Persist fake video"],["verify","Verify candidate"]]},
+  {id:"ambiguous", title:"Ambiguous submission — a fresh agent cannot retry", copy:"The no-retry marker exists before the fake adapter. A timeout after that marker is possibly spent. Press retry and confirm the interface returns a named refusal instead of another submission.", mode:"qwen", steps:[
+    ["plan","Plan"],["validate","Validate"],["reserve","Reserve"],["submit","Start one fake submission"],["timeout","Lose definitive provider state"],["retry","Attempt unsafe retry (must refuse)"]]},
+  {id:"tamper", title:"Tampered history — derived summaries cannot override events", copy:"Complete enough of a Run to create evidence, then alter the in-memory event chain. Every later transition must fail at the Run Record seam, even if the provider evidence still looks plausible.", mode:"seedance", steps:[
+    ["plan","Plan"],["attach_video","Attach video"],["prove_payload","Prove payload inclusion"],["validate","Validate"],["reserve","Reserve"],["tamper","Change prior history"],["submit","Attempt to continue (must refuse)"]]}
+];
+
+const actionLabels = {plan:"Plan",attach_video:"Attach video",prove_payload:"Prove payload",validate:"Validate",reserve:"Reserve attempt",submit:"Submit once",provider_success:"Fake provider succeeds",persist:"Persist output",select_donor:"Select donor",assemble:"Assemble",verify:"Verify",timeout:"Ambiguous timeout",retry:"Retry",tamper:"Tamper history"};
+let currentScenario=scenarios[0], stepIndex=0, state=RunMachine.blank(currentScenario.mode);
+
+function badge(value, kind="") { return `<span class="badge ${kind}">${value}</span>`; }
+function bool(v) { return v===true?badge("yes","good"):v===false?badge("no","bad"):badge(v,"warn"); }
+function rows(items) { return items.map(([k,v])=>`<dt>${k}</dt><dd>${v}</dd>`).join(""); }
+function render() {
+  document.querySelector("#tabs").innerHTML=scenarios.map(s=>`<button class="${s.id===currentScenario.id?"active":""}" data-scenario="${s.id}">${s.title.split(" — ")[0]}</button>`).join("");
+  document.querySelector("#scenarioTitle").textContent=currentScenario.title;
+  document.querySelector("#scenarioCopy").textContent=currentScenario.copy;
+  document.querySelector("#steps").innerHTML=currentScenario.steps.map((x,i)=>`<button class="${i<stepIndex?"done":i===stepIndex?"primary":""}" data-step="${i}" ${i>stepIndex?"disabled":""}>${i+1}. ${x[1]}</button>`).join("");
+  document.querySelector("#actions").innerHTML=Object.entries(actionLabels).map(([a,l])=>`<button data-action="${a}">${l}</button>`).join("")+`<button data-action="reset">Reset</button>`;
+  document.querySelector("#runState").innerHTML=rows([["Run ID",state.runId],["Mode",state.mode],["Stage",badge(state.stage,state.stage==="verified_candidate"?"good":state.stage==="blocked"?"bad":"")],["Outcome",state.outcome],["Trustworthy",bool(state.trustworthy)],["Named error",state.lastError==="none"?"none":badge(state.lastError,"bad")]]);
+  document.querySelector("#referenceState").innerHTML=rows([["Role",state.reference.role],["Kind",state.reference.kind],["Path",state.reference.path],["Authority",state.reference.authority],["Exists",bool(state.reference.exists)],["Hash matches",bool(state.reference.hashMatches)],["Exact payload inclusion",bool(state.reference.payloadIncluded)],["SHA-256",state.reference.sha256.slice(0,16)+"…"]]);
+  document.querySelector("#attemptState").innerHTML=rows([["Attempt",state.attempt.id],["Provider",state.attempt.provider],["Model",state.attempt.model],["Requested / completed",`${state.attempt.requested} / ${state.attempt.completed}`],["Spend",badge(state.attempt.spend,state.attempt.spend==="possibly_spent"?"warn":"")],["Retry",state.attempt.retry],["Provider ID",state.attempt.providerId],["Estimate / actual",`${state.attempt.estimate} / ${state.attempt.actual}`]]);
+  document.querySelector("#changeState").innerHTML=`<strong>${state.lastChange}</strong><p class="muted" style="margin:6px 0 0">The full state and append-only events below update after every action.</p>`;
+  document.querySelector("#interfaceState").textContent=state.lastInterface;
+  document.querySelector("#recordState").textContent=Object.entries(state.files).map(([k,v],i,a)=>`${i===a.length-1?"└──":"├──"} ${k}${v?"  ✓":""}`).join("\n");
+  document.querySelector("#checkState").innerHTML=rows([["Assembly required",bool(state.assembly.required)],["Donor selected",bool(state.assembly.donorSelected)],["Assembly complete",bool(state.assembly.completed)],["Assembly output",state.assembly.outputHash==="none"?"none":state.assembly.outputHash.slice(0,16)+"…"],["Payload integrity",bool(state.checks.payload)],["Media validity",bool(state.checks.media)],["Fidelity",bool(state.checks.fidelity)],["Semantic check",bool(state.checks.semantic)]]);
+  document.querySelector("#eventState").innerHTML=state.events.length?state.events.map(e=>`<tr><td>${e.n}</td><td>${e.stage}</td><td>${e.fact}</td><td>${e.evidence}</td></tr>`).join(""):`<tr><td colspan="4" class="muted">No events yet.</td></tr>`;
+  bind();
+}
+function dispatch(type) { state=RunMachine.reduce(state,{type,mode:currentScenario.mode}); render(); }
+function selectScenario(id) { currentScenario=scenarios.find(s=>s.id===id); stepIndex=0; state=RunMachine.blank(currentScenario.mode); render(); }
+function bind() {
+  document.querySelectorAll("[data-scenario]").forEach(b=>b.onclick=()=>selectScenario(b.dataset.scenario));
+  document.querySelectorAll("[data-action]").forEach(b=>b.onclick=()=>{ if(b.dataset.action==="reset") selectScenario(currentScenario.id); else dispatch(b.dataset.action); });
+  document.querySelectorAll("[data-step]").forEach(b=>b.onclick=()=>{ const i=Number(b.dataset.step); if(i!==stepIndex) return; dispatch(currentScenario.steps[i][0]); stepIndex++; render(); });
+}
+render();
+</script>
+</body>
+</html>
