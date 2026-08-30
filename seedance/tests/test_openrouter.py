@@ -135,3 +135,67 @@ def test_submit_caps_non_json_body_and_never_records_authorization():
         "x-request-id": "req-502",
     }
     assert secret not in json.dumps(record)
+
+
+def test_submit_redacts_reflected_credentials_from_json_error_records():
+    secrets = {
+        "authorization": "reflected-secret",
+        "api_key": "api-key-secret",
+        "token": "token-secret",
+        "cookie": "cookie-secret",
+        "bare_bearer": "bare-secret",
+        "openrouter_key": "sk-or-v1-reflected-secret",
+        "query": "query-secret",
+        "url_password": "url-password-secret",
+    }
+
+    def handler(request: httpx.Request):
+        return httpx.Response(
+            400,
+            json={
+                "authorization": f"Bearer {secrets['authorization']}",
+                "api_key": secrets["api_key"],
+                "nested": {
+                    "token": secrets["token"],
+                    "cookie": f"session={secrets['cookie']}",
+                },
+                "message": (
+                    f"upstream forwarded Bearer {secrets['bare_bearer']} to "
+                    f"https://user:{secrets['url_password']}@example.invalid/callback"
+                    f"?api_key={secrets['query']} with {secrets['openrouter_key']}"
+                ),
+            },
+        )
+
+    http = httpx.Client(
+        base_url="https://openrouter.ai/api/v1",
+        headers={"Authorization": "Bearer request-secret"},
+        transport=httpx.MockTransport(handler),
+    )
+    client = OpenRouterVideoClient("request-secret", http)
+
+    with pytest.raises(OpenRouterError) as caught:
+        client.submit({"model": "bytedance/seedance-2.0-mini"})
+
+    serialized = json.dumps(caught.value.to_record())
+    for secret in (*secrets.values(), "request-secret"):
+        assert secret not in serialized
+
+
+def test_submit_caps_persisted_body_after_invalid_utf8_expansion():
+    def handler(request: httpx.Request):
+        return httpx.Response(502, content=b"\xff" * 70_000)
+
+    http = httpx.Client(
+        base_url="https://openrouter.ai/api/v1",
+        transport=httpx.MockTransport(handler),
+    )
+    client = OpenRouterVideoClient("test-key", http)
+
+    with pytest.raises(OpenRouterError) as caught:
+        client.submit({"model": "bytedance/seedance-2.0-mini"})
+
+    record = caught.value.to_record()
+    assert record["response_body_truncated"] is True
+    assert len(record["response_body"].encode("utf-8")) <= 65_536
+    assert record["response_body"].endswith("<TRUNCATED>")

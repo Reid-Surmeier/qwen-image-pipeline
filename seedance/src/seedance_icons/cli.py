@@ -156,17 +156,17 @@ def cmd_submit(args: argparse.Namespace) -> None:
             "Live canonical model changed since planning; create and approve a new plan"
         )
     validate_request(request, profile)
-    plan.update(
-        {
-            "paid_submission_performed": True,
-            "submission_status": "submitting",
-            "billing_status": "possibly_spent",
-            "safe_to_retry": False,
-        }
-    )
-    write_json(run / "plan.json", plan)
     client = OpenRouterVideoClient()
     try:
+        plan.update(
+            {
+                "paid_submission_performed": True,
+                "submission_status": "submitting",
+                "billing_status": "possibly_spent",
+                "safe_to_retry": False,
+            }
+        )
+        write_json(run / "plan.json", plan)
         job = client.submit(request)
     except OpenRouterHTTPError as error:
         plan["submission_status"] = "failed"

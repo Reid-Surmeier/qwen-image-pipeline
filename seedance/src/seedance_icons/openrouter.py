@@ -23,9 +23,39 @@ SAFE_ERROR_RESPONSE_HEADERS = frozenset(
         "x-request-id",
     }
 )
-AUTHORIZATION_VALUE = re.compile(
-    r"(?i)(authorization\s*[:=]\s*bearer\s+)([^\s\"'\\]+)"
+SENSITIVE_FIELD_NAMES = frozenset(
+    {
+        "access_token",
+        "accesstoken",
+        "api_key",
+        "apikey",
+        "authorization",
+        "client_secret",
+        "clientsecret",
+        "cookie",
+        "password",
+        "refresh_token",
+        "refreshtoken",
+        "secret",
+        "set_cookie",
+        "setcookie",
+        "token",
+    }
 )
+AUTHORIZATION_VALUE = re.compile(
+    r"(?i)(\bauthorization[\"']?\s*[:=]\s*[\"']?)(?:bearer|basic)\s+[^\s\"'\\,;}\]]+"
+)
+BEARER_VALUE = re.compile(
+    r"(?i)(\bbearer\s+)([^\s\"'\\,;}\]]+)"
+)
+OPENROUTER_KEY_VALUE = re.compile(r"\bsk-or-v1-[A-Za-z0-9._~-]+")
+URL_PASSWORD_VALUE = re.compile(r"(?i)(https?://[^:/\s]+:)([^@\s/]+)(@)")
+SENSITIVE_ASSIGNMENT_VALUE = re.compile(
+    r"(?i)(\b(?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|"
+    r"client[_-]?secret|secret|cookie|set-cookie)\b[\"']?\s*[:=]\s*[\"']?)"
+    r"([^\s\"'\\,;}\]]+)"
+)
+TRUNCATION_MARKER = "\n<TRUNCATED>"
 
 
 class OpenRouterError(RuntimeError):
@@ -33,18 +63,55 @@ class OpenRouterError(RuntimeError):
 
 
 def _redact_sensitive_text(value: str) -> str:
-    return AUTHORIZATION_VALUE.sub(r"\1<REDACTED>", value)
+    value = AUTHORIZATION_VALUE.sub(r"\1<REDACTED>", value)
+    value = BEARER_VALUE.sub(r"\1<REDACTED>", value)
+    value = OPENROUTER_KEY_VALUE.sub("<REDACTED>", value)
+    value = URL_PASSWORD_VALUE.sub(r"\1<REDACTED>\3", value)
+    return SENSITIVE_ASSIGNMENT_VALUE.sub(r"\1<REDACTED>", value)
+
+
+def _redact_sensitive_json(value: Any) -> Any:
+    if isinstance(value, dict):
+        cleaned: dict[str, Any] = {}
+        for key, item in value.items():
+            normalized_key = key.lower().replace("-", "_")
+            cleaned[key] = (
+                "<REDACTED>"
+                if normalized_key in SENSITIVE_FIELD_NAMES
+                else _redact_sensitive_json(item)
+            )
+        return cleaned
+    if isinstance(value, list):
+        return [_redact_sensitive_json(item) for item in value]
+    if isinstance(value, str):
+        return _redact_sensitive_text(value)
+    return value
+
+
+def _cap_utf8(value: str) -> tuple[str, bool]:
+    encoded = value.encode("utf-8")
+    if len(encoded) <= MAX_ERROR_BODY_BYTES:
+        return value, False
+    marker = TRUNCATION_MARKER.encode("utf-8")
+    prefix = encoded[: MAX_ERROR_BODY_BYTES - len(marker)].decode("utf-8", errors="ignore")
+    return prefix + TRUNCATION_MARKER, True
 
 
 class OpenRouterHTTPError(OpenRouterError):
     def __init__(self, operation: str, endpoint: str, response: httpx.Response):
-        body_bytes = response.content[:MAX_ERROR_BODY_BYTES]
-        body = _redact_sensitive_text(
-            body_bytes.decode(response.encoding or "utf-8", errors="replace")
-        )
+        decoded_body = response.content.decode(response.encoding or "utf-8", errors="replace")
         try:
-            provider_error = json.loads(body)
+            parsed_error = json.loads(decoded_body)
         except json.JSONDecodeError:
+            sanitized_body = _redact_sensitive_text(decoded_body)
+            provider_error = None
+        else:
+            provider_error = _redact_sensitive_json(parsed_error)
+            sanitized_body = json.dumps(
+                provider_error, ensure_ascii=False, separators=(",", ":")
+            )
+        body, body_was_truncated = _cap_utf8(sanitized_body)
+        if body_was_truncated:
             provider_error = None
         response_headers = {
             key.lower(): value
@@ -60,7 +127,7 @@ class OpenRouterHTTPError(OpenRouterError):
             "response_body": body,
             "provider_error": provider_error,
             "response_headers": dict(sorted(response_headers.items())),
-            "response_body_truncated": len(response.content) > MAX_ERROR_BODY_BYTES,
+            "response_body_truncated": body_was_truncated,
             "safe_to_retry": False,
             "billing_status": "possibly_spent" if operation == "submit" else "not_applicable",
         }

@@ -26,11 +26,14 @@ refuses either a payload changed since planning or a changed canonical model ver
 The exact decimal estimate must be provided to `--acknowledge-cost`. This gate documents
 approval; it does not promise the provider invoice will equal the estimate.
 
-`submit` marks the paid action as performed before sending the POST. A rejected POST is
-therefore never represented as an unpaid plan. HTTP failures retain the operation,
+`submit` constructs the credentialed client first, then marks the paid action as performed
+immediately before sending the POST. A missing local credential therefore is not recorded as
+a provider attempt, while a rejected POST is never represented as an unpaid plan. HTTP failures retain the operation,
 status, endpoint, parsed provider error when the body is JSON, a size-capped sanitized
-response body, and only allowlisted response identifiers. The cap is 64 KiB. Request
-headers and authorization values are never written. A failed submission is classified
+response body, and only allowlisted response identifiers. The cap is 64 KiB after UTF-8
+encoding, redaction, and any invalid-byte replacement. Sensitive JSON fields and recognized
+authorization, bearer, token, key, cookie, password, secret, and credential-URL forms are
+redacted. Request headers are never written. A failed submission is classified
 `billing_status: possibly_spent` and `safe_to_retry: false`; it is not retried by the
 client.
 

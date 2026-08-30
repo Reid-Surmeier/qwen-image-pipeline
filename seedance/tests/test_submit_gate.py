@@ -9,7 +9,7 @@ import httpx
 import pytest
 
 from seedance_icons.cli import cmd_submit
-from seedance_icons.openrouter import OpenRouterHTTPError, request_digest
+from seedance_icons.openrouter import OpenRouterError, OpenRouterHTTPError, request_digest
 from seedance_icons.strategy import gate_record
 
 
@@ -100,3 +100,42 @@ def test_submit_records_an_http_failure_as_a_possibly_spent_attempt(
     assert json.loads((tmp_path / "provider-error.json").read_text()) == failure.to_record()
     assert not (tmp_path / "job.json").exists()
     assert client.closed is True
+
+
+def test_submit_does_not_mark_an_attempt_when_the_client_cannot_initialize(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    request = {
+        "model": "bytedance/seedance-2.0-mini",
+        "prompt": "planned prompt",
+        "duration": 4,
+        "size": "480x480",
+    }
+    plan = {
+        "request_sha256": request_digest(request),
+        "estimated_cost_usd": "0.0454",
+        "canonical_slug": "bytedance/seedance-2.0-mini-20260811",
+        "paid_submission_performed": False,
+        "strategy_gate": gate_record([], None),
+    }
+    (tmp_path / "plan.json").write_text(json.dumps(plan))
+    (tmp_path / "request.payload.json").write_text(json.dumps(request))
+
+    def missing_credential() -> None:
+        raise OpenRouterError("OPENROUTER_API_KEY is required")
+
+    monkeypatch.setattr("seedance_icons.cli.OpenRouterVideoClient", missing_credential)
+    monkeypatch.setattr(
+        "seedance_icons.cli.fetch_profiles",
+        lambda: {
+            request["model"]: SimpleNamespace(canonical_slug=plan["canonical_slug"])
+        },
+    )
+    monkeypatch.setattr("seedance_icons.cli.validate_request", lambda *_args: None)
+
+    with pytest.raises(OpenRouterError, match="OPENROUTER_API_KEY is required"):
+        cmd_submit(Namespace(run=str(tmp_path), acknowledge_cost="0.0454"))
+
+    recorded_plan = json.loads((tmp_path / "plan.json").read_text())
+    assert recorded_plan["paid_submission_performed"] is False
+    assert "submission_status" not in recorded_plan
