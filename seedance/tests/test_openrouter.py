@@ -143,6 +143,8 @@ def test_submit_redacts_reflected_credentials_from_json_error_records():
         "api_key": "api-key-secret",
         "token": "token-secret",
         "cookie": "cookie-secret",
+        "credential": "credential-secret",
+        "credentials": "credentials-secret",
         "bare_bearer": "bare-secret",
         "openrouter_key": "sk-or-v1-reflected-secret",
         "query": "query-secret",
@@ -158,11 +160,13 @@ def test_submit_redacts_reflected_credentials_from_json_error_records():
                 "nested": {
                     "token": secrets["token"],
                     "cookie": f"session={secrets['cookie']}",
+                    "credential": secrets["credential"],
+                    "credentials": secrets["credentials"],
                 },
                 "message": (
                     f"upstream forwarded Bearer {secrets['bare_bearer']} to "
                     f"https://user:{secrets['url_password']}@example.invalid/callback"
-                    f"?api_key={secrets['query']} with {secrets['openrouter_key']}"
+                    f"?credential={secrets['query']} with {secrets['openrouter_key']}"
                 ),
             },
         )

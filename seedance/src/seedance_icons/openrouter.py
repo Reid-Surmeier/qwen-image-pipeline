@@ -33,6 +33,8 @@ SENSITIVE_FIELD_NAMES = frozenset(
         "client_secret",
         "clientsecret",
         "cookie",
+        "credential",
+        "credentials",
         "password",
         "refresh_token",
         "refreshtoken",
@@ -52,7 +54,7 @@ OPENROUTER_KEY_VALUE = re.compile(r"\bsk-or-v1-[A-Za-z0-9._~-]+")
 URL_PASSWORD_VALUE = re.compile(r"(?i)(https?://[^:/\s]+:)([^@\s/]+)(@)")
 SENSITIVE_ASSIGNMENT_VALUE = re.compile(
     r"(?i)(\b(?:authorization|api[_-]?key|access[_-]?token|refresh[_-]?token|token|password|"
-    r"client[_-]?secret|secret|cookie|set-cookie)\b[\"']?\s*[:=]\s*[\"']?)"
+    r"client[_-]?secret|secret|cookie|set-cookie|credentials?)\b[\"']?\s*[:=]\s*[\"']?)"
     r"([^\s\"'\\,;}\]]+)"
 )
 TRUNCATION_MARKER = "\n<TRUNCATED>"
