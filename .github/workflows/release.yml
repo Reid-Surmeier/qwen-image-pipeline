@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: read
+  issues: read
 
 concurrency:
   group: release
@@ -23,7 +24,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
+      checks: read
       contents: write
+      issues: read
       pull-requests: write
     steps:
       - name: Check out the immutable tag
@@ -49,7 +52,18 @@ jobs:
           test -n "$pr" && test "$pr" != "null" || { echo "no open build PR for $head" >&2; exit 1; }
           test "$(jq -r .headRefOid <<<"$pr")" = "$tag_sha" || { echo "build PR does not name the tag commit" >&2; exit 1; }
           number="$(jq -r .number <<<"$pr")"
-          gh pr checks "$number" --required --watch --fail-fast
+          release_train=""
+          for attempt in $(seq 1 60); do
+            release_train="$(gh api "repos/$GH_REPO/commits/$tag_sha/check-runs?per_page=100" --jq '[.check_runs[] | select(.name == "release-train" and .app.slug == "github-actions")] | sort_by(.started_at) | last // {} | [.status // "", .conclusion // ""] | @tsv')"
+            status="${release_train%%$'\t'*}"
+            conclusion="${release_train#*$'\t'}"
+            if test "$status" = "completed"; then
+              test "$conclusion" = "success" || { echo "release-train concluded $conclusion" >&2; exit 1; }
+              break
+            fi
+            sleep 5
+          done
+          test "$release_train" = $'completed\tsuccess' || { echo "release-train did not report success within 5 minutes" >&2; exit 1; }
           if test "$(jq -r .isDraft <<<"$pr")" = "true"; then gh pr ready "$number"; fi
           gh pr merge "$number" --merge --match-head-commit "$tag_sha"
       - name: Publish the plain-language release page

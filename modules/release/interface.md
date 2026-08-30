@@ -6,20 +6,24 @@ Status: frozen by Issue #19.
 
 - `evaluate_release(evidence)` returns an allowed `v<version>` tag or a
   classified refusal. Evidence names the build branch, local and pushed tip,
-  release page, review verdict, reviewed SHA, and tree state. The reviewed SHA
-  must equal the candidate exactly; no successor commit is exempt.
+  release page, strict two-axis review receipt, authenticated GitHub evidence,
+  reviewed SHA, and tree state. Standards and Specification use distinct
+  reviewers and hash-locked owner Issue comments. The reviewed SHA must equal
+  the candidate exactly; no successor commit is exempt.
 - `cut_release(evidence, git, gates, dry_run)` evaluates first, runs the
   deterministic gates, and may create and push only the allowed annotated tag.
-  The tag annotation embeds the exact-SHA Standards and Spec ship receipt, so
+  The tag annotation embeds the canonical exact-SHA Standards and Spec ship receipt, so
   the receipt can name the candidate without changing that commit. It never
-  pushes a branch and never updates `main`.
+  pushes a branch and never updates `main`. An existing local or remote tag is
+  accepted only when its complete annotated tag object carries that same receipt.
 - `plan_cleanup(state)` returns a deterministic, read-only steward plan. The
   open `build/*` line, `capture/*`, `prototype/*`, `evidence/*`, `review/*`, and
   every dirty worktree are always kept.
 - `.github/workflows/release-train.yml` emits the required status only for an
   annotated `v<version>` tag with current exact-SHA ship evidence and exactly
   one matching open build PR. `.github/workflows/release.yml` revalidates tag
-  evidence, runs Verify, waits for that required status, and merges only the
+  evidence, runs Verify, polls the exact tag commit until that required GitHub
+  Actions check exists and succeeds, and merges only the
   head SHA it already matched through GitHub's protected-branch path.
 
 ## Results

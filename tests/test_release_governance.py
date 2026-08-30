@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import tempfile
 import unittest
 from unittest.mock import patch
 from pathlib import Path
 
 from scripts.release_steward import (
+    authenticate_review_receipt,
     CleanupState,
     ReleaseEvidence,
     WorktreeState,
@@ -23,6 +25,49 @@ SHA_A = "a" * 40
 SHA_B = "b" * 40
 
 
+def review_comment(axis: str, reviewer: str, verdict: str = "ship", reviewed: str = SHA_A) -> str:
+    return (
+        f"review-axis: {axis}\n"
+        f"reviewer-id: {reviewer}\n"
+        f"reviewed: {reviewed}\n"
+        f"verdict: {verdict}\n"
+    )
+
+
+def review_receipt(
+    *,
+    verdict: str = "ship",
+    reviewed: str = SHA_A,
+    standards_body: str | None = None,
+    specification_body: str | None = None,
+) -> str:
+    standards = standards_body or review_comment("Standards", "agent:standards")
+    specification = specification_body or review_comment("Specification", "agent:specification")
+    return json.dumps(
+        {
+            "schema": "qwen-image-pipeline/release-review/v1",
+            "reviewed": reviewed,
+            "verdict": verdict,
+            "reviews": [
+                {
+                    "axis": "Standards",
+                    "reviewer": "agent:standards",
+                    "source": "https://github.com/Reid-Surmeier/qwen-image-pipeline/issues/19#issuecomment-1001",
+                    "source_sha256": hashlib.sha256(standards.encode()).hexdigest(),
+                },
+                {
+                    "axis": "Specification",
+                    "reviewer": "agent:specification",
+                    "source": "https://github.com/Reid-Surmeier/qwen-image-pipeline/issues/19#issuecomment-1002",
+                    "source_sha256": hashlib.sha256(specification.encode()).hexdigest(),
+                },
+            ],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
 def evidence(**changes: object) -> ReleaseEvidence:
     values: dict[str, object] = {
         "version": "0.3.0",
@@ -30,7 +75,8 @@ def evidence(**changes: object) -> ReleaseEvidence:
         "target_sha": SHA_A,
         "remote_tip_sha": SHA_A,
         "release_page": "# v0.3.0\n\nA dependable procedure.\n",
-        "review_text": f"reviewed: {SHA_A}\nverdict: ship\n",
+        "review_text": review_receipt(),
+        "review_authenticated": True,
         "tree_clean": True,
     }
     values.update(changes)
@@ -38,6 +84,24 @@ def evidence(**changes: object) -> ReleaseEvidence:
 
 
 class ReleaseEvidenceTests(unittest.TestCase):
+    def test_both_review_axes_are_authenticated_from_hash_locked_owner_comments(self) -> None:
+        bodies = {
+            "1001": review_comment("Standards", "agent:standards"),
+            "1002": review_comment("Specification", "agent:specification"),
+        }
+
+        def fetch(source: str) -> dict[str, object]:
+            body = bodies[source.rsplit("-", 1)[1]]
+            return {
+                "author_association": "OWNER",
+                "user": {"login": "Reid-Surmeier"},
+                "body": body,
+            }
+
+        self.assertTrue(authenticate_review_receipt(review_receipt(), fetch))
+        bodies["1002"] += "edited after receipt\n"
+        self.assertFalse(authenticate_review_receipt(review_receipt(), fetch))
+
     def test_missing_review_is_a_classified_refusal(self) -> None:
         decision = evaluate_release(evidence(review_text=None))
         self.assertFalse(decision.allowed)
@@ -45,14 +109,14 @@ class ReleaseEvidenceTests(unittest.TestCase):
 
     def test_hold_verdict_is_a_classified_refusal(self) -> None:
         decision = evaluate_release(
-            evidence(review_text=f"reviewed: {SHA_A}\nverdict: hold\n")
+            evidence(review_text=review_receipt(verdict="hold"))
         )
         self.assertFalse(decision.allowed)
         self.assertEqual(decision.code, "HOLD_VERDICT")
 
     def test_stale_review_is_a_classified_refusal(self) -> None:
         decision = evaluate_release(
-            evidence(review_text=f"reviewed: {SHA_B}\nverdict: ship\n")
+            evidence(review_text=review_receipt(reviewed=SHA_B))
         )
         self.assertFalse(decision.allowed)
         self.assertEqual(decision.code, "STALE_REVIEW")
@@ -67,7 +131,7 @@ class ReleaseEvidenceTests(unittest.TestCase):
             evidence(
                 target_sha=SHA_B,
                 remote_tip_sha=SHA_B,
-                review_text=f"reviewed: {SHA_A}\nverdict: ship\n",
+                review_text=review_receipt(reviewed=SHA_A),
             )
         )
         self.assertFalse(decision.allowed)
@@ -90,6 +154,20 @@ class ReleaseEvidenceTests(unittest.TestCase):
         self.assertFalse(decision.allowed)
         self.assertEqual(decision.code, "UNANNOTATED_TAG")
 
+    def test_review_must_be_authenticated_from_both_github_sources(self) -> None:
+        decision = evaluate_release(evidence(review_authenticated=False))
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.code, "UNAUTHENTICATED_REVIEW")
+
+    def test_duplicate_or_contradictory_receipt_fields_are_refused(self) -> None:
+        duplicate = review_receipt().replace(
+            '"verdict":"ship"',
+            '"verdict":"ship","verdict":"hold"',
+        )
+        decision = evaluate_release(evidence(review_text=duplicate))
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.code, "INVALID_REVIEW")
+
 
 class FakeGit:
     def __init__(
@@ -99,11 +177,17 @@ class FakeGit:
         remote: str | None = None,
         local_kind: str | None = None,
         remote_annotated: bool | None = None,
+        local_message: str | None = None,
+        local_object: str | None = None,
+        remote_object: str | None = None,
     ) -> None:
         self.local = local
         self.remote = remote
         self.local_kind = local_kind
         self.remote_annotated = remote_annotated
+        self.local_message = local_message
+        self.local_object = local_object
+        self.remote_object = remote_object
         self.writes: list[tuple[str, ...]] = []
 
     def local_tag_target(self, _tag: str) -> str | None:
@@ -118,15 +202,27 @@ class FakeGit:
     def remote_tag_is_annotated(self, _tag: str) -> bool | None:
         return self.remote_annotated
 
+    def tag_message(self, _tag: str) -> str | None:
+        return self.local_message
+
+    def local_tag_object(self, _tag: str) -> str | None:
+        return self.local_object
+
+    def remote_tag_object(self, _tag: str) -> str | None:
+        return self.remote_object
+
     def create_tag(self, tag: str, target: str, message: str) -> None:
         self.writes.append(("tag", tag, target, message))
         self.local = target
         self.local_kind = "tag"
+        self.local_message = message
+        self.local_object = "c" * 40
 
     def push_tag(self, tag: str) -> None:
         self.writes.append(("push-tag", tag))
         self.remote = self.local
         self.remote_annotated = self.local_kind == "tag"
+        self.remote_object = self.local_object
 
 
 class ReleaseCutTests(unittest.TestCase):
@@ -142,7 +238,7 @@ class ReleaseCutTests(unittest.TestCase):
                 return "tag"
 
             def tag_message(self, _tag: str) -> str:
-                return f"A dependable procedure.\n\nreviewed: {SHA_A}\nverdict: ship\n"
+                return f"A dependable procedure.\n\nrelease-review-receipt: {review_receipt()}\n"
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -154,6 +250,7 @@ class ReleaseCutTests(unittest.TestCase):
                 TagGit(),  # type: ignore[arg-type]
                 "0.3.0",
                 tag_checkout=True,
+                review_authenticated=True,
             )
         decision = evaluate_release(candidate)
         self.assertTrue(decision.allowed)
@@ -180,8 +277,8 @@ class ReleaseCutTests(unittest.TestCase):
         self.assertEqual(gate_calls, ["verify"])
         self.assertEqual([write[0] for write in git.writes], ["tag", "push-tag"])
         self.assertEqual(git.writes[0][1:3], ("v0.3.0", SHA_A))
-        self.assertIn(f"reviewed: {SHA_A}", git.writes[0][3])
-        self.assertIn("verdict: ship", git.writes[0][3])
+        self.assertIn(f'"reviewed":"{SHA_A}"', git.writes[0][3])
+        self.assertIn('"verdict":"ship"', git.writes[0][3])
 
     def test_conflicting_tag_refuses_before_running_a_gate(self) -> None:
         git = FakeGit(remote=SHA_B)
@@ -213,6 +310,38 @@ class ReleaseCutTests(unittest.TestCase):
                 self.assertFalse(decision.allowed)
                 self.assertEqual(decision.code, "UNANNOTATED_TAG")
                 self.assertEqual(gate_calls, [])
+                self.assertEqual(git.writes, [])
+
+    def test_matching_local_tag_requires_the_exact_supplied_receipt(self) -> None:
+        git = FakeGit(
+            local=SHA_A,
+            local_kind="tag",
+            local_message="A dependable procedure.\n\nwrong receipt\n",
+            local_object="c" * 40,
+        )
+        decision = cut_release(evidence(), git, [], dry_run=False)  # type: ignore[arg-type]
+        self.assertFalse(decision.allowed)
+        self.assertEqual(decision.code, "TAG_RECEIPT_MISMATCH")
+        self.assertEqual(git.writes, [])
+
+    def test_remote_tag_requires_the_exact_local_tag_object(self) -> None:
+        expected_message = f"A dependable procedure.\n\nrelease-review-receipt: {review_receipt()}"
+        for git in (
+            FakeGit(remote=SHA_A, remote_annotated=True, remote_object="d" * 40),
+            FakeGit(
+                local=SHA_A,
+                remote=SHA_A,
+                local_kind="tag",
+                remote_annotated=True,
+                local_message=expected_message,
+                local_object="c" * 40,
+                remote_object="d" * 40,
+            ),
+        ):
+            with self.subTest(git=git):
+                decision = cut_release(evidence(), git, [], dry_run=False)  # type: ignore[arg-type]
+                self.assertFalse(decision.allowed)
+                self.assertEqual(decision.code, "TAG_RECEIPT_MISMATCH")
                 self.assertEqual(git.writes, [])
 
 
@@ -283,6 +412,9 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn('scripts/release_steward.py verify-tag "$GITHUB_REF_NAME"', train)
         self.assertNotIn("build/v[0-9]*", train)
         self.assertIn('--match-head-commit "$tag_sha"', release)
+        self.assertIn("commits/$tag_sha/check-runs", release)
+        self.assertIn('.name == "release-train"', release)
+        self.assertNotIn("gh pr checks", release)
 
     def test_main_ruleset_requires_release_train_and_only_owner_bypasses(self) -> None:
         request = json.loads(
@@ -298,7 +430,10 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("non_fast_forward", rules)
         self.assertIn("pull_request", rules)
         checks = rules["required_status_checks"]["parameters"]["required_status_checks"]
-        self.assertEqual(checks, [{"context": "release-train"}])
+        self.assertEqual(
+            checks,
+            [{"context": "release-train", "integration_id": 15368}],
+        )
 
 
 if __name__ == "__main__":

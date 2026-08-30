@@ -14,18 +14,24 @@ workflow is the only automation that moves the protected ``main`` branch.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import re
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Iterable
 
 
-SHA_RE = re.compile(r"(?im)^\s*reviewed:\s*([0-9a-f]{40})\s*$")
-VERDICT_RE = re.compile(r"(?im)^\s*verdict:\s*(\S+)\s*$")
 VERSION_RE = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)")
 KEEP_PREFIXES = ("capture/", "prototype/", "evidence/", "review/")
+RECEIPT_SCHEMA = "qwen-image-pipeline/release-review/v1"
+RECEIPT_PREFIX = "release-review-receipt: "
+REVIEW_SOURCE_RE = re.compile(
+    r"https://github\.com/Reid-Surmeier/qwen-image-pipeline/issues/[1-9][0-9]*#issuecomment-([1-9][0-9]*)"
+)
+REVIEW_MARKERS = ("review-axis", "reviewer-id", "reviewed", "verdict")
 
 
 @dataclass(frozen=True)
@@ -36,6 +42,7 @@ class ReleaseEvidence:
     remote_tip_sha: str
     release_page: str | None
     review_text: str | None
+    review_authenticated: bool
     tree_clean: bool
     tag_is_annotated: bool | None = None
 
@@ -69,6 +76,148 @@ def refused(code: str, message: str) -> ReleaseDecision:
     return ReleaseDecision(False, code, message)
 
 
+def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate receipt field: {key}")
+        result[key] = value
+    return result
+
+
+def parse_review_receipt(text: str) -> dict[str, object]:
+    """Parse one strict two-axis receipt, rejecting duplicate or extra claims."""
+
+    candidates = [
+        line.removeprefix(RECEIPT_PREFIX)
+        for line in text.splitlines()
+        if line.startswith(RECEIPT_PREFIX)
+    ]
+    payload = candidates[0] if len(candidates) == 1 else text.strip()
+    if len(candidates) > 1:
+        raise ValueError("the tag contains more than one review receipt")
+    value = json.loads(payload, object_pairs_hook=_unique_object)
+    if not isinstance(value, dict):
+        raise ValueError("the review receipt must be an object")
+    if set(value) != {"schema", "reviewed", "verdict", "reviews"}:
+        raise ValueError("the review receipt has missing or unknown fields")
+    if value["schema"] != RECEIPT_SCHEMA:
+        raise ValueError("the review receipt schema is unsupported")
+    reviewed = value["reviewed"]
+    if not isinstance(reviewed, str) or not re.fullmatch(r"[0-9a-f]{40}", reviewed):
+        raise ValueError("reviewed must be one full lowercase commit SHA")
+    if value["verdict"] not in {"ship", "hold"}:
+        raise ValueError("verdict must be ship or hold")
+    reviews = value["reviews"]
+    if not isinstance(reviews, list) or len(reviews) != 2:
+        raise ValueError("the receipt must contain exactly two review axes")
+    axes: set[str] = set()
+    reviewers: set[str] = set()
+    sources: set[str] = set()
+    for review in reviews:
+        if not isinstance(review, dict) or set(review) != {
+            "axis", "reviewer", "source", "source_sha256"
+        }:
+            raise ValueError("each review axis must use the frozen evidence fields")
+        axis = review["axis"]
+        reviewer = review["reviewer"]
+        source = review["source"]
+        digest = review["source_sha256"]
+        if axis not in {"Standards", "Specification"}:
+            raise ValueError("review axis must be Standards or Specification")
+        if not isinstance(reviewer, str) or not reviewer.strip():
+            raise ValueError("each review axis must name its reviewer")
+        if not isinstance(source, str) or not REVIEW_SOURCE_RE.fullmatch(source):
+            raise ValueError("review source must be a repository Issue comment URL")
+        if not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest):
+            raise ValueError("review source hash must be one lowercase SHA-256")
+        axes.add(axis)
+        reviewers.add(reviewer)
+        sources.add(source)
+    if axes != {"Standards", "Specification"} or len(reviewers) != 2 or len(sources) != 2:
+        raise ValueError("Standards and Specification require distinct reviewers and sources")
+    return value
+
+
+def canonical_review_receipt(text: str) -> str:
+    return json.dumps(parse_review_receipt(text), sort_keys=True, separators=(",", ":"))
+
+
+def _comment_markers(body: str) -> dict[str, str]:
+    found: dict[str, str] = {}
+    for line in body.splitlines():
+        if ":" not in line:
+            continue
+        key, value = (part.strip() for part in line.split(":", 1))
+        if key not in REVIEW_MARKERS:
+            continue
+        if key in found:
+            raise ValueError(f"duplicate review comment marker: {key}")
+        found[key] = value
+    if set(found) != set(REVIEW_MARKERS):
+        raise ValueError("review comment is missing a required marker")
+    return found
+
+
+def authenticate_review_receipt(
+    text: str,
+    fetch_comment: Callable[[str], dict[str, object]],
+) -> bool:
+    """Bind both receipt entries to owner-authenticated GitHub comments."""
+
+    try:
+        receipt = parse_review_receipt(text)
+        reviewed = str(receipt["reviewed"])
+        verdict = str(receipt["verdict"])
+        for review in receipt["reviews"]:  # type: ignore[union-attr]
+            assert isinstance(review, dict)
+            record = fetch_comment(str(review["source"]))
+            user = record.get("user")
+            body = record.get("body")
+            if (
+                not isinstance(user, dict)
+                or user.get("login") != "Reid-Surmeier"
+                or record.get("author_association") != "OWNER"
+                or not isinstance(body, str)
+            ):
+                return False
+            if hashlib.sha256(body.encode("utf-8")).hexdigest() != review["source_sha256"]:
+                return False
+            markers = _comment_markers(body)
+            if markers != {
+                "review-axis": review["axis"],
+                "reviewer-id": review["reviewer"],
+                "reviewed": reviewed,
+                "verdict": verdict,
+            }:
+                return False
+        return True
+    except (AssertionError, KeyError, RuntimeError, TypeError, ValueError, json.JSONDecodeError):
+        return False
+
+
+def fetch_github_comment(source: str) -> dict[str, object]:
+    match = REVIEW_SOURCE_RE.fullmatch(source)
+    if not match:
+        raise ValueError("invalid review source")
+    result = subprocess.run(
+        [
+            "gh",
+            "api",
+            f"repos/Reid-Surmeier/qwen-image-pipeline/issues/comments/{match.group(1)}",
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("GitHub review evidence could not be read")
+    value = json.loads(result.stdout)
+    if not isinstance(value, dict):
+        raise RuntimeError("GitHub returned invalid review evidence")
+    return value
+
+
 def evaluate_release(evidence: ReleaseEvidence) -> ReleaseDecision:
     """Classify the evidence without performing a git or network operation."""
 
@@ -87,21 +236,24 @@ def evaluate_release(evidence: ReleaseEvidence) -> ReleaseDecision:
         return refused("MISSING_RELEASE_PAGE", f"docs/releases/{tag}/RELEASE.md is missing")
     if not evidence.review_text:
         return refused("MISSING_REVIEW", f"the exact-SHA Standards and Spec receipt for {tag} is missing")
-    verdict_match = VERDICT_RE.search(evidence.review_text)
-    verdict = verdict_match.group(1).lower() if verdict_match else ""
+    try:
+        receipt = parse_review_receipt(evidence.review_text)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return refused("INVALID_REVIEW", f"the {tag} review receipt is malformed or contradictory")
+    verdict = str(receipt["verdict"])
     if verdict == "hold":
         return refused("HOLD_VERDICT", f"the {tag} review says hold")
-    if verdict != "ship":
-        return refused("INVALID_VERDICT", f"the {tag} review must say verdict: ship or verdict: hold")
-    reviewed_match = SHA_RE.search(evidence.review_text)
-    if not reviewed_match:
-        return refused("MISSING_REVIEW", f"the {tag} review does not name one full reviewed SHA")
+    if not evidence.review_authenticated:
+        return refused(
+            "UNAUTHENTICATED_REVIEW",
+            f"the {tag} Standards and Specification sources are not authenticated",
+        )
     if not evidence.tree_clean:
         return refused("DIRTY_TREE", "the release checkout contains uncommitted work")
     if evidence.target_sha != evidence.remote_tip_sha:
         return refused("UNPUSHED_TIP", "the local candidate is not the pushed build-line tip")
 
-    reviewed = reviewed_match.group(1)
+    reviewed = str(receipt["reviewed"])
     if reviewed != evidence.target_sha:
         return refused(
             "STALE_REVIEW",
@@ -210,6 +362,14 @@ class Git:
         result = self.run("for-each-ref", "--format=%(contents)", f"refs/tags/{tag}", check=False)
         return result or None
 
+    def local_tag_object(self, tag: str) -> str | None:
+        result = self.run("rev-parse", "--verify", f"refs/tags/{tag}", check=False)
+        return result or None
+
+    def remote_tag_object(self, tag: str) -> str | None:
+        row = self.run("ls-remote", "--tags", "origin", f"refs/tags/{tag}", check=False)
+        return row.split()[0] if row else None
+
     def remote_tag_target(self, tag: str) -> str | None:
         row = self.run("ls-remote", "--tags", "origin", f"refs/tags/{tag}^{{}}", check=False)
         if row:
@@ -254,6 +414,7 @@ def evidence_from_repo(
     *,
     tag_checkout: bool = False,
     review_text: str | None = None,
+    review_authenticated: bool = False,
 ) -> ReleaseEvidence:
     version = version.removeprefix("v")
     tag = f"v{version}"
@@ -269,6 +430,7 @@ def evidence_from_repo(
         remote_tip_sha=remote_tip,
         release_page=page,
         review_text=review,
+        review_authenticated=review_authenticated,
         tree_clean=git.clean(),
         tag_is_annotated=(git.local_tag_kind(tag) == "tag") if tag_checkout else None,
     )
@@ -284,7 +446,7 @@ def _lead(page: str) -> str:
 
 
 def _tag_message(page: str, review_text: str) -> str:
-    return f"{_lead(page)}\n\n{review_text.strip()}\n"
+    return f"{_lead(page)}\n\n{RECEIPT_PREFIX}{canonical_review_receipt(review_text)}"
 
 
 def cut_release(
@@ -307,6 +469,13 @@ def cut_release(
         return refused("UNANNOTATED_TAG", f"local {decision.tag} is lightweight")
     if remote_target and git.remote_tag_is_annotated(decision.tag) is not True:
         return refused("UNANNOTATED_TAG", f"remote {decision.tag} is lightweight")
+    expected_message = _tag_message(evidence.release_page, evidence.review_text or "")
+    if local_target and git.tag_message(decision.tag) != expected_message:
+        return refused("TAG_RECEIPT_MISMATCH", f"local {decision.tag} carries different review evidence")
+    if remote_target:
+        local_object = git.local_tag_object(decision.tag) if local_target else None
+        if not local_object or git.remote_tag_object(decision.tag) != local_object:
+            return refused("TAG_RECEIPT_MISMATCH", f"remote {decision.tag} is not the reviewed local tag object")
     for gate in gates:
         if not dry_run and gate() != 0:
             return refused("GATE_FAILED", "a deterministic release gate failed; no tag was created")
@@ -315,7 +484,7 @@ def cut_release(
         git.create_tag(
             decision.tag,
             decision.target_sha,
-            _tag_message(evidence.release_page, evidence.review_text),
+            expected_message,
         )
     if not dry_run and not remote_target:
         git.push_tag(decision.tag)
@@ -380,16 +549,25 @@ def main(argv: list[str] | None = None) -> int:
             print(f"{args.version} is not an exact semantic version")
             return 1
         if args.command == "verify-tag":
-            decision = evaluate_release(evidence_from_repo(repo, git, version, tag_checkout=True))
+            candidate = evidence_from_repo(repo, git, version, tag_checkout=True)
+            authenticated = bool(
+                candidate.review_text
+                and authenticate_review_receipt(candidate.review_text, fetch_github_comment)
+            )
+            candidate = replace(candidate, review_authenticated=authenticated)
+            decision = evaluate_release(candidate)
         else:
             if not args.review_file or not args.review_file.is_file():
                 print("cut requires --review-file with the exact-SHA Standards and Spec ship receipt")
                 return 1
+            review_text = args.review_file.read_text(encoding="utf-8")
+            authenticated = authenticate_review_receipt(review_text, fetch_github_comment)
             current = evidence_from_repo(
                 repo,
                 git,
                 version,
-                review_text=args.review_file.read_text(encoding="utf-8"),
+                review_text=review_text,
+                review_authenticated=authenticated,
             )
             decision = cut_release(current, git, [lambda: run_gate(repo)], dry_run=args.dry_run)
         print(decision.message)
