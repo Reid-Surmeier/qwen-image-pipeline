@@ -41,6 +41,11 @@ REQUIRED_TEXT = {
         "Changelog",
         "What the owner decides",
     ),
+    "MODULES.md": (
+        "Generated from modules/*/MODULE.md",
+        "| Review |",
+        "| Testing |",
+    ),
 }
 
 FORBIDDEN_TEXT = {
@@ -58,7 +63,6 @@ FORBIDDEN_TEXT = {
 FORBIDDEN_BASELINE_COMMANDS = (
     "openrouter",
     "comfyui",
-    "generate",
     "submit",
     "bws ",
     "curl ",
@@ -117,6 +121,8 @@ def validate_repository(root: Path) -> list[str]:
             problems.append("canonical baseline does not pin its shell interpreter")
         if "export PATH=/usr/bin:/bin" not in verify_text:
             problems.append("canonical baseline does not replace caller PATH")
+        if "exec /usr/bin/env -i QWEN_BASELINE_CLEAN_BOOTSTRAP=1" not in verify_text:
+            problems.append("canonical baseline does not re-enter from a clean environment")
         command_lines = [
             line.strip()
             for line in verify_text.splitlines()
@@ -135,6 +141,13 @@ def validate_repository(root: Path) -> list[str]:
 
     for relative in (
         "scripts/run_deterministic_command.py",
+        "scripts/generate_module_map.py",
+        "modules/testing/MODULE.md",
+        "modules/testing/interface.md",
+        "modules/testing/errors.json",
+        "modules/review/MODULE.md",
+        "modules/review/interface.md",
+        "modules/review/errors.json",
         "tests/baseline_guard/no_external_effects.c",
         "tests/baseline_guard/sitecustomize.py",
         "tests/baseline_guard/no_external_effects.cjs",

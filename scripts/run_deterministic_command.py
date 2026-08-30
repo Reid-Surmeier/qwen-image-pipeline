@@ -24,6 +24,7 @@ SAFE_ENVIRONMENT_NAMES = (
 
 PYTHON_COMMANDS = {
     ("scripts/validate_successor_governance.py",),
+    ("scripts/generate_module_map.py", "--check"),
     ("-m", "unittest", "discover", "-s", "tests"),
     ("-m", "compileall", "-q", "qwen_ui_pipeline", "tests", "scripts"),
 }
@@ -49,6 +50,7 @@ SAFE_CHILD_SCRIPTS = (
     "tests/baseline_guard/probe_python_descendant.py",
     "tests/baseline_guard/probe_python_substitution.py",
     "tests/baseline_guard/probe_python_stripped_environment.py",
+    "tests/baseline_guard/probe_python_raw_syscall.py",
     "tests/baseline_guard/probe_python_model.py",
     "tests/baseline_guard/probe_node_network.cjs",
     "tests/baseline_guard/probe_node_udp.cjs",

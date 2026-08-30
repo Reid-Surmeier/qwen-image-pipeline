@@ -89,6 +89,19 @@ class DeterministicBaselineTests(unittest.TestCase):
         self.assertNotEqual(node.returncode, 0)
         self.assertIn("network access is disabled", node.stderr)
 
+    def test_raw_network_syscall_is_denied_by_the_os(self) -> None:
+        completed = subprocess.run(
+            [sys.executable, "tests/baseline_guard/probe_python_raw_syscall.py"],
+            cwd=REPO_ROOT,
+            env=build_environment(os.environ, REPO_ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("raw network syscall is disabled", completed.stdout)
+
     def test_python_child_cannot_spawn_an_unlisted_descendant(self) -> None:
         completed = subprocess.run(
             [sys.executable, "tests/baseline_guard/probe_python_descendant.py"],

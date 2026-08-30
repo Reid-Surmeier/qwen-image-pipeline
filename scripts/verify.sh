@@ -6,6 +6,9 @@
 # paid or external effect.
 
 set -uo pipefail
+if [ "${QWEN_BASELINE_CLEAN_BOOTSTRAP:-}" != "1" ]; then
+  exec /usr/bin/env -i QWEN_BASELINE_CLEAN_BOOTSTRAP=1 /bin/bash --noprofile --norc "$0"
+fi
 export PATH=/usr/bin:/bin
 
 PYTHON_BIN=/usr/bin/python3.12
@@ -28,6 +31,7 @@ run_check() {
   fi
 }
 
+run_check "module map" "${DETERMINISTIC_RUNNER[@]}" @python scripts/generate_module_map.py --check
 run_check "successor governance" "${DETERMINISTIC_RUNNER[@]}" @python scripts/validate_successor_governance.py
 run_check "python unit tests" "${DETERMINISTIC_RUNNER[@]}" @python -m unittest discover -s tests
 run_check "node tests" "${DETERMINISTIC_RUNNER[@]}" @node --test tests/figma-mcp-client.test.mjs tests/figma-oauth-bootstrap.test.mjs

@@ -41,4 +41,4 @@ jobs:
           node-version: "22"
 
       - name: Run the canonical repository baseline
-        run: /bin/bash scripts/verify.sh
+        run: /usr/bin/env -i /bin/bash --noprofile --norc scripts/verify.sh

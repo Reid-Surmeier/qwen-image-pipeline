@@ -18,4 +18,4 @@ Development of the successor procedure happens on `build/v0.3.0` and is reviewed
 
 Subjective final visual approval remains human. Missing references, mismatched hashes, provider rejection, failed checks, ambiguous billing, and exhausted correction budgets become explicit outcomes rather than hidden agent judgment.
 
-See [`CONTEXT.md`](CONTEXT.md) and [`docs/adr/`](docs/adr/) for current vocabulary and accepted decisions. The generated module map arrives with the module implementation slices defined by #17; it is not claimed by this governance slice.
+See [`CONTEXT.md`](CONTEXT.md), the generated [`MODULES.md`](MODULES.md), and [`docs/adr/`](docs/adr/) for current vocabulary and accepted decisions. The map names only modules with frozen interfaces now; later #17 tickets add the remaining Conductor-led modules as they are implemented.
