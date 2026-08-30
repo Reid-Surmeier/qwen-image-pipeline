@@ -1,0 +1,29 @@
+name: Release train
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+jobs:
+  release-train:
+    name: release-train
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      HEAD_REF: ${{ github.head_ref }}
+    steps:
+      - name: Admit only the governed build line
+        run: |
+          case "$HEAD_REF" in
+            build/v[0-9]*.[0-9]*.[0-9]*) echo "release-train: $HEAD_REF is the release path" ;;
+            *) echo "release-train: main accepts only build/v<version>" >&2; exit 1 ;;
+          esac
+      - name: Confirm this repository baseline has no external effect
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: python3 scripts/validate_successor_governance.py

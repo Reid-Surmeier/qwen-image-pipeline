@@ -12,6 +12,8 @@ REQUIRED_TEXT = {
         "needs-human-review",
         "Application repositories own",
         "scripts/verify.sh",
+        "scripts/release_steward.py",
+        "21881100",
     ),
     "README.md": (
         "qwen-image-pipeline",
@@ -24,6 +26,8 @@ REQUIRED_TEXT = {
         "needs-human-review",
         "tag",
         "application repositories",
+        "release-train",
+        "21881100",
     ),
     "docs/agents/triage-labels.md": (
         "needs-triage",
@@ -53,10 +57,12 @@ FORBIDDEN_TEXT = {
         "release/v0.2.0": "AGENTS.md contains inherited release/v0.2.0 governance",
         "Godot Interactive Replica": "AGENTS.md contains inherited Godot application scope",
         "200 Qwen generations": "AGENTS.md contains an inherited application spend allowance",
+        "Ticket #19 must install": "AGENTS.md still says release enforcement is pending",
     },
     "docs/agents/repository-workflow.md": {
         "Qwen-3-Pro-Pipeline": "repository workflow names the inherited repository",
         "one approval gate": "repository workflow retains the inherited PR approval gate",
+        "Until #19 is complete": "repository workflow still says release enforcement is pending",
     },
 }
 

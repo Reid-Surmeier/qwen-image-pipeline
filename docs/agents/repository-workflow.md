@@ -20,9 +20,13 @@ Run `scripts/verify.sh` locally and in GitHub Actions. The baseline may inspect 
 
 ## 4. Release by tag
 
-`main` is release-only. A version becomes a release only after the qualifying ticket proves the whole build, the owner makes any named decision, the build is represented by an immutable tag, and the GitHub Release carries the reviewed changelog and evidence.
+`main` is release-only. Ruleset `21881100` requires a pull request and the `release-train` status, refuses deletion and force pushes, and gives no GitHub Actions bypass. The repository owner is the one explicit recovery bypass.
 
-Ticket #19 installs and tests the enforcement for this lifecycle. Until #19 is complete, agents must not claim that branch protection, tag-only release enforcement, or automated main reconciliation is active.
+A version becomes a release only after the qualifying ticket proves the whole build, the owner makes any named decision, and `docs/releases/v<version>/REVIEW.md` says `verdict: ship` for the current exact SHA. Run `scripts/release_steward.py cut <version>` from the clean pushed `build/v<version>` line. It reruns the deterministic baseline and pushes only the matching tag.
+
+The tag starts the Release workflow. It revalidates the review evidence, runs Verify without provider credentials or paid effects, finds the open build pull request at that exact tag SHA, and merges it through the ordinary protected-main path. It then publishes `RELEASE.md` as the GitHub Release. A missing review, hold verdict, stale SHA, dirty tree, unpushed tip, gate failure, or conflicting tag refuses the cut.
+
+The exact ruleset create request and GitHub's returned record are in [`docs/releases/v0.3.0/`](../releases/v0.3.0/main-protection.md).
 
 ## 5. Keep ownership clear
 

@@ -20,8 +20,9 @@ The owner reviews complete versions. Work for a version lands on one `build/<ver
 
 - Ticket work commits directly to the current build line after its acceptance checks pass.
 - The draft build pull request is the human-readable changelog, CI surface, and visual evidence surface for the whole version.
-- `main` is release-only. Agents do not merge the build pull request or create a release tag without the release ticket's explicit evidence and owner decision.
-- Ticket #19 must install and prove the tag-only release enforcement before any v0.3.0 release is claimed.
+- `main` is protected by release-only ruleset `21881100`: a pull request and the `release-train` check are required, deletion and force pushes are refused, and only GitHub user `Reid-Surmeier` has the explicit owner bypass.
+- `scripts/release_steward.py cut <version>` accepts only current exact-SHA ship evidence and pushes only the matching version tag. The Release workflow revalidates the tag and merges that exact build pull request through protected `main`.
+- Agents do not merge the build pull request or create a release tag without the release ticket's exact evidence and owner decision.
 
 ## Preflight and change discipline
 

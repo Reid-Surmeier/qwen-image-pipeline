@@ -25,4 +25,4 @@ The deterministic baseline is `scripts/verify.sh` and cannot perform paid or ext
 
 Application examples and generated artifacts move to their owning repositories as later tickets migrate callers. Existing commands remain until their disposition is decided and tested.
 
-Ticket #19 must implement and prove tag-only release enforcement and main protection. This record establishes the intended governance; it does not claim that enforcement already exists.
+Issue #19 implements this decision with `scripts/release_steward.py`, the Release train and Release workflows, and live repository ruleset `21881100`. The ruleset requires the `release-train` check and a pull request, blocks deletion and force pushes, names only the owner as bypass, and gives automation no general path around protected `main`.
