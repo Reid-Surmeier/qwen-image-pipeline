@@ -1,10 +1,12 @@
 # Issue 15: Seedance HTTP 400 diagnosis
 
-## Conclusion
+## Bounded conclusion
 
-The original video reference was delivered to OpenRouter, but it was too small for
-Seedance 2.0 Mini reference-to-video. It was 480 x 480, or 230,400 pixels. The provider
-requires at least 407,696 input-video pixels for this model and mode.
+The strongest supported diagnosis is that the original 480 x 480 reference was too small
+for Seedance 2.0 Mini reference-to-video: its 230,400 pixels are below the provider's
+407,696-pixel minimum for this model and mode. That attribution to Run 001 is an inference,
+not a recovered fact. Run 001's response body was destroyed, and the later probe also
+changed the delivery URL and served content type before exposing the pixel constraint.
 
 The inherited client destroyed the original Run 001 response body, so that specific body
 cannot be recovered and the run was not retried. The cause was isolated with additive,
@@ -21,7 +23,7 @@ retried.
    said `input_references[0].video_url.url` accepts only HTTPS URLs.
 3. [Run 003](https://github.com/Reid-Surmeier/qwen-pipeline-experiments/tree/f55e2c4/artifacts/qwen-pipeline/runs/seedance-video-study-003-20260830T201900Z)
    delivered those exact 480 x 480 bytes over HTTPS with `Content-Type: video/mp4`. The
-   captured provider response identified the real constraint: the reference video must
+   captured provider response proved an independently reproducible constraint: the reference video must
    contain at least 407,696 pixels for `dreamina-seedance-2-0-mini` in `r2v` mode.
 4. [Run 004](https://github.com/Reid-Surmeier/qwen-pipeline-experiments/tree/65ff7be/artifacts/qwen-pipeline/runs/seedance-video-study-004-20260830T202300Z)
    used a deterministic 720 x 720 derivative, or 518,400 pixels. The provider accepted and
@@ -37,11 +39,14 @@ The application repository owns both reference assets and their provenance:
   `8a0931d2876579dbb17e2ab3680d379516a59d9ec116a99f6a476964770f97a7`;
 - deterministic procedure: Lanczos scale to 720 x 720, H.264 CRF 12 slow,
   `yuv420p`, no audio, and fast-start metadata;
-- preflight now refuses a Seedance 2.0 Mini reference-to-video request below 407,696
-  inspected pixels before a paid submission.
+- preflight now runs `ffprobe` against the actual hash-locked video, compares the result
+  with declared metadata, and refuses a Seedance 2.0 Mini reference-to-video request below
+  407,696 inspected pixels before a paid submission.
 
-The correction is recorded in
+The deterministic derivative and first gate are recorded in
 [commit 9f93027](https://github.com/Reid-Surmeier/qwen-pipeline-experiments/commit/9f93027).
+The fail-closed media inspection is recorded in
+[commit 945b239](https://github.com/Reid-Surmeier/qwen-pipeline-experiments/commit/945b239).
 
 ## Result classification and cost
 

@@ -203,3 +203,28 @@ def test_submit_caps_persisted_body_after_invalid_utf8_expansion():
     assert record["response_body_truncated"] is True
     assert len(record["response_body"].encode("utf-8")) <= 65_536
     assert record["response_body"].endswith("<TRUNCATED>")
+
+
+def test_submit_redacts_credentials_from_allowlisted_response_headers_and_exception():
+    secret = "header-secret"
+
+    def handler(request: httpx.Request):
+        return httpx.Response(
+            400,
+            json={"error": "bad request"},
+            headers={"x-request-id": f"Bearer {secret}"},
+        )
+
+    http = httpx.Client(
+        base_url="https://openrouter.ai/api/v1",
+        transport=httpx.MockTransport(handler),
+    )
+    client = OpenRouterVideoClient("request-secret", http)
+
+    with pytest.raises(OpenRouterError) as caught:
+        client.submit({"model": "bytedance/seedance-2.0-mini"})
+
+    record = caught.value.to_record()
+    assert record["response_headers"]["x-request-id"] == "Bearer <REDACTED>"
+    assert secret not in json.dumps(record)
+    assert secret not in str(caught.value)

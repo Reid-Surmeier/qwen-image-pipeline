@@ -116,7 +116,7 @@ class OpenRouterHTTPError(OpenRouterError):
         if body_was_truncated:
             provider_error = None
         response_headers = {
-            key.lower(): value
+            key.lower(): _redact_sensitive_text(value)
             for key, value in response.headers.items()
             if key.lower() in SAFE_ERROR_RESPONSE_HEADERS
         }
