@@ -197,6 +197,9 @@ const replay = (
     throw new RunRecordError("EVENT_CHAIN_BROKEN", "The journal must begin with one attempt reservation.", "repair-evidence")
   }
   const requestSha256 = sha256(request)
+  if (runIdentity(requestSha256) !== runId) {
+    throw new RunRecordError("REQUEST_TAMPERED", "The immutable request no longer matches the Run identity.", "repair-evidence")
+  }
   if (stringPayload(genesis.payload, "requestSha256") !== requestSha256) {
     throw new RunRecordError("REQUEST_TAMPERED", "The immutable request bytes changed.", "repair-evidence")
   }
@@ -278,16 +281,26 @@ const decodeStoredView = (value: Uint8Array): RunRecordView => {
   }
 }
 
-const assertDerivedViewConsistent = (stored: StoredRunRecord, view: RunRecordView): RunRecordView | undefined => {
+const assertDerivedViewConsistent = (
+  stored: StoredRunRecord,
+  events: ReadonlyArray<RunEvent>,
+  view: RunRecordView,
+): RunRecordView | undefined => {
   if (stored.state === undefined) return undefined
   const derived = decodeStoredView(stored.state)
-  if (
-    derived.chainHeadSha256 === view.chainHeadSha256 &&
-    canonicalJson(derived as unknown as JsonValue) !== canonicalJson(view as unknown as JsonValue)
-  ) {
+  const derivedHeadIndex = events.findIndex((event) => event.eventSha256 === derived.chainHeadSha256)
+  if (derivedHeadIndex < 0) {
     throw new RunRecordError(
       "DERIVED_VIEW_CONTRADICTION",
-      "The derived state claims the current event head but disagrees with replay.",
+      "The derived state names an event head that is not in the verified journal.",
+      "repair-evidence",
+    )
+  }
+  const historical = replay(view.runId, stored.request, events.slice(0, derivedHeadIndex + 1), stored.evidence)
+  if (canonicalJson(derived as unknown as JsonValue) !== canonicalJson(historical as unknown as JsonValue)) {
+    throw new RunRecordError(
+      "DERIVED_VIEW_CONTRADICTION",
+      "The derived state disagrees with replay at its claimed event head.",
       "repair-evidence",
     )
   }
@@ -364,15 +377,31 @@ export const reserveRun = (
   )
 })
 
+const credentialFieldName = (key: string): boolean => {
+  const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "").replace(/^x/, "")
+  return /(?:api|access|private)key$/.test(normalized) ||
+    /(?:client)?secret$/.test(normalized) ||
+    /(?:password|authorization)$/.test(normalized) ||
+    /^(?:access|refresh|id)token$/.test(normalized) ||
+    normalized === "credential"
+}
+
 const valueHasSecret = (value: unknown, key?: string): boolean => {
-  if (key !== undefined && /^(?:credential|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|password|secret|authorization|(?:access|refresh|id)?[_-]?token)$/i.test(key)) {
+  if (key !== undefined && credentialFieldName(key)) {
     return true
   }
   if (typeof value === "string") {
-    return /(?:sk-|gh[pousr]_|Bearer\s+)[A-Za-z0-9_-]{6,}/i.test(value) ||
+    let credentialQuery = false
+    try {
+      const parsed = new URL(value, "https://run-record.invalid")
+      credentialQuery = [...parsed.searchParams.keys()].some(credentialFieldName)
+    } catch {
+      credentialQuery = /[?&](?:api[_-]?key|access[_-]?key|password|secret|authorization|(?:access|refresh|id)?[_-]?token)=/i.test(value)
+    }
+    return credentialQuery ||
+      /(?:sk-|gh[pousr]_|Bearer\s+)[A-Za-z0-9_-]{6,}/i.test(value) ||
       /-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(value) ||
-      /https?:\/\/[^/\s:@]+:[^/\s@]+@/i.test(value) ||
-      /https?:\/\/[^\s?]+\?[^\s#]*(?:api[_-]?key|access[_-]?key|password|secret|authorization|(?:access|refresh|id)?[_-]?token)=[^&#\s]+/i.test(value)
+      /https?:\/\/[^/\s:@]+:[^/\s@]+@/i.test(value)
   }
   if (Array.isArray(value)) return value.some((child) => valueHasSecret(child))
   if (value !== null && typeof value === "object") {
@@ -417,7 +446,7 @@ export const recordOperation = (
       : new RunRecordError("EVENT_CHAIN_BROKEN", "The event journal could not be replayed.", "repair-evidence"),
   })
   yield* Effect.try({
-    try: () => assertDerivedViewConsistent(stored, current),
+    try: () => assertDerivedViewConsistent(stored, events, current),
     catch: (error) => error instanceof RunRecordError
       ? error
       : new RunRecordError("DERIVED_VIEW_CONTRADICTION", "The derived state view could not be read.", "repair-evidence"),
@@ -599,7 +628,7 @@ export const loadRun = (
       : new RunRecordError("EVENT_CHAIN_BROKEN", "The event journal could not be replayed.", "repair-evidence"),
   })
   const derived = yield* Effect.try({
-    try: () => assertDerivedViewConsistent(stored, view),
+    try: () => assertDerivedViewConsistent(stored, events, view),
     catch: (error) => error instanceof RunRecordError
       ? error
       : new RunRecordError("DERIVED_VIEW_CONTRADICTION", "The derived state view could not be read.", "repair-evidence"),

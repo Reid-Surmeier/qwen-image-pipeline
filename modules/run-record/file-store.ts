@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto"
+import { constants as fsConstants } from "node:fs"
 import {
+  link,
   lstat,
   mkdir,
   open,
@@ -17,6 +19,21 @@ import { Effect, Layer } from "effect"
 import { RunRecordError } from "./errors.js"
 import { RunRecordStore } from "./types.js"
 import type { RunRecordStoreService, StoredRunRecord } from "./types.js"
+
+export type FileRunRecordFault =
+  | "after-create"
+  | "after-event-frame"
+  | "after-evidence"
+  | "after-state"
+
+export type FileRunRecordHarness = Readonly<{
+  layer: Layer.Layer<RunRecordStoreService, RunRecordError>
+  failNext: (fault: FileRunRecordFault) => Effect.Effect<void>
+}>
+
+type FileFaultController = Readonly<{
+  trip: (fault: FileRunRecordFault) => void
+}>
 
 const safeRelative = (value: string): boolean =>
   value.length > 0 &&
@@ -58,6 +75,17 @@ const writeExclusive = async (path: string, body: Uint8Array): Promise<void> => 
   }
 }
 
+const readRegularFile = async (path: string): Promise<Buffer> => {
+  const handle = await open(path, fsConstants.O_RDONLY | fsConstants.O_NOFOLLOW)
+  try {
+    const metadata = await handle.stat()
+    if (!metadata.isFile()) throw durabilityError("A Run Record control path is not a real file.")
+    return await handle.readFile()
+  } finally {
+    await handle.close()
+  }
+}
+
 const ensureDirectoryTree = async (root: string, applicationPath: string): Promise<string> => {
   let current = root
   for (const part of applicationPath.split("/").filter((value) => value.length > 0)) {
@@ -70,6 +98,7 @@ const ensureDirectoryTree = async (root: string, applicationPath: string): Promi
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
       await mkdir(current, { mode: 0o700 })
+      await syncDirectory(dirname(current))
     }
     const actual = await realpath(current)
     if (!inside(root, actual)) throw durabilityError("A Run Record directory escapes the application repository.")
@@ -109,44 +138,10 @@ const collectEvidence = async (
   return result
 }
 
-const processIsAlive = (pid: number): boolean => {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code !== "ESRCH"
-  }
-}
-
-const acquireAppendLock = async (path: string): Promise<void> => {
-  const body = Buffer.from(JSON.stringify({ pid: process.pid }), "utf8")
-  for (let attemptNumber = 0; attemptNumber < 2; attemptNumber += 1) {
-    try {
-      await writeExclusive(path, body)
-      return
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
-      let ownerPid: number | undefined
-      try {
-        const parsed = JSON.parse(await readFile(path, "utf8")) as { pid?: unknown }
-        if (typeof parsed.pid === "number" && Number.isSafeInteger(parsed.pid) && parsed.pid > 0) ownerPid = parsed.pid
-      } catch {
-        ownerPid = undefined
-      }
-      if (ownerPid !== undefined && processIsAlive(ownerPid)) {
-        throw new RunRecordError("IDEMPOTENCY_CONFLICT", "Another process owns the Run event append lock.")
-      }
-      await unlink(path).catch((unlinkError) => {
-        if ((unlinkError as NodeJS.ErrnoException).code !== "ENOENT") throw unlinkError
-      })
-    }
-  }
-  throw durabilityError("The Run event append lock could not be acquired.")
-}
-
 const buildFileRunRecordStore = (
   applicationRoot: string,
   artifactRoot: string,
+  faults?: FileFaultController,
 ): Effect.Effect<RunRecordStoreService, RunRecordError> => attempt(
   "The Run Record filesystem could not be initialized.",
   async () => {
@@ -170,6 +165,41 @@ const buildFileRunRecordStore = (
       return actual
     }
 
+    const materializeJournal = async (directory: string): Promise<Buffer> => {
+      let journal = await readRegularFile(join(directory, "events.jsonl"))
+      const framesDirectory = await ensureDirectoryTree(directory, ".event-frames")
+      while (true) {
+        const raw = journal.toString("utf8")
+        if (!raw.endsWith("\n")) {
+          throw new RunRecordError("EVENT_CHAIN_BROKEN", "The event journal has an incomplete frame.")
+        }
+        const lines = raw.slice(0, -1).split("\n")
+        const head = JSON.parse(lines.at(-1) ?? "null") as { eventSha256?: unknown } | null
+        if (typeof head?.eventSha256 !== "string" || !/^[a-f0-9]{64}$/.test(head.eventSha256)) {
+          throw new RunRecordError("EVENT_CHAIN_BROKEN", "The event journal head is invalid.")
+        }
+        const framePath = join(framesDirectory, `${head.eventSha256}.jsonl`)
+        let nextFrame: Buffer
+        try {
+          nextFrame = await readRegularFile(framePath)
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return journal
+          throw error
+        }
+        let next: { previousEventSha256?: unknown }
+        try {
+          next = JSON.parse(nextFrame.toString("utf8").trimEnd()) as { previousEventSha256?: unknown }
+        } catch {
+          throw new RunRecordError("EVENT_CHAIN_BROKEN", "An immutable event frame is invalid JSON.")
+        }
+        if (!nextFrame.toString("utf8").endsWith("\n") || next.previousEventSha256 !== head.eventSha256) {
+          throw new RunRecordError("EVENT_CHAIN_BROKEN", "An immutable event frame does not extend the journal head.")
+        }
+        journal = Buffer.concat([journal, nextFrame])
+        await atomicReplace(directory, "events.jsonl", journal)
+      }
+    }
+
     const service: RunRecordStoreService = {
       create: (runId, request, firstEvent, stateBody) => attempt(
         "The Run reservation could not be made durable.",
@@ -190,9 +220,11 @@ const buildFileRunRecordStore = (
             await writeExclusive(join(staging, "events.jsonl"), firstEvent)
             await writeExclusive(join(staging, "state.json"), stateBody)
             await mkdir(join(staging, "outputs"), { mode: 0o700 })
+            await mkdir(join(staging, ".event-frames"), { mode: 0o700 })
             await syncDirectory(staging)
             await rename(staging, target)
             await syncDirectory(verifiedRunsRoot)
+            faults?.trip("after-create")
           } catch (error) {
             await rm(staging, { recursive: true, force: true })
             throw error
@@ -202,11 +234,12 @@ const buildFileRunRecordStore = (
       read: (runId) => attempt("The Run Record could not be read.", async () => {
         try {
           const directory = await runDirectory(runId)
-          const request = await readFile(join(directory, "request.json"))
-          const events = await readFile(join(directory, "events.jsonl"))
+          await materializeJournal(directory)
+          const request = await readRegularFile(join(directory, "request.json"))
+          const events = await readRegularFile(join(directory, "events.jsonl"))
           let state: Uint8Array | undefined
           try {
-            state = await readFile(join(directory, "state.json"))
+            state = await readRegularFile(join(directory, "state.json"))
           } catch (error) {
             if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
           }
@@ -227,22 +260,42 @@ const buildFileRunRecordStore = (
         "The Run event could not be made durable.",
         async () => {
           const directory = await runDirectory(runId)
-          const lockPath = join(directory, ".append.lock")
-          await acquireAppendLock(lockPath)
-          try {
-            const journalPath = join(directory, "events.jsonl")
-            const journal = await readFile(journalPath)
-            const raw = Buffer.from(journal).toString("utf8")
-            if (!raw.endsWith("\n")) throw new RunRecordError("EVENT_CHAIN_BROKEN", "The event journal has an incomplete frame.")
-            const lines = raw.slice(0, -1).split("\n")
-            const head = JSON.parse(lines.at(-1) ?? "null") as { eventSha256?: unknown } | null
-            if (head?.eventSha256 !== expectedHeadSha256) {
-              throw new RunRecordError("IDEMPOTENCY_CONFLICT", "The event head changed before append.")
-            }
-            await atomicReplace(directory, "events.jsonl", Buffer.concat([journal, event]))
-          } finally {
-            await unlink(lockPath).catch(() => undefined)
+          const journal = await materializeJournal(directory)
+          const raw = journal.toString("utf8")
+          const lines = raw.slice(0, -1).split("\n")
+          const head = JSON.parse(lines.at(-1) ?? "null") as { eventSha256?: unknown } | null
+          if (head?.eventSha256 !== expectedHeadSha256) {
+            throw new RunRecordError("IDEMPOTENCY_CONFLICT", "The event head changed before append.")
           }
+          let proposed: { previousEventSha256?: unknown }
+          try {
+            proposed = JSON.parse(Buffer.from(event).toString("utf8").trimEnd()) as { previousEventSha256?: unknown }
+          } catch {
+            throw new RunRecordError("EVENT_CHAIN_BROKEN", "The proposed event frame is invalid JSON.")
+          }
+          if (!Buffer.from(event).toString("utf8").endsWith("\n") || proposed.previousEventSha256 !== expectedHeadSha256) {
+            throw new RunRecordError("EVENT_CHAIN_BROKEN", "The proposed event does not extend the expected journal head.")
+          }
+          const framesDirectory = await ensureDirectoryTree(directory, ".event-frames")
+          const framePath = join(framesDirectory, `${expectedHeadSha256}.jsonl`)
+          const candidatePath = join(framesDirectory, `.${expectedHeadSha256}.${randomUUID()}.candidate`)
+          await writeExclusive(candidatePath, event)
+          try {
+            try {
+              await link(candidatePath, framePath)
+              await syncDirectory(framesDirectory)
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
+              const existing = await readRegularFile(framePath)
+              if (!existing.equals(Buffer.from(event))) {
+                throw new RunRecordError("IDEMPOTENCY_CONFLICT", "A different event already extends the expected journal head.")
+              }
+            }
+          } finally {
+            await unlink(candidatePath).catch(() => undefined)
+          }
+          faults?.trip("after-event-frame")
+          await materializeJournal(directory)
         },
       ),
       writeEvidence: (runId, applicationPath, body) => attempt(
@@ -257,6 +310,7 @@ const buildFileRunRecordStore = (
           try {
             await writeExclusive(destination, body)
             await syncDirectory(parent)
+            faults?.trip("after-evidence")
             return "created" as const
           } catch (error) {
             if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error
@@ -275,6 +329,7 @@ const buildFileRunRecordStore = (
       writeState: (runId, stateBody) => attempt("The derived Run view could not be made durable.", async () => {
         const directory = await runDirectory(runId)
         await atomicReplace(directory, "state.json", stateBody)
+        faults?.trip("after-state")
       }),
     }
     return service
@@ -286,3 +341,21 @@ export const fileRunRecordLayer = (
   artifactRoot: string,
 ): Layer.Layer<RunRecordStoreService, RunRecordError> =>
   Layer.effect(RunRecordStore, buildFileRunRecordStore(applicationRoot, artifactRoot))
+
+export const makeFileRunRecordHarness = (
+  applicationRoot: string,
+  artifactRoot: string,
+): Effect.Effect<FileRunRecordHarness> => Effect.sync(() => {
+  let failing: FileRunRecordFault | undefined
+  const faults: FileFaultController = {
+    trip: (fault) => {
+      if (failing !== fault) return
+      failing = undefined
+      throw durabilityError(`${fault} was interrupted.`)
+    },
+  }
+  return {
+    layer: Layer.effect(RunRecordStore, buildFileRunRecordStore(applicationRoot, artifactRoot, faults)),
+    failNext: (fault) => Effect.sync(() => { failing = fault }),
+  }
+})

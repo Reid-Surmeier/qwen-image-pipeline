@@ -12,6 +12,8 @@ Done when `reserve` returns a `reserved` view and the application Run directory 
 
 Call `Run Record.record` with `SubmissionMayHaveStarted`. The module appends and synchronizes that event before returning the in-process Submission Permit.
 
+The filesystem adapter first commits a write-once event frame and then atomically materializes `events.jsonl`. If the process stops between those operations, `load` completes the same append from that frame; it does not issue another permit.
+
 Use that permit to invoke the adapter once. The permit itself rejects a second use. A replayed operation returns the current view without a permit. A different submission operation returns `DUPLICATE_SUBMISSION_BLOCKED` and the existing attempt must be reconciled.
 
 Done when the adapter has either returned sanitized evidence or the Run view says `possibly_spent / reconcile-only`.

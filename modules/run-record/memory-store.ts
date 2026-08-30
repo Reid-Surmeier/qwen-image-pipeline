@@ -10,13 +10,13 @@ import type {
 
 export type MemoryRunRecordHarness = Readonly<{
   layer: Layer.Layer<RunRecordStoreService>
-  failNext: (operation: StoreOperation) => void
+  failNext: (operation: StoreOperation) => Effect.Effect<void>
   mutate: (runId: string, mutation: (record: {
     request: Uint8Array
     events: Uint8Array
     state?: Uint8Array
     evidence: Record<string, Uint8Array>
-  }) => void) => void
+  }) => void) => Effect.Effect<void, RunRecordError>
 }>
 
 export const makeMemoryRunRecordHarness = (): Effect.Effect<MemoryRunRecordHarness> => Effect.sync(() => {
@@ -118,7 +118,12 @@ export const makeMemoryRunRecordHarness = (): Effect.Effect<MemoryRunRecordHarne
 
   return {
     layer: Layer.succeed(RunRecordStore, service),
-    failNext: (operation) => { failing = operation },
-    mutate: (runId, mutation) => mutation(get(runId)),
+    failNext: (operation) => Effect.sync(() => { failing = operation }),
+    mutate: (runId, mutation) => Effect.try({
+      try: () => mutation(get(runId)),
+      catch: (error) => error instanceof RunRecordError
+        ? error
+        : new RunRecordError("DURABILITY_FAILURE", "The memory Run Record mutation failed."),
+    }),
   }
 })

@@ -24,7 +24,8 @@ export const load: (
 ) => Effect.Effect<RunRecordView, RunRecordError, RunRecordStoreService> = loadRun
 
 export { RunRecordError } from "./errors.js"
-export { fileRunRecordLayer } from "./file-store.js"
+export { fileRunRecordLayer, makeFileRunRecordHarness } from "./file-store.js"
+export type { FileRunRecordFault, FileRunRecordHarness } from "./file-store.js"
 export { makeMemoryRunRecordHarness } from "./memory-store.js"
 export type { MemoryRunRecordHarness } from "./memory-store.js"
 export type { RunRecordErrorCode } from "./errors.js"
