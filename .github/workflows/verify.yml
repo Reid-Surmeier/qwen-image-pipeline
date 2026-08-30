@@ -41,5 +41,8 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Install the pinned Node dependencies without scripts
+        run: npm ci --ignore-scripts
+
       - name: Run the canonical repository baseline
         run: /usr/bin/env -i /bin/bash --noprofile --norc scripts/verify.sh

@@ -34,6 +34,22 @@ NODE_COMMANDS = {
         "tests/figma-mcp-client.test.mjs",
         "tests/figma-oauth-bootstrap.test.mjs",
     ),
+    ("node_modules/typescript/bin/tsc", "-p", "tsconfig.json"),
+    (
+        "node_modules/dependency-cruiser/bin/dependency-cruise.mjs",
+        "--config",
+        ".dependency-cruiser.cjs",
+        "modules",
+    ),
+    (
+        "--import",
+        "tsx",
+        "--test",
+        "modules/conductor/conductor.test.ts",
+        "modules/reference-planning/reference-planning.test.ts",
+        "modules/run-contract/run-contract.test.ts",
+    ),
+    ("scripts/vendored-check.mjs",),
 }
 GIT_COMMANDS = {("diff", "--check")}
 

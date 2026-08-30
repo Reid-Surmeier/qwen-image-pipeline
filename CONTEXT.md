@@ -56,6 +56,30 @@ _Avoid_: Screenshot, mockup
 The application-owned declaration of purpose, allowed operations, evidence sources, output destinations, approval rules, and compatible tool version.
 _Avoid_: Repository folklore, setup notes
 
+**Objective**:
+The application-owned, machine-readable statement of one desired result, selected Procedure, count, budget, and proposed evidence.
+_Avoid_: Issue comment, prompt fragment
+
+**Tool Lock**:
+The application-owned exact identity of the compatible tool release, commit, artifact, Procedure, Run schema, and adapter protocol.
+_Avoid_: Latest branch, compatible-enough version
+
+**Reference Plan**:
+The proved mapping from authoritative application media to exact provider-payload destinations, including application-relative paths, hashes, detected kinds, inspected properties, and authority reasons.
+_Avoid_: Reference list, Markdown attachment
+
+**Run Request**:
+The canonical provider-independent instructions produced from a valid Objective, Project Contract, Tool Lock, and Reference Plan.
+_Avoid_: Provider payload, loose request blob
+
+**Planned Run**:
+An immutable, hash-identified Run Request that passed planning but has not reserved an attempt or called Generation.
+_Avoid_: Attempt, submitted job
+
+**Normal View**:
+The plain-language account of the objective, evidence, next action, spend risk, and remaining human decision returned for every planning result.
+_Avoid_: Debug dump, success banner
+
 **Run Record**:
 The append-only application-owned evidence for one reserved attempt, including request, events, raw provider response, outputs, checks, failure, and provenance.
 _Avoid_: Console log, scratch folder

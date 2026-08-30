@@ -1,0 +1,26 @@
+{
+  "name": "qwen-image-pipeline",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "description": "Effect control plane for the reusable Qwen Image and Seedance procedure.",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "lint:seams": "depcruise --config .dependency-cruiser.cjs modules",
+    "test:control": "node --import tsx --test modules/conductor/conductor.test.ts modules/reference-planning/reference-planning.test.ts modules/run-contract/run-contract.test.ts",
+    "vendored:check": "node scripts/vendored-check.mjs",
+    "check:control": "npm run typecheck && npm run lint:seams && npm run test:control && npm run vendored:check"
+  },
+  "dependencies": {
+    "effect": "4.0.0-rc.112"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "dependency-cruiser": "^17.0.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

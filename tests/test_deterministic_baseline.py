@@ -17,6 +17,28 @@ class DeterministicBaselineTests(unittest.TestCase):
     def test_only_the_documented_baseline_commands_are_allowed(self) -> None:
         validate_command(("@python", "-m", "unittest", "discover", "-s", "tests"))
         validate_command(("@git", "diff", "--check"))
+        validate_command(("@node", "node_modules/typescript/bin/tsc", "-p", "tsconfig.json"))
+        validate_command(
+            (
+                "@node",
+                "node_modules/dependency-cruiser/bin/dependency-cruise.mjs",
+                "--config",
+                ".dependency-cruiser.cjs",
+                "modules",
+            )
+        )
+        validate_command(
+            (
+                "@node",
+                "--import",
+                "tsx",
+                "--test",
+                "modules/conductor/conductor.test.ts",
+                "modules/reference-planning/reference-planning.test.ts",
+                "modules/run-contract/run-contract.test.ts",
+            )
+        )
+        validate_command(("@node", "scripts/vendored-check.mjs"))
 
         with self.assertRaisesRegex(ValueError, "not part of the deterministic baseline"):
             validate_command(("curl", "https://openrouter.ai"))

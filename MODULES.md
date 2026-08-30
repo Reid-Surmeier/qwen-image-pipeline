@@ -4,8 +4,11 @@
 
 | Module | Purpose | Interface | Errors | Acceptance |
 | --- | --- | --- | --- | --- |
+| Conductor | Give an application agent one normal planning path and one classified answer. | `modules/conductor/index.ts` | `modules/conductor/errors.ts` | `modules/conductor/conductor.test.ts` |
+| Reference Planning | Prove that authoritative application evidence is the exact media intended for the exact provider payload location. | `modules/reference-planning/index.ts` | `modules/reference-planning/errors.ts` | `modules/reference-planning/reference-planning.test.ts` |
 | Release module | Turn one current independent build-line review into one immutable version tag and protected release. | `modules/release/interface.md` | `modules/release/errors.json` | `tests/test_release_governance.py` |
 | Review | Bind independent review evidence to the exact candidate and contract. | `modules/review/interface.md` | `modules/review/errors.json` | `tests/test_successor_governance.py` |
+| Run Contract | Turn valid planning documents and proved references into one canonical immutable Planned Run. | `modules/run-contract/index.ts` | `modules/run-contract/errors.ts` | `modules/run-contract/run-contract.test.ts` |
 | Testing | Prove the repository candidate through one deterministic, no-cost baseline. | `modules/testing/interface.md` | `modules/testing/errors.json` | `tests/test_deterministic_baseline.py`, `tests/test_successor_governance.py` |
 
 The remaining Conductor-led modules named by Issue #17 are added by their implementation tickets; this map never claims an unimplemented module.
