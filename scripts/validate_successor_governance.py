@@ -129,6 +129,7 @@ def validate_repository(root: Path) -> list[str]:
 
     for relative in (
         "scripts/run_deterministic_command.py",
+        "tests/baseline_guard/no_external_effects.c",
         "tests/baseline_guard/sitecustomize.py",
         "tests/baseline_guard/no_external_effects.cjs",
     ):

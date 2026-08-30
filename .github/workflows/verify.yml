@@ -42,5 +42,3 @@ jobs:
 
       - name: Run the canonical repository baseline
         run: bash scripts/verify.sh
-        env:
-          VERIFY_PYTHON: python

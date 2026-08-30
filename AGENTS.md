@@ -55,7 +55,7 @@ Report real results and distinguish inherited failures from introduced failures.
 
 The build pull request must link the governing spec, explain what the build is in plain language, maintain a changelog entry for every folded ticket, show visual proof when relevant, report exact verification, and state what the owner still decides.
 
-Before a ticket is closed, review the exact candidate twice: specification fit and engineering standards. A visual or interactive artifact additionally requires the repository's blind artifact-review procedure. Machine verification is evidence; subjective final visual approval remains human.
+Before a ticket is closed, review the exact candidate twice: specification fit and engineering standards. A visual or interactive application candidate additionally follows [`docs/agents/blind-review.md`](docs/agents/blind-review.md). Machine verification is evidence; subjective final visual approval remains human.
 
 ## Stop conditions
 

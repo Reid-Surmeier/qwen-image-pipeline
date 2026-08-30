@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import importlib.abc
 import os
+import shutil
 import socket
+import subprocess
+import sys
+import threading
+from pathlib import Path
 
 
 if os.environ.get("QWEN_BASELINE_OFFLINE") == "1":
@@ -20,3 +26,123 @@ if os.environ.get("QWEN_BASELINE_OFFLINE") == "1":
 
     socket.socket = _OfflineSocket
     socket.create_connection = _blocked
+
+    _repository = Path(os.environ["QWEN_BASELINE_REPOSITORY"]).resolve()
+    _approved_python_scripts = {
+        _repository / "scripts" / "visual_gate.py",
+        _repository / "scripts" / "audit_project_skills.py",
+        _repository / "tests" / "baseline_guard" / "probe_python_network.py",
+        _repository / "tests" / "baseline_guard" / "probe_python_descendant.py",
+        _repository / "tests" / "baseline_guard" / "probe_python_model.py",
+    }
+    _approved_node_scripts = {
+        _repository / "scripts" / "compute_skill_folder_hash.mjs",
+        _repository / "tests" / "baseline_guard" / "probe_node_network.cjs",
+        _repository / "tests" / "baseline_guard" / "probe_node_descendant.cjs",
+    }
+
+    def _approved_git(arguments: list[object] | tuple[object, ...]) -> bool:
+        if len(arguments) < 5 or tuple(map(os.fspath, arguments[1:3])) != (
+            "-C",
+            str(_repository),
+        ):
+            return False
+        command = os.fspath(arguments[3])
+        values = tuple(map(os.fspath, arguments[4:]))
+        if command == "cat-file":
+            return (
+                len(values) == 2
+                and values[0] == "-e"
+                and values[1].endswith("^{commit}")
+            )
+        if command == "show-ref":
+            return (
+                len(values) == 2
+                and values[0] == "--verify"
+                and values[1].startswith("refs/remotes/origin/")
+            )
+        if command == "rev-parse":
+            return len(values) == 1
+        if command == "show":
+            return len(values) == 1 and ":" in values[0]
+        return False
+
+    def _approved_child(arguments: object, shell: bool) -> bool:
+        if shell or not isinstance(arguments, (list, tuple)) or len(arguments) < 2:
+            return False
+        executable = shutil.which(os.fspath(arguments[0]))
+        if executable is None:
+            return False
+        script = Path(os.fspath(arguments[1])).resolve()
+        if Path(executable).resolve() == Path(sys.executable).resolve():
+            return script in _approved_python_scripts
+        if Path(executable).name == "node":
+            return script in _approved_node_scripts
+        if Path(executable).name == "git":
+            return _approved_git(arguments)
+        return False
+
+    _spawn_state = threading.local()
+    _original_popen = subprocess.Popen
+
+    class _OfflinePopen(_original_popen):
+        def __init__(self, args: object, *popen_args: object, **popen_kwargs: object) -> None:
+            if not _approved_child(args, bool(popen_kwargs.get("shell", False))):
+                raise PermissionError("descendant process is disabled in the deterministic baseline")
+            _spawn_state.approved = True
+            try:
+                super().__init__(args, *popen_args, **popen_kwargs)
+            finally:
+                _spawn_state.approved = False
+
+    subprocess.Popen = _OfflinePopen
+
+    class _BlockedModelFinder(importlib.abc.MetaPathFinder):
+        _blocked_roots = {
+            "comfy",
+            "diffusers",
+            "onnxruntime",
+            "openai",
+            "tensorflow",
+            "torch",
+            "transformers",
+        }
+
+        def find_spec(
+            self,
+            fullname: str,
+            path: object = None,
+            target: object = None,
+        ) -> None:
+            if fullname.partition(".")[0] in self._blocked_roots:
+                raise ImportError(
+                    "model inference is disabled in the deterministic baseline"
+                )
+            return None
+
+    sys.meta_path.insert(0, _BlockedModelFinder())
+
+    def _blocked_child(*_args: object, **_kwargs: object) -> None:
+        raise PermissionError("descendant process is disabled in the deterministic baseline")
+
+    os.system = _blocked_child
+    for _name in (
+        "execl",
+        "execle",
+        "execlp",
+        "execlpe",
+        "execv",
+        "execve",
+        "execvp",
+        "execvpe",
+        "spawnl",
+        "spawnle",
+        "spawnlp",
+        "spawnlpe",
+        "spawnv",
+        "spawnve",
+        "spawnvp",
+        "spawnvpe",
+    ):
+        if hasattr(os, _name):
+            setattr(os, _name, _blocked_child)

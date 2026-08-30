@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Mapping, Sequence
 
@@ -38,15 +41,64 @@ GIT_COMMANDS = {("diff", "--check")}
 def validate_command(command: Sequence[str]) -> None:
     if not command:
         raise ValueError("missing deterministic baseline command")
+    executable_path = shutil.which(command[0])
     executable = Path(command[0]).name
     arguments = tuple(command[1:])
-    allowed = (
-        (executable.startswith("python"), arguments in PYTHON_COMMANDS),
-        (executable == "node", arguments in NODE_COMMANDS),
-        (executable == "git", arguments in GIT_COMMANDS),
+    is_current_python = (
+        executable_path is not None
+        and Path(executable_path).resolve() == Path(sys.executable).resolve()
     )
-    if not any(matches_executable and matches_arguments for matches_executable, matches_arguments in allowed):
+    selected_node = shutil.which("node")
+    selected_git = shutil.which("git")
+    is_selected_node = (
+        executable_path is not None
+        and selected_node is not None
+        and Path(executable_path).resolve() == Path(selected_node).resolve()
+    )
+    is_selected_git = (
+        executable_path is not None
+        and selected_git is not None
+        and Path(executable_path).resolve() == Path(selected_git).resolve()
+    )
+    allowed = (
+        (is_current_python, arguments in PYTHON_COMMANDS),
+        (is_selected_node, arguments in NODE_COMMANDS),
+        (is_selected_git, arguments in GIT_COMMANDS),
+    )
+    if not any(
+        matches_executable and matches_arguments
+        for matches_executable, matches_arguments in allowed
+    ):
         raise ValueError(f"command is not part of the deterministic baseline: {executable}")
+
+
+def _native_guard(repository: Path) -> Path:
+    source = repository / "tests" / "baseline_guard" / "no_external_effects.c"
+    source_bytes = source.read_bytes()
+    digest = hashlib.sha256(source_bytes).hexdigest()[:16]
+    guard_directory = Path(tempfile.gettempdir()) / "qwen-image-pipeline-baseline"
+    guard_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    output = guard_directory / f"no_external_effects-{digest}.so"
+    if output.is_file():
+        return output
+    compiler = shutil.which("cc")
+    if compiler is None:
+        raise RuntimeError(
+            "the deterministic baseline requires a C compiler for process isolation"
+        )
+    temporary = output.with_suffix(f".{os.getpid()}.tmp")
+    completed = subprocess.run(
+        [compiler, "-shared", "-fPIC", "-O2", "-o", temporary, source, "-ldl"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            completed.stderr.strip() or "failed to compile baseline process guard"
+        )
+    os.replace(temporary, output)
+    return output
 
 
 def build_environment(source: Mapping[str, str], repository: Path) -> dict[str, str]:
@@ -60,10 +112,12 @@ def build_environment(source: Mapping[str, str], repository: Path) -> dict[str, 
         {
             "GIT_CONFIG_GLOBAL": os.devnull,
             "GIT_CONFIG_NOSYSTEM": "1",
+            "LD_PRELOAD": str(_native_guard(repository)),
             "NODE_OPTIONS": f"--require={guard_directory / 'no_external_effects.cjs'}",
             "PYTHONPATH": str(guard_directory),
             "PYTHONUTF8": "1",
             "QWEN_BASELINE_OFFLINE": "1",
+            "QWEN_BASELINE_REPOSITORY": str(repository.resolve()),
         }
     )
     return environment
