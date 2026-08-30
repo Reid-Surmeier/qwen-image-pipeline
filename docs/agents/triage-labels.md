@@ -10,7 +10,7 @@ Labels describe executable state; native blocked-by relationships describe order
 | `blocked` | A named external dependency prevents useful progress. |
 | `needs-human-review` | Owner-applied repository brake; agents never apply it. |
 | `ready-for-human` | The build presents a genuine owner decision with evidence. |
-| `ready-to-fold` | Ticket evidence and reviews pass and its commit may join the build line. |
+| `ready-to-fold` | A ticket commit already on the build line has passed acceptance and both reviews and may be recorded in the build changelog. |
 | `folded-into-release` | The exact ticket commit is recorded in the build changelog. |
 | `not-a-release` | A supporting or historical pull request is not the owner review surface. |
 

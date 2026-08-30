@@ -32,7 +32,8 @@ Write a failing acceptance test through the public interface before changing beh
 ## Generation guardrails
 
 - OpenRouter is the only paid provider route.
-- Use the smallest useful batch and record the pre-submission decision before spending.
+- Use the smallest useful batch, lock the explicit provider, model, and spend ceiling, and record the pre-submission decision before spending. The standing Issue/PR ceiling remains 10 cumulative output images unless an owner-approved governing Issue states a lower limit.
+- Durably reserve the Run Record immediately before the single provider attempt so interruption cannot erase the possibility that money was spent.
 - Persist request identity, provider/model, inputs and hashes, seed, counts, timestamps, cost when exposed, output paths and hashes, raw provider errors, and retry safety.
 - An ambiguous possibly billed request is counted as spent and is never retried blindly.
 - A required reference must exist, match its recorded hash, and reach the exact provider request; otherwise refuse before submission.
@@ -42,7 +43,7 @@ Write a failing acceptance test through the public interface before changing beh
 
 ## Verification and commits
 
-Run the one deterministic baseline before committing and again on the integrated build line:
+Run the one deterministic baseline before committing and again on the integrated build line. It admits only the documented command set, strips credential-bearing environment variables, and installs Python and Node network guards:
 
 ```bash
 scripts/verify.sh

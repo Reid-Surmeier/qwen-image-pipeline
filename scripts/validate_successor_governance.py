@@ -107,6 +107,17 @@ def validate_repository(root: Path) -> list[str]:
         verify_text = verify.read_text(encoding="utf-8")
         if "validate_successor_governance.py" not in verify_text:
             problems.append("canonical baseline omits successor governance validation")
+        if "run_deterministic_command.py" not in verify_text:
+            problems.append("canonical baseline omits the deterministic command runner")
+        if "VERIFY_PYTHON" in verify_text:
+            problems.append("canonical baseline permits an environment-selected executable")
+        command_lines = [
+            line.strip()
+            for line in verify_text.splitlines()
+            if line.strip().startswith("run_check ")
+        ]
+        if any('${DETERMINISTIC_RUNNER[@]}' not in line for line in command_lines):
+            problems.append("a canonical baseline check bypasses the deterministic runner")
         executable_lines = "\n".join(
             line.strip()
             for line in verify_text.splitlines()
@@ -115,6 +126,14 @@ def validate_repository(root: Path) -> list[str]:
         for command in FORBIDDEN_BASELINE_COMMANDS:
             if command in executable_lines:
                 problems.append(f"canonical baseline contains external or paid command: {command}")
+
+    for relative in (
+        "scripts/run_deterministic_command.py",
+        "tests/baseline_guard/sitecustomize.py",
+        "tests/baseline_guard/no_external_effects.cjs",
+    ):
+        if not (root / relative).is_file():
+            problems.append(f"missing deterministic baseline guard: {relative}")
 
     sweep = root / ".sandcastle" / "sweep.json"
     if not sweep.is_file():
