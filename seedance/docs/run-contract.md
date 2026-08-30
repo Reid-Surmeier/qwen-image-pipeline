@@ -10,6 +10,7 @@ capabilities.json          selected live profile and canonical model slug
 plan.json                  request hash, estimate, approval/submission flag
 job.json                   resumable OpenRouter job identity
 completed-job.json         terminal provider response
+provider-error.json        sanitized structured HTTP failure when submission is rejected
 inputs/                    optional copied source evidence
 outputs/output.mp4         downloaded provider result
 outputs/sha256.json        immutable output digest
@@ -24,6 +25,17 @@ Before submission, the CLI recomputes `request_sha256`, re-fetches capabilities,
 refuses either a payload changed since planning or a changed canonical model version.
 The exact decimal estimate must be provided to `--acknowledge-cost`. This gate documents
 approval; it does not promise the provider invoice will equal the estimate.
+
+`submit` constructs the credentialed client first, then marks the paid action as performed
+immediately before sending the POST. A missing local credential therefore is not recorded as
+a provider attempt, while a rejected POST is never represented as an unpaid plan. HTTP failures retain the operation,
+status, endpoint, parsed provider error when the body is JSON, a size-capped sanitized
+response body, and only allowlisted response identifiers. The cap is 64 KiB after UTF-8
+encoding, redaction, and any invalid-byte replacement. Sensitive JSON fields and recognized
+authorization, bearer, token, key, cookie, password, secret, and credential-URL forms are
+redacted. Request headers are never written. A failed submission is classified
+`billing_status: possibly_spent` and `safe_to_retry: false`; it is not retried by the
+client.
 
 
 ## Strategy gate (enforced at plan time; owner instruction 2026-08-27)

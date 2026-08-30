@@ -15,7 +15,13 @@ from .capabilities import (
     select_model,
     validate_request,
 )
-from .openrouter import OpenRouterVideoClient, asset_reference, request_digest, sanitized_request
+from .openrouter import (
+    OpenRouterHTTPError,
+    OpenRouterVideoClient,
+    asset_reference,
+    request_digest,
+    sanitized_request,
+)
 from .runs import create_run, read_job_id, write_json
 from .strategy import DEFAULT_GRAMMAR, check_strategy, gate_record, submit_allowed
 from .verify import verify_video
@@ -152,11 +158,25 @@ def cmd_submit(args: argparse.Namespace) -> None:
     validate_request(request, profile)
     client = OpenRouterVideoClient()
     try:
+        plan.update(
+            {
+                "paid_submission_performed": True,
+                "submission_status": "submitting",
+                "billing_status": "possibly_spent",
+                "safe_to_retry": False,
+            }
+        )
+        write_json(run / "plan.json", plan)
         job = client.submit(request)
+    except OpenRouterHTTPError as error:
+        plan["submission_status"] = "failed"
+        write_json(run / "plan.json", plan)
+        write_json(run / "provider-error.json", error.to_record())
+        raise
     finally:
         client.close()
     write_json(run / "job.json", job)
-    plan["paid_submission_performed"] = True
+    plan["submission_status"] = "accepted"
     write_json(run / "plan.json", plan)
     print(json.dumps(job, indent=2))
 
