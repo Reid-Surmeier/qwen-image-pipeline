@@ -1,12 +1,16 @@
 import subprocess
 import sys
+import os
 from pathlib import Path
 
 
 repository = Path(__file__).resolve().parents[2]
 probes = (
     [sys.executable, repository / "tests" / "baseline_guard" / "probe_python_udp.py"],
-    ["/usr/bin/node", repository / "tests" / "baseline_guard" / "probe_node_udp.cjs"],
+    [
+        os.environ["QWEN_BASELINE_NODE"],
+        repository / "tests" / "baseline_guard" / "probe_node_udp.cjs",
+    ],
 )
 for probe in probes:
     completed = subprocess.run(
