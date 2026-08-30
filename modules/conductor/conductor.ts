@@ -65,6 +65,9 @@ const refusalGuidance = {
   SEEDANCE_VIDEO_REFERENCE_REQUIRED: fixReference,
 } satisfies Record<PlanningRefusalCode, RefusalGuidance>
 
+const isPlanningRefusalCode = (value: unknown): value is PlanningRefusalCode =>
+  typeof value === "string" && Object.hasOwn(refusalGuidance, value)
+
 const isSafeObjectivePath = (path: string): boolean =>
   path.length > 0 &&
   !path.startsWith("/") &&
@@ -106,10 +109,10 @@ const asRefusal = (error: unknown): PlanningRefusal => {
     error !== null &&
     typeof error === "object" &&
     "code" in error &&
-    typeof error.code === "string"
+    isPlanningRefusalCode(error.code)
   ) {
     return {
-      code: error.code as PlanningRefusalCode,
+      code: error.code,
       message: error instanceof Error ? error.message : error.code,
     }
   }

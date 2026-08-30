@@ -110,7 +110,7 @@ const moneyCents = (value: string, field: string): number => {
 const formatCents = (cents: number): string =>
   `${Math.floor(cents / 100)}.${String(cents % 100).padStart(2, "0")}`
 
-const secretFieldName = /(?:credential|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|password|token|authorization)/i
+const secretFieldName = /(?:credential|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|password|secret|token|authorization)/i
 
 const parsedValueHasSecret = (value: unknown, fieldName?: string): boolean => {
   if (fieldName !== undefined && secretFieldName.test(fieldName)) {
@@ -140,7 +140,7 @@ const hasSecretMaterial = (raw: string): boolean => {
     parsed = undefined
   }
   return parsedValueHasSecret(parsed) ||
-    /"(?:credential|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|token|authorization|password)"\s*:/i.test(withoutLogicalCredential) ||
+    /"(?:credential|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|token|authorization|password|secret)"\s*:/i.test(withoutLogicalCredential) ||
     /(?:sk-|Bearer\s+)[A-Za-z0-9_-]{6,}/i.test(withoutLogicalCredential) ||
     /https?:\/\/[^/\s:@]+:[^/\s@]+@/i.test(withoutLogicalCredential)
 }

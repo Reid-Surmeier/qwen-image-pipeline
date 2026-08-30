@@ -7,7 +7,7 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "lint:seams": "depcruise --config .dependency-cruiser.cjs modules",
-    "test:control": "node --import tsx --test modules/conductor/conductor.test.ts modules/reference-planning/reference-planning.test.ts modules/run-contract/run-contract.test.ts",
+    "test:control": "node scripts/run-control-tests.mjs",
     "vendored:check": "node scripts/vendored-check.mjs",
     "check:control": "npm run typecheck && npm run lint:seams && npm run test:control && npm run vendored:check"
   },
@@ -17,7 +17,6 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "dependency-cruiser": "^17.0.0",
-    "tsx": "^4.20.0",
     "typescript": "^5.9.0"
   },
   "engines": {

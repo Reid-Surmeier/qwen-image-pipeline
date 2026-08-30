@@ -144,6 +144,7 @@ export const planReferenceInputs = (
   const files = yield* ApplicationFiles
   const inspector = yield* MediaInspector
   const references: Array<LockedReference> = []
+  const occupiedPayloadDestinations = new Set<string>()
 
   for (const requirement of [...input.requirements].sort((a, b) => a.slot.localeCompare(b.slot))) {
     const candidate = input.candidates.find((item) => item.slot === requirement.slot)
@@ -169,6 +170,7 @@ export const planReferenceInputs = (
     }
     if (
       !isProviderPayloadDestination(input.mode, requirement.kind, requirement.payloadDestination) ||
+      occupiedPayloadDestinations.has(requirement.payloadDestination) ||
       candidate.payloadDestination !== requirement.payloadDestination
     ) {
       return yield* Effect.fail(new ReferencePlanningError(
@@ -177,6 +179,7 @@ export const planReferenceInputs = (
         candidate.path,
       ))
     }
+    occupiedPayloadDestinations.add(requirement.payloadDestination)
     if (candidate.kind !== requirement.kind) {
       const code = input.mode === "seedance-video" && requirement.kind === "video"
         ? "SEEDANCE_VIDEO_REFERENCE_REQUIRED"

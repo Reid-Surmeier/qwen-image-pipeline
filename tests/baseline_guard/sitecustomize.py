@@ -83,7 +83,10 @@ if os.environ.get("QWEN_BASELINE_OFFLINE") == "1":
         if executable_path == _pinned_executables["python"]:
             return script in _approved_scripts
         if executable_path == _pinned_executables["node"]:
-            return script in _approved_scripts
+            return (
+                script in _approved_scripts
+                or tuple(map(os.fspath, arguments[1:])) == ("--version",)
+            )
         if executable_path == _pinned_executables["git"]:
             return _approved_git(arguments)
         return False

@@ -41,14 +41,7 @@ NODE_COMMANDS = {
         ".dependency-cruiser.cjs",
         "modules",
     ),
-    (
-        "--import",
-        "tsx",
-        "--test",
-        "modules/conductor/conductor.test.ts",
-        "modules/reference-planning/reference-planning.test.ts",
-        "modules/run-contract/run-contract.test.ts",
-    ),
+    ("scripts/run-control-tests.mjs",),
     ("scripts/vendored-check.mjs",),
 }
 GIT_COMMANDS = {("diff", "--check")}
@@ -99,11 +92,27 @@ def _toolcache_node_candidates(root: Path = Path("/opt/hostedtoolcache/node")) -
     )
 
 
+def _node_major(candidate: Path) -> int | None:
+    completed = subprocess.run(
+        [candidate, "--version"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    major = completed.stdout.strip().removeprefix("v").split(".", 1)[0]
+    return int(major) if major.isdigit() else None
+
+
 def _trusted_node() -> Path:
     candidates = [Path("/usr/bin/node")]
     candidates.extend(_toolcache_node_candidates())
     for candidate in candidates:
-        if candidate.is_file() and os.access(candidate, os.X_OK):
+        if (
+            candidate.is_file()
+            and os.access(candidate, os.X_OK)
+            and _node_major(candidate) == TRUSTED_NODE_MAJOR
+        ):
             return candidate.resolve()
     raise RuntimeError(
         f"missing deterministic baseline tool: Node {TRUSTED_NODE_MAJOR}"

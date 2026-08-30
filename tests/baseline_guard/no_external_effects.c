@@ -205,7 +205,11 @@ static int approved_exec(const char *path, char *const argv[]) {
     if (argv == NULL || !resolve_executable(path, resolved)) {
         return 0;
     }
-    if (strcmp(resolved, pinned_python) == 0 || strcmp(resolved, pinned_node) == 0) {
+    if (strcmp(resolved, pinned_node) == 0) {
+        return (argv[1] != NULL && strcmp(argv[1], "--version") == 0 && argv[2] == NULL)
+            || approved_script(argv[1]);
+    }
+    if (strcmp(resolved, pinned_python) == 0) {
         return approved_script(argv[1]);
     }
     return strcmp(resolved, pinned_git) == 0 && approved_git_arguments(argv);

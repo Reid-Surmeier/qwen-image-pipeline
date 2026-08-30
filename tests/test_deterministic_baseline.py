@@ -32,7 +32,12 @@ class DeterministicBaselineTests(unittest.TestCase):
 
             self.assertEqual(_toolcache_node_candidates(root), [node22])
         self.assertEqual(TRUSTED_NODE_MAJOR, 22)
-        self.assertEqual(_trusted_node().name, "node")
+        self.assertIn("v22.", subprocess.run(
+            [_trusted_node(), "--version"],
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout)
 
     def test_only_the_documented_baseline_commands_are_allowed(self) -> None:
         validate_command(("@python", "-m", "unittest", "discover", "-s", "tests"))
@@ -48,15 +53,7 @@ class DeterministicBaselineTests(unittest.TestCase):
             )
         )
         validate_command(
-            (
-                "@node",
-                "--import",
-                "tsx",
-                "--test",
-                "modules/conductor/conductor.test.ts",
-                "modules/reference-planning/reference-planning.test.ts",
-                "modules/run-contract/run-contract.test.ts",
-            )
+            ("@node", "scripts/run-control-tests.mjs")
         )
         validate_command(("@node", "scripts/vendored-check.mjs"))
 

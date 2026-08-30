@@ -3,6 +3,7 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 node_modules/
+.control-tests-*/
 
 # Discovery screenshots are reproducible from the Figma board.
 artifacts/figma/candidates/
