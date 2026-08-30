@@ -39,6 +39,8 @@ jobs:
         with:
           python-version: "3.12"
       - name: Refuse missing, held, or stale review evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: python3 scripts/release_steward.py verify-tag "$GITHUB_REF_NAME" --repo .
       - name: Merge only the exact build PR through protected main
         env:

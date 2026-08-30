@@ -15,6 +15,7 @@ jobs:
   release-train:
     name: release-train
     runs-on: ubuntu-latest
+    environment: release-train
     timeout-minutes: 5
     steps:
       - name: Check out the immutable tag
@@ -27,6 +28,8 @@ jobs:
         with:
           python-version: "3.12"
       - name: Require current exact-SHA ship evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: python3 scripts/release_steward.py verify-tag "$GITHUB_REF_NAME" --repo .
       - name: Bind the tag to its exact open build PR
         env:

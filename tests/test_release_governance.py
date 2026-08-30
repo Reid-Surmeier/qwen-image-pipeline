@@ -415,6 +415,8 @@ class WorkflowContractTests(unittest.TestCase):
         self.assertIn("commits/$tag_sha/check-runs", release)
         self.assertIn('.name == "release-train"', release)
         self.assertNotIn("gh pr checks", release)
+        self.assertEqual(train.count("GH_TOKEN: ${{ github.token }}"), 2)
+        self.assertEqual(release.count("GH_TOKEN: ${{ github.token }}"), 3)
 
     def test_main_ruleset_requires_release_train_and_only_owner_bypasses(self) -> None:
         request = json.loads(
@@ -434,6 +436,39 @@ class WorkflowContractTests(unittest.TestCase):
             checks,
             [{"context": "release-train", "integration_id": 15368}],
         )
+        self.assertEqual(
+            rules["required_deployments"]["parameters"],
+            {"required_deployment_environments": ["release-train"]},
+        )
+
+    def test_spoofed_check_cannot_replace_the_owner_cut_tag_deployment(self) -> None:
+        tag_ruleset = json.loads(
+            (ROOT / "docs/releases/v0.3.0/tag-ruleset-request.json").read_text()
+        )
+        self.assertEqual(tag_ruleset["target"], "tag")
+        self.assertEqual(tag_ruleset["conditions"]["ref_name"]["include"], ["refs/tags/v*"])
+        self.assertEqual(
+            tag_ruleset["bypass_actors"],
+            [{"actor_id": 304586061, "actor_type": "User", "bypass_mode": "always"}],
+        )
+        self.assertEqual(
+            {rule["type"] for rule in tag_ruleset["rules"]},
+            {"creation", "update", "deletion", "non_fast_forward"},
+        )
+        environment = json.loads(
+            (ROOT / "docs/releases/v0.3.0/release-train-environment-live.json").read_text()
+        )
+        policy = json.loads(
+            (ROOT / "docs/releases/v0.3.0/release-train-environment-policy-live.json").read_text()
+        )
+        self.assertEqual(environment["name"], "release-train")
+        self.assertEqual(
+            environment["deployment_branch_policy"],
+            {"protected_branches": False, "custom_branch_policies": True},
+        )
+        self.assertEqual((policy["name"], policy["type"]), ("v*", "tag"))
+        train = (ROOT / ".github/workflows/release-train.yml").read_text()
+        self.assertIn("environment: release-train", train)
 
 
 if __name__ == "__main__":

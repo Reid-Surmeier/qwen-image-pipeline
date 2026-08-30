@@ -1,0 +1,49 @@
+{
+  "id": 21882710,
+  "name": "version tags are owner-cut",
+  "target": "tag",
+  "source_type": "Repository",
+  "source": "Reid-Surmeier/qwen-image-pipeline",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "exclude": [],
+      "include": [
+        "refs/tags/v*"
+      ]
+    }
+  },
+  "rules": [
+    {
+      "type": "creation"
+    },
+    {
+      "type": "update"
+    },
+    {
+      "type": "deletion"
+    },
+    {
+      "type": "non_fast_forward"
+    }
+  ],
+  "node_id": "RRS_lACqUmVwb3NpdG9yec5Qj4ZezgFN51Y",
+  "created_at": "2026-08-30T18:23:56.180-04:00",
+  "updated_at": "2026-08-30T18:23:56.228-04:00",
+  "bypass_actors": [
+    {
+      "actor_id": 304586061,
+      "actor_type": "User",
+      "bypass_mode": "always"
+    }
+  ],
+  "current_user_can_bypass": "always",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/Reid-Surmeier/qwen-image-pipeline/rulesets/21882710"
+    },
+    "html": {
+      "href": "https://github.com/Reid-Surmeier/qwen-image-pipeline/rules/21882710"
+    }
+  }
+}

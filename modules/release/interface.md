@@ -21,7 +21,10 @@ Status: frozen by Issue #19.
   every dirty worktree are always kept.
 - `.github/workflows/release-train.yml` emits the required status only for an
   annotated `v<version>` tag with current exact-SHA ship evidence and exactly
-  one matching open build PR. `.github/workflows/release.yml` revalidates tag
+  one matching open build PR. The job also records the required
+  `release-train` deployment, whose environment accepts only protected `v*`
+  tag refs. A separate owner-only tag ruleset refuses creation, movement, or
+  deletion of those refs by ordinary contents writers. `.github/workflows/release.yml` revalidates tag
   evidence, runs Verify, polls the exact tag commit until that required GitHub
   Actions check exists and succeeds, and merges only the
   head SHA it already matched through GitHub's protected-branch path.
