@@ -123,6 +123,17 @@ const sameMedia = (actual: MediaProperties, declared: MediaProperties): boolean 
     (actual.durationSeconds !== undefined &&
       Math.abs(actual.durationSeconds - declared.durationSeconds) <= 0.001))
 
+const isProviderPayloadDestination = (
+  mode: ReferencePlanningInput["mode"],
+  kind: MediaKind,
+  destination: string,
+): boolean => {
+  const match = /^\/input_references\/(0|[1-9]\d*)\/(image_url|video_url)\/url$/.exec(destination)
+  if (match === null) return false
+  if (mode === "qwen-image") return kind === "image" && match[2] === "image_url"
+  return kind === "video" && match[2] === "video_url"
+}
+
 export const planReferenceInputs = (
   input: ReferencePlanningInput,
 ): Effect.Effect<
@@ -156,7 +167,10 @@ export const planReferenceInputs = (
         candidate.path,
       ))
     }
-    if (candidate.payloadDestination !== requirement.payloadDestination) {
+    if (
+      !isProviderPayloadDestination(input.mode, requirement.kind, requirement.payloadDestination) ||
+      candidate.payloadDestination !== requirement.payloadDestination
+    ) {
       return yield* Effect.fail(new ReferencePlanningError(
         "PAYLOAD_DESTINATION_INVALID",
         `Reference ${requirement.slot} does not target the locked provider payload location.`,
@@ -176,9 +190,9 @@ export const planReferenceInputs = (
 
     const snapshot = yield* files.read(candidate.path).pipe(
       Effect.mapError((error) => error.code === "APPLICATION_PATH_MISSING"
-        ? new ReferencePlanningError(
+          ? new ReferencePlanningError(
             "REFERENCE_MISSING",
-            `Reference ${requirement.slot} does not exist.`,
+            `Reference ${requirement.slot} at ${candidate.path} does not exist.`,
             candidate.path,
           )
         : error),

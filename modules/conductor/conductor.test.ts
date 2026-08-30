@@ -60,11 +60,22 @@ const refusalCases: ReadonlyArray<
   ["wrong kind", "qwen-image", { objective: (o) => ((o.references as Array<Record<string, unknown>>)[0]!.kind = "video") }, "REFERENCE_KIND_MISMATCH"],
   ["unsafe path", "qwen-image", { objective: (o) => ((o.references as Array<Record<string, unknown>>)[0]!.path = "../secret.png") }, "REFERENCE_PATH_UNSAFE"],
   ["secret bearing", "qwen-image", { objective: (o) => (o.apiKey = "sk-secret-value") }, "SECRET_MATERIAL_DETECTED"],
+  ["unknown credential field", "qwen-image", { objective: (o) => (o.credential = "actual-private-value") }, "SECRET_MATERIAL_DETECTED"],
   ["over count", "qwen-image", { objective: (o) => (o.requestedCount = 5) }, "COUNT_OUT_OF_RANGE"],
   ["over budget", "qwen-image", { objective: (o) => (o.budgetCeilingUsd = "0.01") }, "BUDGET_EXCEEDED"],
   ["mismatched exact Tool Lock", "qwen-image", { toolLock: (lock) => (lock.commit = "3".repeat(40)) }, "TOOL_LOCK_MISMATCH"],
   ["missing fixed Project Contract", "qwen-image", { files: (files) => files.delete(PROJECT_CONTRACT_PATH) }, "PROJECT_CONTRACT_MISSING"],
   ["missing fixed Tool Lock", "qwen-image", { files: (files) => files.delete(TOOL_LOCK_PATH) }, "TOOL_LOCK_MISSING"],
+  ["matching but invalid payload destination", "seedance-video", {
+    contract: (contract) => {
+      const procedures = contract.procedures as Array<Record<string, unknown>>
+      const seedance = procedures.find((procedure) => procedure.id === "seedance-neutral")!
+      ;(seedance.referenceRequirements as Array<Record<string, unknown>>)[0]!.payloadDestination = "not-a-json-pointer"
+    },
+    objective: (objective) => {
+      ;(objective.references as Array<Record<string, unknown>>)[0]!.payloadDestination = "not-a-json-pointer"
+    },
+  }, "PAYLOAD_DESTINATION_INVALID"],
   ["image-only Seedance video", "seedance-video", { objective: (o) => ((o.references as Array<Record<string, unknown>>)[0]!.kind = "image") }, "SEEDANCE_VIDEO_REFERENCE_REQUIRED"],
 ]
 
@@ -79,3 +90,14 @@ for (const [name, mode, mutation, expectedCode] of refusalCases) {
     assert.ok(result.normalView.evidence.length > 0)
   })
 }
+
+test("a refusal view names the real objective and missing evidence", async () => {
+  const { result } = await execute("qwen-image", {
+    files: (files) => files.delete("references/neutral.png"),
+  })
+  assert.equal(result._tag, "Refused")
+  if (result._tag !== "Refused") return
+  assert.match(result.normalView.objective, /edit a neutral square/i)
+  assert.match(result.normalView.evidence, /references\/neutral\.png/i)
+  assert.match(result.normalView.evidence, /does not exist/i)
+})

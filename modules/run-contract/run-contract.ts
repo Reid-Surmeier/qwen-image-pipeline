@@ -110,9 +110,37 @@ const moneyCents = (value: string, field: string): number => {
 const formatCents = (cents: number): string =>
   `${Math.floor(cents / 100)}.${String(cents % 100).padStart(2, "0")}`
 
+const secretFieldName = /(?:credential|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|password|token|authorization)/i
+
+const parsedValueHasSecret = (value: unknown, fieldName?: string): boolean => {
+  if (fieldName !== undefined && secretFieldName.test(fieldName)) {
+    if (fieldName === "credentialLogicalName" && value === "OPENROUTER_API_KEY") {
+      return false
+    }
+    return true
+  }
+  if (typeof value === "string") {
+    return /(?:sk-|gh[pousr]_|Bearer\s+)[A-Za-z0-9_-]{6,}/i.test(value) ||
+      /-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(value) ||
+      /https?:\/\/[^/\s:@]+:[^/\s@]+@/i.test(value)
+  }
+  if (Array.isArray(value)) return value.some((item) => parsedValueHasSecret(item))
+  if (value !== null && typeof value === "object") {
+    return Object.entries(value).some(([key, child]) => parsedValueHasSecret(child, key))
+  }
+  return false
+}
+
 const hasSecretMaterial = (raw: string): boolean => {
   const withoutLogicalCredential = raw.replaceAll("OPENROUTER_API_KEY", "")
-  return /"(?:api[_-]?key|token|authorization|password|secret)"\s*:/i.test(withoutLogicalCredential) ||
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    parsed = undefined
+  }
+  return parsedValueHasSecret(parsed) ||
+    /"(?:credential|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|token|authorization|password)"\s*:/i.test(withoutLogicalCredential) ||
     /(?:sk-|Bearer\s+)[A-Za-z0-9_-]{6,}/i.test(withoutLogicalCredential) ||
     /https?:\/\/[^/\s:@]+:[^/\s@]+@/i.test(withoutLogicalCredential)
 }
