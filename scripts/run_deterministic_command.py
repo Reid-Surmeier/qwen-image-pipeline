@@ -37,6 +37,20 @@ NODE_COMMANDS = {
 }
 GIT_COMMANDS = {("diff", "--check")}
 
+SAFE_CHILD_SCRIPTS = (
+    "scripts/visual_gate.py",
+    "scripts/audit_project_skills.py",
+    "scripts/compute_skill_folder_hash.mjs",
+    "tests/baseline_guard/probe_python_network.py",
+    "tests/baseline_guard/probe_python_udp.py",
+    "tests/baseline_guard/probe_python_descendant.py",
+    "tests/baseline_guard/probe_python_substitution.py",
+    "tests/baseline_guard/probe_python_model.py",
+    "tests/baseline_guard/probe_node_network.cjs",
+    "tests/baseline_guard/probe_node_udp.cjs",
+    "tests/baseline_guard/probe_node_descendant.cjs",
+)
+
 
 def validate_command(command: Sequence[str]) -> None:
     if not command:
@@ -108,6 +122,10 @@ def build_environment(source: Mapping[str, str], repository: Path) -> dict[str, 
         if name in source
     }
     guard_directory = repository / "tests" / "baseline_guard"
+    node = shutil.which("node")
+    git = shutil.which("git")
+    if node is None or git is None:
+        raise RuntimeError("the deterministic baseline requires Node and Git")
     environment.update(
         {
             "GIT_CONFIG_GLOBAL": os.devnull,
@@ -118,6 +136,13 @@ def build_environment(source: Mapping[str, str], repository: Path) -> dict[str, 
             "PYTHONUTF8": "1",
             "QWEN_BASELINE_OFFLINE": "1",
             "QWEN_BASELINE_REPOSITORY": str(repository.resolve()),
+            "QWEN_BASELINE_PYTHON": str(Path(sys.executable).resolve()),
+            "QWEN_BASELINE_NODE": str(Path(node).resolve()),
+            "QWEN_BASELINE_GIT": str(Path(git).resolve()),
+            "QWEN_BASELINE_ALLOWED_SCRIPTS": os.pathsep.join(
+                str((repository / relative).resolve())
+                for relative in SAFE_CHILD_SCRIPTS
+            ),
         }
     )
     return environment

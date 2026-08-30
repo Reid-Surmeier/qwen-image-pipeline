@@ -2,6 +2,7 @@
 
 if (process.env.QWEN_BASELINE_OFFLINE === "1") {
   const net = require("node:net");
+  const dgram = require("node:dgram");
   const childProcess = require("node:child_process");
 
   const blockedNetwork = () => {
@@ -13,6 +14,8 @@ if (process.env.QWEN_BASELINE_OFFLINE === "1") {
   };
 
   net.Socket.prototype.connect = blockedNetwork;
+  dgram.Socket.prototype.connect = blockedNetwork;
+  dgram.Socket.prototype.send = blockedNetwork;
   globalThis.fetch = blockedNetwork;
   for (const name of [
     "exec",

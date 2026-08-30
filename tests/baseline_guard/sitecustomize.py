@@ -24,21 +24,26 @@ if os.environ.get("QWEN_BASELINE_OFFLINE") == "1":
             _blocked()
             return 1
 
+        def sendto(self, *_args: object, **_kwargs: object) -> int:
+            _blocked()
+            return 0
+
+        def sendmsg(self, *_args: object, **_kwargs: object) -> int:
+            _blocked()
+            return 0
+
     socket.socket = _OfflineSocket
     socket.create_connection = _blocked
 
     _repository = Path(os.environ["QWEN_BASELINE_REPOSITORY"]).resolve()
-    _approved_python_scripts = {
-        _repository / "scripts" / "visual_gate.py",
-        _repository / "scripts" / "audit_project_skills.py",
-        _repository / "tests" / "baseline_guard" / "probe_python_network.py",
-        _repository / "tests" / "baseline_guard" / "probe_python_descendant.py",
-        _repository / "tests" / "baseline_guard" / "probe_python_model.py",
+    _approved_scripts = {
+        Path(value).resolve()
+        for value in os.environ["QWEN_BASELINE_ALLOWED_SCRIPTS"].split(os.pathsep)
     }
-    _approved_node_scripts = {
-        _repository / "scripts" / "compute_skill_folder_hash.mjs",
-        _repository / "tests" / "baseline_guard" / "probe_node_network.cjs",
-        _repository / "tests" / "baseline_guard" / "probe_node_descendant.cjs",
+    _pinned_executables = {
+        "python": Path(os.environ["QWEN_BASELINE_PYTHON"]).resolve(),
+        "node": Path(os.environ["QWEN_BASELINE_NODE"]).resolve(),
+        "git": Path(os.environ["QWEN_BASELINE_GIT"]).resolve(),
     }
 
     def _approved_git(arguments: list[object] | tuple[object, ...]) -> bool:
@@ -73,12 +78,13 @@ if os.environ.get("QWEN_BASELINE_OFFLINE") == "1":
         executable = shutil.which(os.fspath(arguments[0]))
         if executable is None:
             return False
+        executable_path = Path(executable).resolve()
         script = Path(os.fspath(arguments[1])).resolve()
-        if Path(executable).resolve() == Path(sys.executable).resolve():
-            return script in _approved_python_scripts
-        if Path(executable).name == "node":
-            return script in _approved_node_scripts
-        if Path(executable).name == "git":
+        if executable_path == _pinned_executables["python"]:
+            return script in _approved_scripts
+        if executable_path == _pinned_executables["node"]:
+            return script in _approved_scripts
+        if executable_path == _pinned_executables["git"]:
             return _approved_git(arguments)
         return False
 

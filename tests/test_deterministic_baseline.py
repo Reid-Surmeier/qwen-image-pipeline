@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -60,6 +61,30 @@ class DeterministicBaselineTests(unittest.TestCase):
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("network access is disabled in the deterministic baseline", completed.stderr)
 
+    def test_python_and_node_children_cannot_send_udp(self) -> None:
+        environment = build_environment(os.environ, REPO_ROOT)
+        python = subprocess.run(
+            [sys.executable, "tests/baseline_guard/probe_python_udp.py"],
+            cwd=REPO_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        node = subprocess.run(
+            ["node", "tests/baseline_guard/probe_node_udp.cjs"],
+            cwd=REPO_ROOT,
+            env=environment,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertNotEqual(python.returncode, 0)
+        self.assertIn("network access is disabled", python.stderr)
+        self.assertNotEqual(node.returncode, 0)
+        self.assertIn("network access is disabled", node.stderr)
+
     def test_python_child_cannot_spawn_an_unlisted_descendant(self) -> None:
         completed = subprocess.run(
             [sys.executable, "tests/baseline_guard/probe_python_descendant.py"],
@@ -85,6 +110,28 @@ class DeterministicBaselineTests(unittest.TestCase):
 
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("model inference is disabled", completed.stdout)
+
+    def test_same_name_executable_substitution_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            for kind in ("git", "node", "python"):
+                fake = Path(directory) / kind
+                fake.symlink_to("/bin/echo")
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        "tests/baseline_guard/probe_python_substitution.py",
+                        str(fake),
+                        kind,
+                    ],
+                    cwd=REPO_ROOT,
+                    env=build_environment(os.environ, REPO_ROOT),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+
+                self.assertEqual(completed.returncode, 0, completed.stderr)
+                self.assertIn("substituted executable is disabled", completed.stdout)
 
     def test_node_child_cannot_open_network_or_spawn_a_descendant(self) -> None:
         environment = build_environment(os.environ, REPO_ROOT)
