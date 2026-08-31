@@ -16,13 +16,18 @@ import {
 } from "./index.js"
 import {
   GenerationAdapter,
+  invoke,
+  prepare,
   type GenerationAdapterService,
+  type GenerationResult,
 } from "../generation/index.js"
 import { MediaInspectionError, type MediaInspectorService } from "../run-contract/index.js"
 import {
   RunRecordClock,
   makeMemoryRunRecordHarness,
   readEvidence,
+  record,
+  reserve,
   type RunRecordClockService,
 } from "../run-record/index.js"
 import { makeFixture } from "../../tests/control-plane-fixture.js"
@@ -239,6 +244,7 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
         }],
       }
     }),
+    recover: () => Effect.die("normal path must not recover"),
   }
   const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
   const clock: RunRecordClockService = {
@@ -321,4 +327,65 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
   })
   assert.match(completed.normalView.evidence, /Assembly.*checks/i)
   assert.match(completed.normalView.humanDecision, /visual approval/i)
+
+  const locked = request.references[0]!
+  const prepared = await Effect.runPromise(prepare(request, [{
+    slot: locked.slot,
+    applicationPath: locked.applicationPath,
+    sha256: locked.sha256,
+    payloadDestination: locked.payloadDestination,
+    mediaType: locked.mediaType,
+    bytes: baseline,
+  }]))
+  for (const persistOutput of [false, true]) {
+    const recoveryMemory = await Effect.runPromise(makeMemoryRunRecordHarness())
+    const reserved = await Effect.runPromise(reserve({ plannedRun, payloadSha256: prepared.payloadSha256 }).pipe(
+      Effect.provide(recoveryMemory.layer),
+      Effect.provideService(RunRecordClock, clock),
+    ))
+    const marked = await Effect.runPromise(record({
+      _tag: "SubmissionMayHaveStarted",
+      runId: reserved.runId,
+      operationId: "recovery-submit",
+    }).pipe(Effect.provide(recoveryMemory.layer), Effect.provideService(RunRecordClock, clock)))
+    assert.equal(marked._tag, "SubmissionPermitIssued")
+    if (marked._tag !== "SubmissionPermitIssued") continue
+    const generated = await Effect.runPromise(invoke(prepared, marked.permit).pipe(
+      Effect.provideService(GenerationAdapter, adapter),
+    ))
+    await Effect.runPromise(record({
+      _tag: "CommitProviderEvidence",
+      runId: reserved.runId,
+      operationId: "conductor-provider-evidence",
+      evidence: generated.providerEvidence,
+    }).pipe(Effect.provide(recoveryMemory.layer), Effect.provideService(RunRecordClock, clock)))
+    if (persistOutput) {
+      await Effect.runPromise(record({
+        _tag: "CommitGeneratedOutput",
+        runId: reserved.runId,
+        operationId: "conductor-generated-output-1",
+        output: {
+          ...generated.outputs[0]!,
+          applicationPath: generated.outputs[0]!.applicationPath as `outputs/${string}`,
+        },
+      }).pipe(Effect.provide(recoveryMemory.layer), Effect.provideService(RunRecordClock, clock)))
+    }
+    let recoveryCalls = 0
+    const recoveryAdapter: GenerationAdapterService = {
+      invoke: () => Effect.die("recovery must not resubmit"),
+      recover: (_prepared, evidence) => Effect.sync(() => {
+        recoveryCalls += 1
+        assert.equal(evidence.sha256, generated.providerEvidence.sha256)
+        return generated as GenerationResult
+      }),
+    }
+    const resumed = await Effect.runPromise(advance({ run: plannedRun }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(GenerationAdapter, recoveryAdapter),
+      Effect.provide(recoveryMemory.layer),
+      Effect.provideService(RunRecordClock, clock),
+    ))
+    assert.equal(resumed._tag, "HumanDecisionRequired")
+    assert.equal(recoveryCalls, 1)
+  }
 })

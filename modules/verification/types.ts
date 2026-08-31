@@ -6,7 +6,6 @@ export type VerificationInput = Readonly<{
   candidate: RasterEvidence
   ownedRegion: OwnedRegion
   exactCopy: ReadonlyArray<ExactCopyPixel>
-  assemblyRequired: boolean
 }>
 
 export type VerificationResult = Readonly<{

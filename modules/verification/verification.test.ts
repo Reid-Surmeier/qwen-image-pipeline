@@ -38,10 +38,22 @@ test("rejects a raw generated donor when Assembly is required", async () => {
     candidate: donor,
     ownedRegion,
     exactCopy,
-    assemblyRequired: true,
   })))
   assert.equal(error.code, "ASSEMBLY_REQUIRED")
   assert.deepEqual(error.checks, ["integrity", "media"])
+})
+
+test("does not accept a caller-controlled flag that claims Assembly is optional", async () => {
+  const input = {
+    baseline,
+    donor,
+    candidate: donor,
+    ownedRegion,
+    exactCopy,
+    assemblyRequired: false,
+  }
+  const error = await Effect.runPromise(Effect.flip(verify(input)))
+  assert.equal(error.code, "ASSEMBLY_REQUIRED")
 })
 
 test("rejects a raw donor by its hash-locked identity", async () => {
@@ -51,7 +63,6 @@ test("rejects a raw donor by its hash-locked identity", async () => {
     candidate: donor,
     ownedRegion,
     exactCopy,
-    assemblyRequired: true,
   })))
   assert.equal(error.code, "ASSEMBLY_REQUIRED")
   assert.deepEqual(error.checks, ["integrity", "media"])
@@ -64,7 +75,6 @@ test("proves independent zero-drift and donor-equality truths in mandatory order
     candidate: assembled,
     ownedRegion,
     exactCopy,
-    assemblyRequired: true,
   }))
   assert.equal(result.classification, "verified-candidate")
   assert.deepEqual(result.checks.map((check) => [check.name, check.measured]), [
@@ -83,7 +93,6 @@ test("binds a verified candidate to the canonical Assembly report", async () => 
     candidate: assembly.output,
     ownedRegion,
     exactCopy,
-    assemblyRequired: true,
   }))
   assert.equal(result.candidateSha256, assembly.output.sha256)
   assert.deepEqual(result.assemblyReport, assembly.report)
@@ -99,7 +108,6 @@ test("rejects a candidate that restores donor pixels over Exact Copy", async () 
     ]),
     ownedRegion,
     exactCopy,
-    assemblyRequired: true,
   })))
   assert.equal(error.code, "FIDELITY_CHECK_FAILED")
 })
@@ -116,7 +124,6 @@ test("rejects non-finite and non-safe-integer owned regions before fidelity chec
       candidate: assembled,
       ownedRegion: invalid,
       exactCopy,
-      assemblyRequired: true,
     })))
     assert.equal(error.code, "MEDIA_CHECK_FAILED", name)
   }

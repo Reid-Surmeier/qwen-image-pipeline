@@ -8,6 +8,7 @@ import { GenerationError } from "./errors.js"
 import {
   GenerationAdapter,
   type GenerationAdapterService,
+  type GenerationProviderEvidence,
   type GenerationReference,
   type GenerationResult,
   type PreparedGeneration,
@@ -231,6 +232,48 @@ export const prepareGeneration = (
     : new GenerationError("ADAPTER_RESULT_INVALID", "Generation payload preparation failed."),
 })
 
+const validateGenerationResult = (
+  prepared: PreparedGeneration,
+  untrustedResult: unknown,
+  expectedProviderEvidence?: GenerationProviderEvidence,
+): Effect.Effect<GenerationResult, GenerationError> => Effect.gen(function*() {
+  const result = yield* Effect.try({
+    try: () => normalizeAdapterResult(untrustedResult),
+    catch: () => new GenerationError("ADAPTER_RESULT_INVALID", "The adapter returned a malformed result."),
+  })
+  if (result === undefined) {
+    return yield* Effect.fail(new GenerationError("ADAPTER_RESULT_INVALID", "The adapter returned a malformed result."))
+  }
+  if (result.provider !== prepared.request.provider || result.model !== prepared.request.model) {
+    return yield* Effect.fail(new GenerationError("PROVIDER_SUBSTITUTION", "The adapter substituted provider or model."))
+  }
+  if (result.outputs.length !== prepared.request.requestedCount) {
+    return yield* Effect.fail(new GenerationError("OUTPUT_COUNT_MISMATCH", "The adapter returned the wrong output count."))
+  }
+  if (
+    sha256(result.providerEvidence.body) !== result.providerEvidence.sha256 ||
+    result.outputs.some((output) =>
+      sha256(output.body) !== output.sha256 ||
+      !/^outputs\/[a-z0-9][a-z0-9._-]*\.rgba\.json$/.test(output.applicationPath))
+  ) {
+    return yield* Effect.fail(new GenerationError("ADAPTER_RESULT_INVALID", "Normalized provider or output evidence is invalid."))
+  }
+  if (
+    expectedProviderEvidence !== undefined &&
+    (
+      result.providerEvidence.mediaType !== expectedProviderEvidence.mediaType ||
+      result.providerEvidence.sha256 !== expectedProviderEvidence.sha256 ||
+      !Buffer.from(result.providerEvidence.body).equals(Buffer.from(expectedProviderEvidence.body))
+    )
+  ) {
+    return yield* Effect.fail(new GenerationError(
+      "ADAPTER_RESULT_INVALID",
+      "Recovered Generation evidence substituted the persisted provider response.",
+    ))
+  }
+  return result
+})
+
 export const invokeGeneration = (
   prepared: PreparedGeneration,
   permit: SubmissionPermit,
@@ -250,6 +293,9 @@ export const invokeGeneration = (
         ))
       }
       return yield* adapterEffect.pipe(
+        Effect.mapError((error) => error instanceof GenerationError
+          ? error
+          : new GenerationError("ADAPTER_RESULT_INVALID", "The adapter Effect failed with an unnamed error.")),
         Effect.catchDefect(() => Effect.fail(new GenerationError(
           "ADAPTER_RESULT_INVALID",
           "The adapter Effect terminated with a defect.",
@@ -261,26 +307,46 @@ export const invokeGeneration = (
       payloadSha256: validatedPrepared.payloadSha256,
     })
     const untrustedResult: unknown = yield* submission
-    const result = yield* Effect.try({
-      try: () => normalizeAdapterResult(untrustedResult),
-      catch: () => new GenerationError("ADAPTER_RESULT_INVALID", "The adapter returned a malformed result."),
-    })
-    if (result === undefined) {
-      return yield* Effect.fail(new GenerationError("ADAPTER_RESULT_INVALID", "The adapter returned a malformed result."))
-    }
-    if (result.provider !== validatedPrepared.request.provider || result.model !== validatedPrepared.request.model) {
-      return yield* Effect.fail(new GenerationError("PROVIDER_SUBSTITUTION", "The adapter substituted provider or model."))
-    }
-    if (result.outputs.length !== validatedPrepared.request.requestedCount) {
-      return yield* Effect.fail(new GenerationError("OUTPUT_COUNT_MISMATCH", "The adapter returned the wrong output count."))
-    }
-    if (
-      sha256(result.providerEvidence.body) !== result.providerEvidence.sha256 ||
-      result.outputs.some((output) =>
-        sha256(output.body) !== output.sha256 ||
-        !/^outputs\/[a-z0-9][a-z0-9._-]*\.rgba\.json$/.test(output.applicationPath))
-    ) {
-      return yield* Effect.fail(new GenerationError("ADAPTER_RESULT_INVALID", "Normalized provider or output evidence is invalid."))
-    }
-    return result
+    return yield* validateGenerationResult(validatedPrepared, untrustedResult)
   })
+
+export const recoverGeneration = (
+  prepared: PreparedGeneration,
+  providerEvidence: GenerationProviderEvidence,
+): Effect.Effect<GenerationResult, GenerationError, GenerationAdapterService> => Effect.gen(function*() {
+  const validatedPrepared = yield* validatePreparedGeneration(prepared)
+  if (
+    providerEvidence.mediaType !== "application/json" ||
+    !/^[a-f0-9]{64}$/.test(providerEvidence.sha256) ||
+    sha256(providerEvidence.body) !== providerEvidence.sha256
+  ) {
+    return yield* Effect.fail(new GenerationError(
+      "ADAPTER_RESULT_INVALID",
+      "Recovery requires the exact persisted provider response evidence.",
+    ))
+  }
+  const adapter = yield* GenerationAdapter
+  if (typeof adapter.recover !== "function") {
+    return yield* Effect.fail(new GenerationError(
+      "ADAPTER_RESULT_INVALID",
+      "The adapter cannot recover outputs from persisted provider evidence.",
+    ))
+  }
+  const adapterEffect: unknown = yield* Effect.try({
+    try: () => adapter.recover!(validatedPrepared, providerEvidence) as unknown,
+    catch: () => new GenerationError("ADAPTER_RESULT_INVALID", "The recovery adapter threw before returning its Effect."),
+  })
+  if (!Effect.isEffect(adapterEffect)) {
+    return yield* Effect.fail(new GenerationError("ADAPTER_RESULT_INVALID", "The recovery adapter did not return an Effect."))
+  }
+  const untrustedResult: unknown = yield* adapterEffect.pipe(
+    Effect.mapError((error) => error instanceof GenerationError
+      ? error
+      : new GenerationError("ADAPTER_RESULT_INVALID", "The recovery adapter failed with an unnamed error.")),
+    Effect.catchDefect(() => Effect.fail(new GenerationError(
+      "ADAPTER_RESULT_INVALID",
+      "The recovery adapter terminated with a defect.",
+    ))),
+  )
+  return yield* validateGenerationResult(validatedPrepared, untrustedResult, providerEvidence)
+})

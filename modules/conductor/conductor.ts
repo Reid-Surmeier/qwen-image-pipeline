@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 
 import { assemble } from "../assembly/index.js"
-import { invoke, prepare } from "../generation/index.js"
+import { invoke, prepare, recover, type GenerationResult } from "../generation/index.js"
 import {
   ApplicationFiles,
   compilePlannedRun,
@@ -287,6 +287,7 @@ export const advanceRun = (
       "RUN_RECORD_FAILURE",
       "The immutable Planned Run could not be reserved or reloaded.",
     )))
+    let generated: GenerationResult | undefined
 
     if (current.phase === "reserved") {
       const marked = yield* record({
@@ -303,7 +304,7 @@ export const advanceRun = (
           "The Run did not issue its one in-process Submission Permit.",
         ))
       }
-      const generated = yield* invoke(prepared, marked.permit).pipe(
+      generated = yield* invoke(prepared, marked.permit).pipe(
         Effect.mapError(asConductorError(
           "GENERATION_FAILURE",
           "The one permitted Generation invocation did not return trustworthy normalized evidence.",
@@ -319,6 +320,32 @@ export const advanceRun = (
         "Normalized provider evidence could not be persisted.",
       )))
       current = provider.view
+    }
+
+    if (current.phase === "provider_evidence_received" || current.phase === "generated_outputs_received") {
+      if (generated === undefined) {
+        const providerReceipt = current.evidence.find((item) => item.applicationPath === "provider-response.json")
+        if (providerReceipt === undefined || providerReceipt.mediaType !== "application/json") {
+          return yield* Effect.fail(new ConductorError(
+            "RUN_RECORD_FAILURE",
+            "The persisted provider response receipt is missing or has the wrong media type.",
+          ))
+        }
+        const providerBody = yield* readEvidence(current.runId, providerReceipt.applicationPath).pipe(
+          Effect.mapError(asConductorError(
+            "RUN_RECORD_FAILURE",
+            "The persisted provider response could not be verified and read for recovery.",
+          )),
+        )
+        generated = yield* recover(prepared, {
+          mediaType: "application/json",
+          body: providerBody,
+          sha256: providerReceipt.sha256,
+        }).pipe(Effect.mapError(asConductorError(
+          "GENERATION_FAILURE",
+          "Persisted provider evidence could not recover the normalized outputs without resubmission.",
+        )))
+      }
       for (const [index, output] of generated.outputs.entries()) {
         const persisted = yield* record({
           _tag: "CommitGeneratedOutput",
@@ -455,7 +482,6 @@ export const advanceRun = (
       candidate: { body: candidateBytes, sha256: current.assemblyOutputSha256! },
       ownedRegion: request.assemblyPlan.ownedRegion,
       exactCopy: request.assemblyPlan.exactCopy,
-      assemblyRequired: true,
     }).pipe(Effect.mapError(asConductorError(
       "VERIFICATION_FAILURE",
       "The assembled candidate did not pass the ordered Fidelity Checks.",

@@ -48,7 +48,7 @@ export const verifyRaster = (input: VerificationInput): Effect.Effect<Verificati
         throw new VerificationError("MEDIA_CHECK_FAILED", "Raster media is invalid or dimensionally inconsistent.", completed)
       }
       completed.push("media")
-      if (input.assemblyRequired && input.candidate.sha256 === input.donor.sha256) {
+      if (input.candidate.sha256 === input.donor.sha256) {
         throw new VerificationError(
           "ASSEMBLY_REQUIRED",
           "A raw Generation donor cannot bypass required Assembly by changing its caller-provided label.",

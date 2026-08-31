@@ -1012,6 +1012,13 @@ test("records a donor-choice checkpoint and selects only a persisted output on t
       sha256: outputSha256,
     },
   })))
+  const incompleteCheckpoint = await Effect.runPromise(Effect.flip(provide(record({
+    _tag: "OpenDonorChoice",
+    runId: reserved.runId,
+    operationId: "donor-choice-before-all-outputs",
+    candidateSha256s: [outputSha256],
+  }))))
+  assert.equal(incompleteCheckpoint.code, "RESERVATION_OUTSIDE_PLAN")
   const alternativeOutput = Buffer.from("alternative-donor-candidate", "utf8")
   const alternativeSha256 = createHash("sha256").update(alternativeOutput).digest("hex")
   await Effect.runPromise(provide(record({
@@ -1053,7 +1060,7 @@ test("records a donor-choice checkpoint and selects only a persisted output on t
     operationId: "sparse-donor-choice",
     candidateSha256s: sparseCandidates,
   }))))
-  assert.equal(sparseCheckpoint.code, "DONOR_NOT_PERSISTED")
+  assert.equal(sparseCheckpoint.code, "RESERVATION_OUTSIDE_PLAN")
   assert.equal((await Effect.runPromise(provide(load(reserved.runId)))).phase, "generated_outputs_received")
 
   const checkpoint = await Effect.runPromise(provide(record({

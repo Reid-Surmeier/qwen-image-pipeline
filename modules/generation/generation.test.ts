@@ -390,10 +390,12 @@ test("converts a non-Effect adapter return and adapter defect into typed failure
     bytes: snapshot.bytes,
   }]))
 
-  for (const [name, adapter] of [
+  const invalidAdapters: ReadonlyArray<readonly [string, GenerationAdapterService]> = [
     ["non-effect", { invoke: () => undefined } as unknown as GenerationAdapterService],
     ["defect", { invoke: () => Effect.die("adapter defect") } as unknown as GenerationAdapterService],
-  ] as const) {
+    ["untyped failure", { invoke: () => Effect.fail("adapter string failure") } as unknown as GenerationAdapterService],
+  ]
+  for (const [index, [name, adapter]] of invalidAdapters.entries()) {
     const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
     const clock = { now: () => Effect.succeed("2026-08-30T12:00:00.000Z") }
     const reserved: RunRecordView = await Effect.runPromise(reserve({
@@ -403,7 +405,7 @@ test("converts a non-Effect adapter return and adapter defect into typed failure
     const marker: RecordResult = await Effect.runPromise(record({
       _tag: "SubmissionMayHaveStarted",
       runId: reserved.runId,
-      operationId: `malformed-effect-${name}`,
+      operationId: `malformed-effect-${index}`,
     }).pipe(Effect.provide(memory.layer), Effect.provideService(RunRecordClock, clock)))
     assert.equal(marker._tag, "SubmissionPermitIssued")
     if (marker._tag !== "SubmissionPermitIssued") continue

@@ -27,20 +27,26 @@ export type GeneratedArtifact = Readonly<{
   sha256: string
 }>
 
+export type GenerationProviderEvidence = Readonly<{
+  mediaType: "application/json"
+  body: Uint8Array
+  sha256: string
+}>
+
 export type GenerationResult = Readonly<{
   provider: "openrouter"
   model: string
-  providerEvidence: Readonly<{
-    mediaType: "application/json"
-    body: Uint8Array
-    sha256: string
-  }>
+  providerEvidence: GenerationProviderEvidence
   outputs: ReadonlyArray<GeneratedArtifact>
 }>
 
 export interface GenerationAdapterService {
   readonly invoke: (
     prepared: PreparedGeneration,
+  ) => Effect.Effect<GenerationResult, GenerationError>
+  readonly recover?: (
+    prepared: PreparedGeneration,
+    providerEvidence: GenerationProviderEvidence,
   ) => Effect.Effect<GenerationResult, GenerationError>
 }
 

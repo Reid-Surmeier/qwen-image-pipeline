@@ -1068,17 +1068,22 @@ export const recordOperation = (
     if (current.phase !== "generated_outputs_received") {
       return yield* Effect.fail(new RunRecordError("ILLEGAL_TRANSITION", "A donor choice requires persisted generated output evidence."))
     }
+    const generatedOutputSha256s = current.evidence
+      .filter((item) => item.applicationPath.startsWith("outputs/"))
+      .map((item) => item.sha256)
     if (
       !Array.isArray(operation.candidateSha256s) ||
-      operation.candidateSha256s.length === 0 ||
+      operation.candidateSha256s.length !== current.maximumCount ||
+      generatedOutputSha256s.length !== current.maximumCount ||
       Array.from({ length: operation.candidateSha256s.length }, (_, index) => operation.candidateSha256s[index])
         .some((candidate) => candidate === undefined) ||
       new Set(operation.candidateSha256s).size !== operation.candidateSha256s.length ||
+      generatedOutputSha256s.some((sha256) => !operation.candidateSha256s.includes(sha256)) ||
       operation.candidateSha256s.some((candidate) =>
         !isSha256(candidate) || !current.evidence.some((item) =>
           item.applicationPath.startsWith("outputs/") && item.sha256 === candidate))
     ) {
-      return yield* Effect.fail(new RunRecordError("DONOR_NOT_PERSISTED", "Every donor candidate must name persisted generated output evidence on this Run."))
+      return yield* Effect.fail(new RunRecordError("RESERVATION_OUTSIDE_PLAN", "Donor choice requires the complete reserved set of persisted generated outputs."))
     }
     const clock = yield* RunRecordClock
     const timestamp = yield* clock.now()
