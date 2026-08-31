@@ -1522,6 +1522,19 @@ const credentialFieldName = (key: string): boolean => {
     normalized === "credential"
 }
 
+const stringHasCredentialField = (value: string): boolean => {
+  const fields = /"((?:\\.|[^"\\])*)"\s*:/g
+  for (const match of value.matchAll(fields)) {
+    try {
+      const decoded = JSON.parse(`"${match[1]}"`) as unknown
+      if (typeof decoded !== "string" || credentialFieldName(decoded)) return true
+    } catch {
+      return true
+    }
+  }
+  return false
+}
+
 const valueHasSecret = (value: unknown, key?: string, embeddedDepth = 0): boolean => {
   if (key !== undefined && credentialFieldName(key)) {
     return true
@@ -1538,6 +1551,7 @@ const valueHasSecret = (value: unknown, key?: string, embeddedDepth = 0): boolea
       /(?:sk-|gh[pousr]_|Bearer\s+)[A-Za-z0-9_-]{6,}/i.test(value) ||
       /-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(value) ||
       /https?:\/\/[^/\s:@]+:[^/\s@]+@/i.test(value) ||
+      stringHasCredentialField(value) ||
       /"(?:credential|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|authorization|password|secret|(?:access|refresh|id)[_-]?token)"\s*:/i.test(value)
     ) return true
     if (/^\s*[\[{]/.test(value)) {
