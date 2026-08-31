@@ -42,5 +42,5 @@ export const issueVerificationFailure = (
   return error
 }
 
-export const inspectVerificationFailure = (error: unknown): VerificationFailureEvidence | undefined =>
+export const inspectVerificationFailureSync = (error: unknown): VerificationFailureEvidence | undefined =>
   error instanceof VerificationError ? issuedFailures.get(error) : undefined

@@ -55,5 +55,5 @@ export const issueVideoVerificationFailure = (
   return error
 }
 
-export const inspectVideoVerificationFailure = (error: unknown): VideoVerificationFailureEvidence | undefined =>
+export const inspectVideoVerificationFailureSync = (error: unknown): VideoVerificationFailureEvidence | undefined =>
   error instanceof VideoVerificationError ? issuedFailures.get(error) : undefined

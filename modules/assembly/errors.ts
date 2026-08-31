@@ -33,5 +33,5 @@ export const issueAssemblyFailure = (
   return error
 }
 
-export const inspectAssemblyFailure = (error: unknown): AssemblyFailureEvidence | undefined =>
+export const inspectAssemblyFailureSync = (error: unknown): AssemblyFailureEvidence | undefined =>
   error instanceof AssemblyError ? issuedFailures.get(error) : undefined

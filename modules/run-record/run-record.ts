@@ -1881,12 +1881,12 @@ const snapshotClassifiedFailure = (
   if (causeDescriptor === undefined || !Object.hasOwn(causeDescriptor, "value")) return undefined
   const cause = causeDescriptor.value
   if (failureClass === "assembly_failure") {
-    const evidence = inspectAssemblyFailure(cause)
+    const evidence = Effect.runSync(inspectAssemblyFailure(cause))
     return evidence === undefined ? undefined : { class: failureClass, message, proof: evidence }
   }
-  const rasterEvidence = inspectVerificationFailure(cause)
+  const rasterEvidence = Effect.runSync(inspectVerificationFailure(cause))
   if (rasterEvidence !== undefined) return { class: failureClass, message, proof: rasterEvidence }
-  const videoEvidence = inspectVideoVerificationFailure(cause)
+  const videoEvidence = Effect.runSync(inspectVideoVerificationFailure(cause))
   return videoEvidence === undefined ? undefined : { class: failureClass, message, proof: videoEvidence }
 }
 

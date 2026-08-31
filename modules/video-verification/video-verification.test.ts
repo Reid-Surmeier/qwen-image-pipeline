@@ -107,7 +107,7 @@ test("binds a failure proof to the complete immutable Video Plan input", async (
     },
   }
   const failure = await Effect.runPromise(Effect.flip(verifyVideo(input)))
-  const proof = inspectVideoVerificationFailure(failure)
+  const proof = await Effect.runPromise(inspectVideoVerificationFailure(failure))
 
   assert.equal(failure.code, "VIDEO_CHECK_FAILED")
   assert.deepEqual(proof, {

@@ -1,7 +1,7 @@
-import type { Effect } from "effect"
+import { Effect } from "effect"
 
-import type { VideoVerificationError } from "./errors.js"
-import { inspectVideoVerificationFailure } from "./errors.js"
+import type { VideoVerificationError, VideoVerificationFailureEvidence } from "./errors.js"
+import { inspectVideoVerificationFailureSync } from "./errors.js"
 import { verifyVideoArtifact } from "./video-verification.js"
 import type { VerifyVideoInput, VideoVerification } from "./types.js"
 
@@ -9,7 +9,9 @@ export const verifyVideo: (
   input: VerifyVideoInput,
 ) => Effect.Effect<VideoVerification, VideoVerificationError> = verifyVideoArtifact
 
-export { inspectVideoVerificationFailure }
+export const inspectVideoVerificationFailure = (
+  error: unknown,
+): Effect.Effect<VideoVerificationFailureEvidence | undefined> => Effect.sync(() => inspectVideoVerificationFailureSync(error))
 export type { VideoVerificationError, VideoVerificationErrorCode, VideoVerificationFailureEvidence } from "./errors.js"
 export type {
   VerifyVideoInput,
