@@ -1504,7 +1504,9 @@ export const reserveRun = (
 })
 
 const credentialFieldName = (key: string): boolean => {
-  const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "").replace(/^x/, "")
+  const compatibleKey = key.normalize("NFKC")
+  if (/[^\x20-\x7e]/.test(compatibleKey)) return true
+  const normalized = compatibleKey.toLowerCase().replace(/[^a-z0-9]/g, "").replace(/^x/, "")
   if (["prompttokens", "completiontokens", "totaltokens", "cachedtokens", "reasoningtokens"].includes(normalized)) {
     return false
   }

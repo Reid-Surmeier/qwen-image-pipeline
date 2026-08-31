@@ -92,8 +92,27 @@ const isNormalizedRgbaRaster = (body: Uint8Array): boolean => {
 const isSafeJobId = (value: unknown): value is string =>
   typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)
 
+const credentialFieldName = (key: string): boolean => {
+  const compatibleKey = key.normalize("NFKC")
+  if (/[^\x20-\x7e]/.test(compatibleKey)) return true
+  const normalized = compatibleKey.toLowerCase().replace(/[^a-z0-9]/g, "").replace(/^x/, "")
+  if (["prompttokens", "completiontokens", "totaltokens", "cachedtokens", "reasoningtokens"].includes(normalized)) {
+    return false
+  }
+  return /(?:api|access|private)key$/.test(normalized) ||
+    /(?:secret|password|credential)(?:key|value)?$/.test(normalized) ||
+    /authorization$/.test(normalized) ||
+    /(?:sig|signature)$/.test(normalized) ||
+    /credentials?$/.test(normalized) ||
+    /^(?:auth|authentication|authorization)(?:data|header|info|token|value)?$/.test(normalized) ||
+    /token$/.test(normalized) ||
+    /cookie$/.test(normalized) ||
+    /^(?:request|response)?headers$/.test(normalized) ||
+    normalized === "credential"
+}
+
 const hasSecretMaterial = (value: unknown, parentKey = "", embeddedDepth = 0): boolean => {
-  if (/(?:credential|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|authorization|password|secret|(?:access|refresh|id)[_-]?token)/i.test(parentKey)) {
+  if (credentialFieldName(parentKey)) {
     return true
   }
   if (typeof value === "string") {
