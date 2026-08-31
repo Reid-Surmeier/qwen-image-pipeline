@@ -397,17 +397,18 @@ const classifyRunFailure = (
   runId: string,
   objective: string,
   failure: ClassifiedFailureInput,
+  lastDurableView: RunRecordView,
 ): Effect.Effect<AdvanceDecision, ConductorError, import("../run-record/index.js").RunRecordStoreService | import("../run-record/index.js").RunRecordClockService> =>
   Effect.gen(function*() {
-    const result = yield* record({
+    const persistence = yield* persistWithReconciliation(record({
       _tag: "ClassifyFailure",
       runId,
       operationId: `conductor-${failure.class}`,
       failure,
-    }).pipe(Effect.mapError(asConductorError(
-      "RUN_RECORD_FAILURE",
-      "The terminal module failure could not be persisted.",
-    )))
+    }), "The terminal module failure could not be reconciled after a local persistence interruption.", objective, lastDurableView,
+    failure.class === "assembly_failure" ? "Assembly" : "Verification")
+    if (persistence._tag === "PersistenceInterrupted") return persistence
+    const result = persistence.value
     const diagnostics = yield* readDiagnostics(result.view.runId).pipe(Effect.mapError(asConductorError(
       "RUN_RECORD_FAILURE",
       "The terminal module failure could not be replayed.",
@@ -419,6 +420,7 @@ const classifyGenerationFailure = (
   runId: string,
   objective: string,
   error: unknown,
+  lastDurableView: RunRecordView,
   permit?: SubmissionPermit,
 ): Effect.Effect<AdvanceDecision, ConductorError, import("../run-record/index.js").RunRecordStoreService | import("../run-record/index.js").RunRecordClockService> => {
   const code = namedCause(error)
@@ -460,14 +462,14 @@ const classifyGenerationFailure = (
     )(error))
   }
   return Effect.gen(function*() {
-    const result = yield* record({
+    const persistence = yield* persistWithReconciliation(record({
       _tag: "SubmissionUnreconciled",
       runId,
       operationId: "conductor-submission-unreconciled",
-    }).pipe(Effect.mapError(asConductorError(
-      "RUN_RECORD_FAILURE",
-      "The unreconciled submission state could not be persisted.",
-    )))
+    }), "The unreconciled submission state could not be reconciled after a local persistence interruption.", objective,
+    lastDurableView, "Generation")
+    if (persistence._tag === "PersistenceInterrupted") return persistence
+    const result = persistence.value
     const diagnostics = yield* readDiagnostics(result.view.runId).pipe(Effect.mapError(asConductorError(
       "RUN_RECORD_FAILURE",
       "The unreconciled submission state could not be replayed.",
@@ -481,6 +483,7 @@ const persistWithReconciliation = <Success, Error, Requirements>(
   message: string,
   objective: string,
   lastDurableView: RunRecordView,
+  correctionOwner: CorrectionOwner,
 ): Effect.Effect<
   Readonly<{ _tag: "Persisted"; value: Success }> |
     Extract<AdvanceDecision, { _tag: "PersistenceInterrupted" }>,
@@ -506,7 +509,7 @@ const persistWithReconciliation = <Success, Error, Requirements>(
           finding: {
             code: "persistence_interrupted",
             message,
-            correctionOwner: "Generation" as const,
+            correctionOwner,
           },
           spendState,
           retryState: "reconcile-only" as const,
@@ -520,7 +523,7 @@ const persistWithReconciliation = <Success, Error, Requirements>(
             spendRisk: spendState === "possibly_spent"
               ? "The provider action may be spent; this Run cannot authorize another submission."
               : "Provider spend is unknown; this Run cannot authorize another submission.",
-            humanDecision: "No subjective Approval is requested; Generation owns evidence reconciliation after storage is restored.",
+            humanDecision: `No subjective Approval is requested; ${correctionOwner} owns evidence reconciliation after storage is restored.`,
           },
         }
       },
@@ -614,7 +617,7 @@ const advanceSeedanceRun = (
         onSuccess: (value) => ({ _tag: "Success" as const, value }),
       }))
       if (submissionAttempt._tag === "Failure") {
-        return yield* classifyGenerationFailure(current.runId, request.objective, submissionAttempt.error, marked.permit)
+        return yield* classifyGenerationFailure(current.runId, request.objective, submissionAttempt.error, marked.view, marked.permit)
       }
       const submitted = submissionAttempt.value
       const persistence = yield* persistWithReconciliation(record({
@@ -622,7 +625,7 @@ const advanceSeedanceRun = (
         runId: current.runId,
         operationId: "conductor-seedance-submission-evidence",
         evidence: submitted.providerEvidence,
-      }), "The submitted Seedance job receipt could not be reconciled after a local persistence interruption.", request.objective, marked.view)
+      }), "The submitted Seedance job receipt could not be reconciled after a local persistence interruption.", request.objective, marked.view, "Generation")
       if (persistence._tag === "PersistenceInterrupted") return persistence
       const persisted = persistence.value
       const diagnostics = yield* readDiagnostics(persisted.view.runId).pipe(Effect.mapError(asConductorError(
@@ -661,7 +664,7 @@ const advanceSeedanceRun = (
         onSuccess: (value) => ({ _tag: "Success" as const, value }),
       }))
       if (pollAttempt._tag === "Failure") {
-        return yield* classifyGenerationFailure(current.runId, request.objective, pollAttempt.error)
+        return yield* classifyGenerationFailure(current.runId, request.objective, pollAttempt.error, current)
       }
       const polled = pollAttempt.value
       const persistence = yield* persistWithReconciliation(record(polled.status === "pending"
@@ -683,7 +686,7 @@ const advanceSeedanceRun = (
             outputs: polled.outputs,
             completedCount: polled.completedCount,
             cost: polled.cost,
-          }), "The Seedance poll receipt could not be reconciled after a local persistence interruption.", request.objective, current)
+          }), "The Seedance poll receipt could not be reconciled after a local persistence interruption.", request.objective, current, "Generation")
       if (persistence._tag === "PersistenceInterrupted") return persistence
       const persisted = persistence.value
       current = persisted.view
@@ -748,19 +751,20 @@ const advanceSeedanceRun = (
           message: "The completed Seedance output did not pass independent media verification.",
           cause: verificationAttempt.error,
         },
+        current,
       )
     }
     const checked = verificationAttempt.value
-    const committed = yield* record({
+    const checkPersistence = yield* persistWithReconciliation(record({
       _tag: "CommitVideoChecks",
       runId: current.runId,
       operationId: "conductor-seedance-video-checks",
       jobId: current.providerJobId,
       report: checked,
-    }).pipe(Effect.mapError(asConductorError(
-      "RUN_RECORD_FAILURE",
-      "The independent Seedance video checks could not be persisted.",
-    )))
+    }), "The independent Seedance video checks could not be reconciled after a local persistence interruption.",
+    request.objective, current, "Verification")
+    if (checkPersistence._tag === "PersistenceInterrupted") return checkPersistence
+    const committed = checkPersistence.value
     const diagnostics = yield* readDiagnostics(committed.view.runId).pipe(Effect.mapError(asConductorError(
       "RUN_RECORD_FAILURE",
       "The verified Seedance diagnostics could not be replayed.",
@@ -854,7 +858,7 @@ export const advanceRun = (
         onSuccess: (value) => ({ _tag: "Success" as const, value }),
       }))
       if (generationAttempt._tag === "Failure") {
-        return yield* classifyGenerationFailure(current.runId, request.objective, generationAttempt.error, marked.permit)
+        return yield* classifyGenerationFailure(current.runId, request.objective, generationAttempt.error, marked.view, marked.permit)
       }
       generated = generationAttempt.value
       const persistence = yield* persistWithReconciliation(record({
@@ -862,7 +866,7 @@ export const advanceRun = (
         runId: current.runId,
         operationId: "conductor-provider-evidence",
         evidence: generated.providerEvidence,
-      }), "The Qwen provider receipt could not be reconciled after a local persistence interruption.", request.objective, marked.view)
+      }), "The Qwen provider receipt could not be reconciled after a local persistence interruption.", request.objective, marked.view, "Generation")
       if (persistence._tag === "PersistenceInterrupted") return persistence
       const provider = persistence.value
       current = provider.view
@@ -924,7 +928,7 @@ export const advanceRun = (
             onSuccess: (value) => ({ _tag: "Success" as const, value }),
           }))
           if (recoveryAttempt._tag === "Failure") {
-            return yield* classifyGenerationFailure(current.runId, request.objective, recoveryAttempt.error)
+            return yield* classifyGenerationFailure(current.runId, request.objective, recoveryAttempt.error, current)
           }
           generated = recoveryAttempt.value
         }
@@ -957,7 +961,7 @@ export const advanceRun = (
         return yield* classifyGenerationFailure(current.runId, request.objective, new GenerationError(
           "ADAPTER_RESULT_INVALID",
           "Recovered Generation evidence substituted a persisted Qwen output identity.",
-        ))
+        ), current)
       }
       const missingOutputs = generatedResult.outputs.filter((output) =>
         !persistedOutputReceipts.some((receipt) =>
@@ -966,7 +970,7 @@ export const advanceRun = (
           receipt.sha256 === output.sha256),
       )
       for (const [index, output] of missingOutputs.entries()) {
-        const persisted = yield* record({
+        const outputPersistence = yield* persistWithReconciliation(record({
           _tag: "CommitGeneratedOutput",
           runId: current.runId,
           operationId: `conductor-generated-output-${persistedOutputReceipts.length + index + 1}`,
@@ -974,24 +978,22 @@ export const advanceRun = (
             ...output,
             applicationPath: output.applicationPath as `outputs/${string}`,
           },
-        }).pipe(Effect.mapError(asConductorError(
-          "RUN_RECORD_FAILURE",
-          "Normalized generated output evidence could not be persisted.",
-        )))
-        current = persisted.view
+        }), "Normalized generated output evidence could not be reconciled after a local persistence interruption.",
+        request.objective, current, "Generation")
+        if (outputPersistence._tag === "PersistenceInterrupted") return outputPersistence
+        current = outputPersistence.value.view
       }
-      const opened = yield* record({
+      const donorCheckpointPersistence = yield* persistWithReconciliation(record({
         _tag: "OpenDonorChoice",
         runId: current.runId,
         operationId: "conductor-open-donor-choice",
         candidateSha256s: current.evidence
           .filter((item) => item.applicationPath.startsWith("outputs/"))
           .map((item) => item.sha256),
-      }).pipe(Effect.mapError(asConductorError(
-        "RUN_RECORD_FAILURE",
-        "The donor-choice checkpoint could not be persisted.",
-      )))
-      current = opened.view
+      }), "The donor-choice checkpoint could not be reconciled after a local persistence interruption.",
+      request.objective, current, "Generation")
+      if (donorCheckpointPersistence._tag === "PersistenceInterrupted") return donorCheckpointPersistence
+      current = donorCheckpointPersistence.value.view
       const diagnostics = yield* readDiagnostics(current.runId).pipe(Effect.mapError(asConductorError(
         "RUN_RECORD_FAILURE",
         "The donor-choice diagnostics could not be replayed.",
@@ -1020,16 +1022,15 @@ export const advanceRun = (
           "The selected SHA-256 must name one persisted candidate in this Run's donor checkpoint.",
         ))
       }
-      const selected = yield* record({
+      const donorSelectionPersistence = yield* persistWithReconciliation(record({
         _tag: "SelectDonor",
         runId: current.runId,
         operationId: "conductor-select-donor",
         selectedSha256: command.selectedDonorSha256!,
-      }).pipe(Effect.mapError(asConductorError(
-        "DONOR_DECISION_INVALID",
-        "The donor decision could not be recorded on this Run.",
-      )))
-      current = selected.view
+      }), "The donor decision could not be reconciled after a local persistence interruption.",
+      request.objective, current, "application decision owner")
+      if (donorSelectionPersistence._tag === "PersistenceInterrupted") return donorSelectionPersistence
+      current = donorSelectionPersistence.value.view
     }
 
     if (current.phase !== "donor_selected" && current.phase !== "assembly_completed") {
@@ -1087,20 +1088,20 @@ export const advanceRun = (
             message: "Hash-locked deterministic Assembly failed.",
             cause: assemblyAttempt.error,
           },
+          current,
         )
       }
       const assembled = assemblyAttempt.value
-      const persisted = yield* record({
+      const assemblyPersistence = yield* persistWithReconciliation(record({
         _tag: "CommitAssembly",
         runId: current.runId,
         operationId: "conductor-commit-assembly",
         output: assembled.output,
         report: assembled.report,
-      }).pipe(Effect.mapError(asConductorError(
-        "RUN_RECORD_FAILURE",
-        "The Assembly output and report could not be persisted.",
-      )))
-      current = persisted.view
+      }), "The Assembly output and report could not be reconciled after a local persistence interruption.",
+      request.objective, current, "Assembly")
+      if (assemblyPersistence._tag === "PersistenceInterrupted") return assemblyPersistence
+      current = assemblyPersistence.value.view
     }
 
     const candidateBytes = yield* readEvidence(current.runId, "outputs/assembled.rgba.json").pipe(
@@ -1128,10 +1129,11 @@ export const advanceRun = (
           message: "The assembled candidate did not pass the ordered Fidelity Checks.",
           cause: verificationAttempt.error,
         },
+        current,
       )
     }
     const checked = verificationAttempt.value
-    const committed = yield* record({
+    const checkPersistence = yield* persistWithReconciliation(record({
       _tag: "CommitChecks",
       runId: current.runId,
       operationId: "conductor-commit-checks",
@@ -1139,10 +1141,10 @@ export const advanceRun = (
       classification: checked.classification,
       baseline: { body: baseline.bytes, sha256: baseline.sha256 },
       checks: checked.checks,
-    }).pipe(Effect.mapError(asConductorError(
-      "RUN_RECORD_FAILURE",
-      "The ordered Fidelity Check evidence could not be persisted.",
-    )))
+    }), "The ordered Fidelity Check evidence could not be reconciled after a local persistence interruption.",
+    request.objective, current, "Verification")
+    if (checkPersistence._tag === "PersistenceInterrupted") return checkPersistence
+    const committed = checkPersistence.value
     const diagnostics = yield* readDiagnostics(committed.view.runId).pipe(Effect.mapError(asConductorError(
       "RUN_RECORD_FAILURE",
       "The Verified Candidate diagnostics could not be replayed.",

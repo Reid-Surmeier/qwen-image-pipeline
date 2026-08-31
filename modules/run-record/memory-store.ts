@@ -11,6 +11,7 @@ import type {
 export type MemoryRunRecordHarness = Readonly<{
   layer: Layer.Layer<RunRecordStoreService>
   failNext: (operation: StoreOperation, count?: number) => Effect.Effect<void>
+  failAfter: (operation: StoreOperation, successfulCalls: number, count?: number) => Effect.Effect<void>
   mutate: (runId: string, mutation: (record: {
     request: Uint8Array
     events: Uint8Array
@@ -26,12 +27,16 @@ export const makeMemoryRunRecordHarness = (): Effect.Effect<MemoryRunRecordHarne
     state?: Uint8Array
     evidence: Record<string, Uint8Array>
   }>()
-  let failing: Readonly<{ operation: StoreOperation; remaining: number }> | undefined
+  let failing: Readonly<{ operation: StoreOperation; successfulCalls: number; remaining: number }> | undefined
 
   const check = (operation: StoreOperation): Effect.Effect<void, RunRecordError> => {
     if (failing?.operation !== operation) return Effect.void
+    if (failing.successfulCalls > 0) {
+      failing = { ...failing, successfulCalls: failing.successfulCalls - 1 }
+      return Effect.void
+    }
     const remaining = failing.remaining - 1
-    failing = remaining === 0 ? undefined : { operation, remaining }
+    failing = remaining === 0 ? undefined : { ...failing, remaining }
     return Effect.fail(new RunRecordError("DURABILITY_FAILURE", `${operation} was interrupted.`))
   }
 
@@ -121,7 +126,14 @@ export const makeMemoryRunRecordHarness = (): Effect.Effect<MemoryRunRecordHarne
     layer: Layer.succeed(RunRecordStore, service),
     failNext: (operation, count = 1) => Effect.sync(() => {
       if (!Number.isSafeInteger(count) || count < 1) throw new Error("Failure count must be a positive safe integer.")
-      failing = { operation, remaining: count }
+      failing = { operation, successfulCalls: 0, remaining: count }
+    }),
+    failAfter: (operation, successfulCalls, count = 1) => Effect.sync(() => {
+      if (!Number.isSafeInteger(successfulCalls) || successfulCalls < 0) {
+        throw new Error("Successful call count must be a non-negative safe integer.")
+      }
+      if (!Number.isSafeInteger(count) || count < 1) throw new Error("Failure count must be a positive safe integer.")
+      failing = { operation, successfulCalls, remaining: count }
     }),
     mutate: (runId, mutation) => Effect.try({
       try: () => mutation(get(runId)),
