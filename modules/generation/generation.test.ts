@@ -14,7 +14,13 @@ import {
   type RunRecordView,
 } from "../run-record/index.js"
 import { makeFixture } from "../../tests/control-plane-fixture.js"
-import { GenerationAdapter, invoke, prepare, type GenerationResult } from "./index.js"
+import {
+  GenerationAdapter,
+  invoke,
+  prepare,
+  type GenerationAdapterService,
+  type GenerationResult,
+} from "./index.js"
 
 const sha256 = (value: Uint8Array): string => createHash("sha256").update(value).digest("hex")
 
@@ -109,6 +115,33 @@ test("rejects a sparse provider-reference destination before reservation", async
   assert.equal(error.code, "PAYLOAD_DESTINATION_INVALID")
 })
 
+test("requires reference media type to match its exact payload destination", async () => {
+  for (const [mode, wrongMediaType] of [
+    ["qwen-image", "video/mp4"],
+    ["seedance-video", "image/png"],
+  ] as const) {
+    const fixture = makeFixture(mode)
+    const decision = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(MediaInspector, byteMediaInspector),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+    ))
+    assert.equal(decision._tag, "Planned")
+    if (decision._tag !== "Planned") continue
+    const locked = decision.run.request.references[0]!
+    const snapshot = await Effect.runPromise(fixture.files.read(locked.applicationPath))
+    const error = await Effect.runPromise(Effect.flip(prepare(decision.run.request, [{
+      slot: locked.slot,
+      applicationPath: locked.applicationPath,
+      sha256: locked.sha256,
+      payloadDestination: locked.payloadDestination,
+      mediaType: wrongMediaType,
+      bytes: snapshot.bytes,
+    }])))
+    assert.equal(error.code, "PAYLOAD_DESTINATION_INVALID", mode)
+  }
+})
+
 test("rejects unknown, null, malformed, and sparse adapter results as typed failures", async () => {
   const fixture = makeFixture("qwen-image")
   const decision = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
@@ -158,4 +191,47 @@ test("rejects unknown, null, malformed, and sparse adapter results as typed fail
     )))
     assert.equal(error.code, "ADAPTER_RESULT_INVALID", name)
   }
+})
+
+test("converts a synchronous adapter throw into ADAPTER_RESULT_INVALID", async () => {
+  const fixture = makeFixture("qwen-image")
+  const decision = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(MediaInspector, byteMediaInspector),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+  ))
+  assert.equal(decision._tag, "Planned")
+  if (decision._tag !== "Planned") return
+  const locked = decision.run.request.references[0]!
+  const snapshot = await Effect.runPromise(fixture.files.read(locked.applicationPath))
+  const prepared = await Effect.runPromise(prepare(decision.run.request, [{
+    slot: locked.slot,
+    applicationPath: locked.applicationPath,
+    sha256: locked.sha256,
+    payloadDestination: locked.payloadDestination,
+    mediaType: "image/png",
+    bytes: snapshot.bytes,
+  }]))
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const clock = { now: () => Effect.succeed("2026-08-30T12:00:00.000Z") }
+  const reserved = await Effect.runPromise(reserve({
+    plannedRun: decision.run,
+    payloadSha256: prepared.payloadSha256,
+  }).pipe(Effect.provide(memory.layer), Effect.provideService(RunRecordClock, clock)))
+  const marker = await Effect.runPromise(record({
+    _tag: "SubmissionMayHaveStarted",
+    runId: reserved.runId,
+    operationId: "synchronous-adapter-throw",
+  }).pipe(Effect.provide(memory.layer), Effect.provideService(RunRecordClock, clock)))
+  assert.equal(marker._tag, "SubmissionPermitIssued")
+  if (marker._tag !== "SubmissionPermitIssued") return
+  const adapter: GenerationAdapterService = {
+    invoke: () => {
+      throw new Error("synchronous adapter defect")
+    },
+  }
+  const error = await Effect.runPromise(Effect.flip(invoke(prepared, marker.permit).pipe(
+    Effect.provideService(GenerationAdapter, adapter),
+  )))
+  assert.equal(error.code, "ADAPTER_RESULT_INVALID")
 })

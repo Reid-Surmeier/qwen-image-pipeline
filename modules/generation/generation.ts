@@ -95,6 +95,16 @@ export const prepareGeneration = (
       if (match === null) {
         throw new GenerationError("PAYLOAD_DESTINATION_INVALID", `${locked.payloadDestination} is not a supported exact destination.`)
       }
+      const destinationKind = match[2]
+      if (
+        (destinationKind === "video_url" && supplied.mediaType !== "video/mp4") ||
+        (destinationKind === "image_url" && supplied.mediaType !== "image/png" && supplied.mediaType !== "application/vnd.qwen.rgba+json")
+      ) {
+        throw new GenerationError(
+          "PAYLOAD_DESTINATION_INVALID",
+          `${locked.payloadDestination} does not accept ${supplied.mediaType} evidence.`,
+        )
+      }
       const index = Number(match[1])
       if (!Number.isSafeInteger(index) || inputReferences[index] !== undefined) {
         throw new GenerationError("PAYLOAD_DESTINATION_INVALID", "Reference payload destinations must be unique array positions.")
@@ -137,7 +147,11 @@ export const invokeGeneration = (
 ): Effect.Effect<GenerationResult, GenerationError | import("../run-record/index.js").RunRecordError, GenerationAdapterService> =>
   Effect.gen(function*() {
     const adapter = yield* GenerationAdapter
-    const untrustedResult: unknown = yield* permit.use(Effect.suspend(() => adapter.invoke(prepared)))
+    const submission = Effect.try({
+      try: () => adapter.invoke(prepared),
+      catch: () => new GenerationError("ADAPTER_RESULT_INVALID", "The adapter threw before returning its Effect."),
+    }).pipe(Effect.flatMap((effect) => effect))
+    const untrustedResult: unknown = yield* permit.use(submission)
     const result = yield* Effect.try({
       try: () => normalizeAdapterResult(untrustedResult),
       catch: () => new GenerationError("ADAPTER_RESULT_INVALID", "The adapter returned a malformed result."),

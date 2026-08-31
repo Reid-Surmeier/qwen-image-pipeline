@@ -475,7 +475,6 @@ export const advanceRun = (
       ownedRegion: request.assemblyPlan.ownedRegion,
       exactCopy: request.assemblyPlan.exactCopy,
       assemblyRequired: true,
-      candidateKind: "assembled",
     }).pipe(Effect.mapError(asConductorError(
       "VERIFICATION_FAILURE",
       "The assembled candidate did not pass the ordered Fidelity Checks.",

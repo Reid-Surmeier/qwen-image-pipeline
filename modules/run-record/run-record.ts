@@ -795,8 +795,9 @@ const credentialFieldName = (key: string): boolean => {
     return false
   }
   return /(?:api|access|private)key$/.test(normalized) ||
-    /(?:client)?secret$/.test(normalized) ||
-    /(?:password|authorization)$/.test(normalized) ||
+    /(?:secret|password|credential)(?:key|value)?$/.test(normalized) ||
+    /authorization$/.test(normalized) ||
+    /(?:sig|signature)$/.test(normalized) ||
     /credentials?$/.test(normalized) ||
     /^(?:auth|authentication|authorization)(?:data|header|info|token|value)?$/.test(normalized) ||
     /token$/.test(normalized) ||

@@ -57,6 +57,7 @@ export const verifyRaster = (input: VerificationInput): Effect.Effect<Verificati
       }
       const region = input.ownedRegion
       if (
+        ![region.x, region.y, region.width, region.height].every(Number.isSafeInteger) ||
         region.x < 0 || region.y < 0 || region.width < 1 || region.height < 1 ||
         region.x + region.width > baseline.width || region.y + region.height > baseline.height
       ) {

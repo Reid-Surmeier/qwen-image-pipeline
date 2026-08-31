@@ -39,13 +39,12 @@ test("rejects a raw generated donor when Assembly is required", async () => {
     ownedRegion,
     exactCopy,
     assemblyRequired: true,
-    candidateKind: "raw-generation",
   })))
   assert.equal(error.code, "ASSEMBLY_REQUIRED")
   assert.deepEqual(error.checks, ["integrity", "media"])
 })
 
-test("rejects a raw donor even when the caller labels it assembled", async () => {
+test("rejects a raw donor by its hash-locked identity", async () => {
   const error = await Effect.runPromise(Effect.flip(verify({
     baseline,
     donor,
@@ -53,7 +52,6 @@ test("rejects a raw donor even when the caller labels it assembled", async () =>
     ownedRegion,
     exactCopy,
     assemblyRequired: true,
-    candidateKind: "assembled",
   })))
   assert.equal(error.code, "ASSEMBLY_REQUIRED")
   assert.deepEqual(error.checks, ["integrity", "media"])
@@ -67,7 +65,6 @@ test("proves independent zero-drift and donor-equality truths in mandatory order
     ownedRegion,
     exactCopy,
     assemblyRequired: true,
-    candidateKind: "assembled",
   }))
   assert.equal(result.classification, "verified-candidate")
   assert.deepEqual(result.checks.map((check) => [check.name, check.measured]), [
@@ -78,7 +75,7 @@ test("proves independent zero-drift and donor-equality truths in mandatory order
   ])
 })
 
-test("binds a verified candidate to the canonical Assembly report instead of its caller label", async () => {
+test("binds a verified candidate to the canonical Assembly report", async () => {
   const assembly = await Effect.runPromise(assemble({ baseline, donor, ownedRegion, exactCopy }))
   const result = await Effect.runPromise(verify({
     baseline,
@@ -87,7 +84,6 @@ test("binds a verified candidate to the canonical Assembly report instead of its
     ownedRegion,
     exactCopy,
     assemblyRequired: true,
-    candidateKind: "raw-generation",
   }))
   assert.equal(result.candidateSha256, assembly.output.sha256)
   assert.deepEqual(result.assemblyReport, assembly.report)
@@ -104,7 +100,24 @@ test("rejects a candidate that restores donor pixels over Exact Copy", async () 
     ownedRegion,
     exactCopy,
     assemblyRequired: true,
-    candidateKind: "assembled",
   })))
   assert.equal(error.code, "FIDELITY_CHECK_FAILED")
+})
+
+test("rejects non-finite and non-safe-integer owned regions before fidelity checks", async () => {
+  for (const [name, invalid] of [
+    ["NaN", { x: Number.NaN, y: 0, width: 1, height: 2 }],
+    ["fractional", { x: 0.5, y: 0, width: 1, height: 2 }],
+    ["unsafe integer", { x: Number.MAX_SAFE_INTEGER + 1, y: 0, width: 1, height: 2 }],
+  ] as const) {
+    const error = await Effect.runPromise(Effect.flip(verify({
+      baseline,
+      donor,
+      candidate: assembled,
+      ownedRegion: invalid,
+      exactCopy,
+      assemblyRequired: true,
+    })))
+    assert.equal(error.code, "MEDIA_CHECK_FAILED", name)
+  }
 })

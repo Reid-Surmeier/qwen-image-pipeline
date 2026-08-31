@@ -18,7 +18,7 @@ import {
   GenerationAdapter,
   type GenerationAdapterService,
 } from "../generation/index.js"
-import type { PlannedRun } from "../run-contract/index.js"
+import { MediaInspectionError, type MediaInspectorService } from "../run-contract/index.js"
 import {
   RunRecordClock,
   makeMemoryRunRecordHarness,
@@ -138,13 +138,6 @@ const hash = (value: Uint8Array | string): string =>
 const rgba = (pixels: ReadonlyArray<number>): Uint8Array =>
   Buffer.from(JSON.stringify({ height: 2, pixels, width: 2 }), "utf8")
 
-const canonical = (value: unknown): string => {
-  if (value === null || typeof value !== "object") return JSON.stringify(value)
-  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`
-  const record = value as Record<string, unknown>
-  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonical(record[key])}`).join(",")}}`
-}
-
 test("advances one Qwen Assembly Run through a genuine donor choice to verified evidence", async () => {
   const baseline = rgba([
     10, 10, 10, 255, 20, 20, 20, 255,
@@ -155,58 +148,73 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
     70, 70, 70, 255, 60, 60, 60, 255,
   ])
   const exactCopyCore = { x: 1, y: 0, rgba: [5, 6, 7, 255] as const }
-  const fixture = makeFixture("qwen-image")
+  const referencePath = "references/neutral.rgba.json"
+  const fixture = makeFixture("qwen-image", {
+    objective: (objective) => {
+      const reference = (objective.references as Array<Record<string, unknown>>)[0]!
+      reference.path = referencePath
+      reference.sha256 = hash(baseline)
+      reference.declaredMedia = { width: 2, height: 2 }
+      objective.assemblyPlan = {
+        required: true,
+        baselineReferenceSlot: "source",
+        ownedRegion: { x: 1, y: 0, width: 1, height: 2 },
+        exactCopy: [{
+          ...exactCopyCore,
+          sha256: hash(JSON.stringify(exactCopyCore)),
+        }],
+      }
+    },
+    files: (files) => {
+      files.delete("references/neutral.png")
+      files.set(referencePath, baseline)
+    },
+  })
+  const normalizedRgbaInspector: MediaInspectorService = {
+    inspect: (snapshot) => Effect.try({
+      try: () => {
+        const parsed = JSON.parse(Buffer.from(snapshot.bytes).toString("utf8")) as Record<string, unknown>
+        if (
+          !Number.isSafeInteger(parsed.width) || Number(parsed.width) < 1 ||
+          !Number.isSafeInteger(parsed.height) || Number(parsed.height) < 1 ||
+          !Array.isArray(parsed.pixels) ||
+          parsed.pixels.length !== Number(parsed.width) * Number(parsed.height) * 4 ||
+          parsed.pixels.some((channel) =>
+            typeof channel !== "number" || !Number.isInteger(channel) || channel < 0 || channel > 255)
+        ) throw new Error("invalid normalized RGBA")
+        return { width: Number(parsed.width), height: Number(parsed.height) }
+      },
+      catch: () => new MediaInspectionError("MALFORMED_MEDIA"),
+    }),
+  }
   const plannedDecision = await Effect.runPromise(
     plan({ objectivePath: fixture.objectivePath }).pipe(
       Effect.provideService(ApplicationFiles, fixture.files),
-      Effect.provideService(MediaInspector, byteMediaInspector),
+      Effect.provideService(MediaInspector, normalizedRgbaInspector),
       Effect.provideService(PlanningIdentity, fixture.identity),
     ),
   )
   assert.equal(plannedDecision._tag, "Planned")
   if (plannedDecision._tag !== "Planned") return
-  const request = {
-    ...plannedDecision.run.request,
-    assemblyPlan: {
-      required: true as const,
-      baselineReferenceSlot: "source",
-      ownedRegion: { x: 1, y: 0, width: 1, height: 2 },
-      exactCopy: [{
-        ...exactCopyCore,
-        sha256: hash(JSON.stringify(exactCopyCore)),
-      }],
-    },
-    references: plannedDecision.run.request.references.map((reference) => ({
-      ...reference,
-      sha256: hash(baseline),
-      byteLength: baseline.byteLength,
-      inspectedMedia: { width: 2, height: 2 },
-    })),
-  }
-  const canonicalRequest = canonical(request)
-  const plannedRun: PlannedRun = {
-    state: "planned",
-    request,
-    canonicalRequest,
-    requestSha256: hash(canonicalRequest),
-  }
-  const applicationFiles = {
-    read: (applicationPath: string) => applicationPath === "references/neutral.png"
-      ? Effect.succeed({ applicationPath, bytes: baseline })
-      : fixture.files.read(applicationPath),
-  }
+  const plannedRun = plannedDecision.run
+  const request = plannedRun.request
+  const canonicalRequest = plannedRun.canonicalRequest
+  assert.strictEqual(plannedRun, plannedDecision.run)
+  assert.equal(plannedRun.request.references[0]?.applicationPath, referencePath)
+  assert.equal(plannedRun.request.references[0]?.sha256, hash(baseline))
 
   const providerBody = Buffer.from('{"request_id":"fake-qwen-1","status":"succeeded"}', "utf8")
   let adapterCalls = 0
   const adapter: GenerationAdapterService = {
     invoke: (prepared) => Effect.sync(() => {
       adapterCalls += 1
+      assert.strictEqual(prepared.request, plannedRun.request)
       const destination = (
         prepared.payload.input_references as ReadonlyArray<{
           image_url: { url: { applicationPath: string; bytesBase64: string; mediaType: string; sha256: string } }
         }>
       )[0]!.image_url.url
-      assert.equal(destination.applicationPath, "references/neutral.png")
+      assert.equal(destination.applicationPath, referencePath)
       assert.equal(destination.sha256, hash(baseline))
       assert.equal(destination.mediaType, "application/vnd.qwen.rgba+json")
       assert.deepEqual(Buffer.from(destination.bytesBase64, "base64"), Buffer.from(baseline))
@@ -233,7 +241,7 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
   }
   const executeAdvance = (selectedDonorSha256?: string) => Effect.runPromise(
     advance({ run: plannedRun, ...(selectedDonorSha256 === undefined ? {} : { selectedDonorSha256 }) }).pipe(
-      Effect.provideService(ApplicationFiles, applicationFiles),
+      Effect.provideService(ApplicationFiles, fixture.files),
       Effect.provideService(GenerationAdapter, adapter),
       Effect.provide(memory.layer),
       Effect.provideService(RunRecordClock, clock),

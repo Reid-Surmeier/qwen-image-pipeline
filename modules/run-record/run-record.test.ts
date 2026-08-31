@@ -351,6 +351,12 @@ test("sanitized token counts pass while credential query strings are refused", a
     ["authentication", '{"authentication":{"value":"opaque-private-value"}}'],
     ["authentication-data", '{"authentication_data":"opaque-private-value"}'],
     ["auth-header", '{"auth_header":"Bearer opaque-private-value"}'],
+    ["secret-key", '{"secret_key":"opaque-private-value"}'],
+    ["client-secret-key", '{"client_secret_key":"opaque-private-value"}'],
+    ["password-value", '{"password_value":"opaque-private-value"}'],
+    ["credential-value", '{"credential_value":"opaque-private-value"}'],
+    ["signed-url-sig", '{"url":"https://provider.test/result?sig=opaque-private-value"}'],
+    ["signed-url-signature", '{"url":"https://provider.test/result?signature=opaque-private-value"}'],
   ] as const) {
     const memory = await memoryHarness()
     const run = await prepare(memory, suffix)

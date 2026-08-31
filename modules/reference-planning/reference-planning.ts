@@ -208,8 +208,8 @@ export const planReferenceInputs = (
         candidate.path,
       ))
     }
-    const actualKind = detectKind(snapshot.bytes)
-    if (actualKind !== requirement.kind) {
+    const detectedKind = detectKind(snapshot.bytes)
+    if (detectedKind !== undefined && detectedKind !== requirement.kind) {
       return yield* Effect.fail(new ReferencePlanningError(
         input.mode === "seedance-video"
           ? "SEEDANCE_VIDEO_REFERENCE_REQUIRED"
@@ -225,6 +225,7 @@ export const planReferenceInputs = (
         candidate.path,
       )),
     )
+    const actualKind = detectedKind ?? requirement.kind
     if (candidate.declaredMedia !== undefined && !sameMedia(inspectedMedia, candidate.declaredMedia)) {
       return yield* Effect.fail(new ReferencePlanningError(
         "DECLARED_MEDIA_MISMATCH",

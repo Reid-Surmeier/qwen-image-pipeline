@@ -7,7 +7,6 @@ export type VerificationInput = Readonly<{
   ownedRegion: OwnedRegion
   exactCopy: ReadonlyArray<ExactCopyPixel>
   assemblyRequired: boolean
-  candidateKind: "raw-generation" | "assembled"
 }>
 
 export type VerificationResult = Readonly<{
