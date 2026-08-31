@@ -127,6 +127,41 @@ const parseProviderDocument = (
   }
 }
 
+const completedPollMatchesResult = (
+  document: Readonly<Record<string, unknown>>,
+  outputs: ReadonlyArray<Readonly<{
+    applicationPath: string
+    mediaType: string
+    sha256: string
+  }>>,
+  completedCount: number,
+  cost: Readonly<Record<string, unknown>>,
+): boolean => {
+  if (
+    document.completed_count !== completedCount ||
+    !Array.isArray(document.outputs) || document.outputs.length !== outputs.length
+  ) return false
+  const seen = new Set<string>()
+  for (let index = 0; index < document.outputs.length; index += 1) {
+    if (!Object.hasOwn(document.outputs, index)) return false
+    const receipt = objectRecord(document.outputs[index])
+    const output = outputs[index]
+    if (
+      receipt === undefined || output === undefined ||
+      receipt.application_path !== output.applicationPath ||
+      receipt.media_type !== output.mediaType || receipt.sha256 !== output.sha256 ||
+      seen.has(output.applicationPath)
+    ) return false
+    seen.add(output.applicationPath)
+  }
+  const receiptCost = objectRecord(document.cost)
+  return receiptCost !== undefined && receiptCost.state === cost.state && (
+    cost.state === "actual"
+      ? receiptCost.actual_cost_usd === cost.actualCostUsd
+      : receiptCost.actual_cost_usd === undefined
+  )
+}
+
 const adapterEffect = <Success>(
   make: () => unknown,
   missingMessage: string,
@@ -591,6 +626,12 @@ export const pollSeedanceGeneration = (
         : cost.actualCostUsd !== undefined)
     ) {
       return yield* Effect.fail(new GenerationError("ADAPTER_RESULT_INVALID", "Seedance cost evidence is malformed."))
+    }
+    if (!completedPollMatchesResult(document, outputs, result.completedCount, cost)) {
+      return yield* Effect.fail(new GenerationError(
+        "ADAPTER_RESULT_INVALID",
+        "The sanitized Seedance completion receipt does not bind the exact outputs, count, and cost.",
+      ))
     }
     return {
       status: "completed",

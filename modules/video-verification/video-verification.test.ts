@@ -6,6 +6,7 @@ import { Effect } from "effect"
 
 import {
   forgedNonDecodableMp4,
+  hiddenAudioTrackMp4,
   malformedAudioTrack,
   makeFixture,
   zeroVideoTimingSampleCount,
@@ -197,6 +198,23 @@ test("rejects a malformed declared audio track instead of treating it as no audi
   const failure = await Effect.runPromise(Effect.flip(verifyVideo({
     outputs: [{
       applicationPath: "outputs/malformed-audio.mp4",
+      mediaType: "video/mp4",
+      body,
+      sha256: hash(body),
+    }],
+    expected: { width: 64, height: 48, durationSeconds: 0.2, audioExpected: false },
+    requestedCount: 1,
+    completedCount: 1,
+    cost: { state: "unknown", estimatedMaximumCostUsd: "0.20" },
+  })))
+  assert.equal(failure.code, "VIDEO_MEDIA_INVALID")
+})
+
+test("rejects an AAC track whose handler was relabeled to hide its audio", async () => {
+  const body = hiddenAudioTrackMp4()
+  const failure = await Effect.runPromise(Effect.flip(verifyVideo({
+    outputs: [{
+      applicationPath: "outputs/hidden-audio.mp4",
       mediaType: "video/mp4",
       body,
       sha256: hash(body),

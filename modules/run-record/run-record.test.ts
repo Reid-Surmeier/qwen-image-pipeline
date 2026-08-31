@@ -15,7 +15,7 @@ import {
   compilePlannedRun,
   type PlannedRun,
 } from "../run-contract/index.js"
-import { forgedNonDecodableMp4, malformedAudioTrack, makeFixture } from "../../tests/control-plane-fixture.js"
+import { forgedNonDecodableMp4, hiddenAudioTrackMp4, malformedAudioTrack, makeFixture } from "../../tests/control-plane-fixture.js"
 import { verifyVideo } from "../video-verification/index.js"
 import {
   RunRecordClock,
@@ -55,6 +55,32 @@ const reservationFor = (planned: PlannedRun) => ({
   plannedRun: planned,
   payloadSha256: planned.requestSha256,
 })
+
+const completedPollBody = (
+  jobId: string,
+  outputs: ReadonlyArray<Readonly<{
+    applicationPath: string
+    mediaType: string
+    sha256: string
+  }>>,
+  completedCount: number,
+  cost: Readonly<{ state: string; actualCostUsd?: string }>,
+  extra: Readonly<Record<string, unknown>> = {},
+): Buffer => Buffer.from(JSON.stringify({
+  job_id: jobId,
+  status: "completed",
+  ...extra,
+  outputs: outputs.map((output) => ({
+    application_path: output.applicationPath,
+    media_type: output.mediaType,
+    sha256: output.sha256,
+  })),
+  completed_count: completedCount,
+  cost: {
+    state: cost.state,
+    ...(cost.actualCostUsd === undefined ? {} : { actual_cost_usd: cost.actualCostUsd }),
+  },
+}))
 
 const plannedRun = async (linkedRun?: RunLink, requestedCount = 1): Promise<PlannedRun> => {
   const fixture = makeFixture("qwen-image", {
@@ -517,8 +543,12 @@ test("persists one Seedance job, polls only that identity, and records verified 
   assert.equal(pending.view.pollCount, 1)
   assert.equal(pending.view.providerJobId, "seedance-job-1")
 
-  const completedBody = Buffer.from('{"job_id":"seedance-job-1","status":"completed"}')
   const outputSha256 = createHash("sha256").update(videoBody).digest("hex")
+  const completedBody = completedPollBody("seedance-job-1", [{
+    applicationPath: "outputs/seedance-result.mp4",
+    mediaType: "video/mp4",
+    sha256: outputSha256,
+  }], 1, { state: "estimated-only" })
   const completed = await Effect.runPromise(provide(record({
     _tag: "CommitSeedancePoll",
     runId: reserved.runId,
@@ -640,9 +670,12 @@ test("video checks must cover every persisted Seedance output exactly once", asy
     },
   })))
   const badBody = markerOnlyMp4()
-  const completedBody = Buffer.from('{"job_id":"seedance-job-two","status":"completed"}')
   const goodSha256 = createHash("sha256").update(videoBody).digest("hex")
   const badSha256 = createHash("sha256").update(badBody).digest("hex")
+  const completedBody = completedPollBody("seedance-job-two", [
+    { applicationPath: "outputs/good.mp4", mediaType: "video/mp4", sha256: goodSha256 },
+    { applicationPath: "outputs/bad.mp4", mediaType: "video/mp4", sha256: badSha256 },
+  ], 2, { state: "estimated-only" })
   await Effect.runPromise(provide(record({
     _tag: "CommitSeedancePoll",
     runId: reserved.runId,
@@ -732,7 +765,12 @@ test("invalid runtime Seedance cost state is rejected before any poll evidence i
       sha256: createHash("sha256").update(submissionBody).digest("hex"),
     },
   })))
-  const completedBody = Buffer.from('{"job_id":"seedance-invalid-cost","status":"completed"}')
+  const outputSha256 = createHash("sha256").update(videoBody).digest("hex")
+  const completedBody = completedPollBody("seedance-invalid-cost", [{
+    applicationPath: "outputs/seedance-result.mp4",
+    mediaType: "video/mp4",
+    sha256: outputSha256,
+  }], 1, { state: "forged-runtime-state" })
   const forgedOperation = {
     _tag: "CommitSeedancePoll",
     runId: reserved.runId,
@@ -748,7 +786,7 @@ test("invalid runtime Seedance cost state is rejected before any poll evidence i
       applicationPath: "outputs/seedance-result.mp4",
       mediaType: "video/mp4",
       body: videoBody,
-      sha256: createHash("sha256").update(videoBody).digest("hex"),
+      sha256: outputSha256,
     }],
     completedCount: 1,
     cost: { state: "forged-runtime-state" },
@@ -789,8 +827,12 @@ test("Run Record replay refuses box-consistent but non-decodable Seedance output
       sha256: createHash("sha256").update(submissionBody).digest("hex"),
     },
   })))
-  const completedBody = Buffer.from('{"job_id":"seedance-forged","status":"completed"}')
   const outputSha256 = createHash("sha256").update(videoBody).digest("hex")
+  const completedBody = completedPollBody("seedance-forged", [{
+    applicationPath: "outputs/non-decodable.mp4",
+    mediaType: "video/mp4",
+    sha256: outputSha256,
+  }], 1, { state: "unknown" })
   await Effect.runPromise(provide(record({
     _tag: "CommitSeedancePoll",
     runId: reserved.runId,
@@ -873,8 +915,12 @@ test("Run Record replay refuses a malformed declared audio track", async () => {
       sha256: createHash("sha256").update(submissionBody).digest("hex"),
     },
   })))
-  const completedBody = Buffer.from('{"job_id":"seedance-malformed-audio","status":"completed"}')
   const outputSha256 = createHash("sha256").update(malformed).digest("hex")
+  const completedBody = completedPollBody("seedance-malformed-audio", [{
+    applicationPath: "outputs/malformed-audio.mp4",
+    mediaType: "video/mp4",
+    sha256: outputSha256,
+  }], 1, { state: "unknown" })
   await Effect.runPromise(provide(record({
     _tag: "CommitSeedancePoll",
     runId: reserved.runId,
@@ -929,6 +975,93 @@ test("Run Record replay refuses a malformed declared audio track", async () => {
   assert.equal(failure.code, "CHECKS_NOT_PASSED")
 })
 
+test("Run Record replay refuses an AAC track relabeled to hide its audio", async () => {
+  const { planned } = await plannedSeedanceRun()
+  const hiddenAudio = hiddenAudioTrackMp4()
+  const memory = await memoryHarness()
+  const provide = <Success, Error>(
+    effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
+  ): Effect.Effect<Success, Error> => effect.pipe(
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, clock),
+  )
+  const reserved = await Effect.runPromise(provide(reserve(reservationFor(planned))))
+  await Effect.runPromise(provide(record({
+    _tag: "SubmissionMayHaveStarted",
+    runId: reserved.runId,
+    operationId: "seedance-hidden-audio-submit-marker",
+  })))
+  const submissionBody = Buffer.from('{"job_id":"seedance-hidden-audio","status":"submitted"}')
+  await Effect.runPromise(provide(record({
+    _tag: "CommitProviderEvidence",
+    runId: reserved.runId,
+    operationId: "seedance-hidden-audio-submission",
+    evidence: {
+      mediaType: "application/json",
+      body: submissionBody,
+      sha256: createHash("sha256").update(submissionBody).digest("hex"),
+    },
+  })))
+  const outputSha256 = createHash("sha256").update(hiddenAudio).digest("hex")
+  const completedBody = completedPollBody("seedance-hidden-audio", [{
+    applicationPath: "outputs/hidden-audio.mp4",
+    mediaType: "video/mp4",
+    sha256: outputSha256,
+  }], 1, { state: "unknown" })
+  await Effect.runPromise(provide(record({
+    _tag: "CommitSeedancePoll",
+    runId: reserved.runId,
+    operationId: "seedance-hidden-audio-complete",
+    jobId: "seedance-hidden-audio",
+    status: "completed",
+    evidence: {
+      mediaType: "application/json",
+      body: completedBody,
+      sha256: createHash("sha256").update(completedBody).digest("hex"),
+    },
+    outputs: [{
+      applicationPath: "outputs/hidden-audio.mp4",
+      mediaType: "video/mp4",
+      body: hiddenAudio,
+      sha256: outputSha256,
+    }],
+    completedCount: 1,
+    cost: { state: "unknown" },
+  })))
+  const forgedReport = {
+    algorithm: "seedance-media-v1" as const,
+    classification: "verified-candidate" as const,
+    outputs: [{
+      applicationPath: "outputs/hidden-audio.mp4" as const,
+      mediaType: "video/mp4" as const,
+      sha256: outputSha256,
+      actual: { width: 64, height: 48, durationSeconds: 0.2, hasAudio: false },
+    }],
+    requestedCount: 1,
+    completedCount: 1,
+    expected: planned.request.videoPlan!.expectedMedia,
+    cost: {
+      state: "unknown" as const,
+      estimatedMaximumCostUsd: planned.request.estimatedMaximumCostUsd,
+    },
+    checks: [
+      { name: "integrity" as const, passed: true as const, measured: 0 },
+      { name: "media" as const, passed: true as const, measured: 0 },
+      { name: "dimensions" as const, passed: true as const, measured: 0 },
+      { name: "duration" as const, passed: true as const, measured: 0 },
+      { name: "audio-expectation" as const, passed: true as const, measured: 0 },
+    ],
+  }
+  const failure = await Effect.runPromise(Effect.flip(provide(record({
+    _tag: "CommitVideoChecks",
+    runId: reserved.runId,
+    operationId: "seedance-hidden-audio-checks",
+    jobId: "seedance-hidden-audio",
+    report: forgedReport,
+  }))))
+  assert.equal(failure.code, "CHECKS_NOT_PASSED")
+})
+
 test("a completed poll recovers when interrupted after poll evidence but before output evidence", async () => {
   const { planned, body: videoBody } = await plannedSeedanceRun()
   const memory = await memoryHarness()
@@ -972,11 +1105,17 @@ test("a completed poll recovers when interrupted after poll evidence but before 
     },
   })))
   const outputSha256 = createHash("sha256").update(videoBody).digest("hex")
-  const completedPoll = (polledAt: string, outputBody = videoBody): RecordOperation => {
+  const completedPoll = (
+    polledAt: string,
+    applicationPath: `outputs/${string}` = "outputs/seedance-poll-only-orphan.mp4",
+  ): RecordOperation => {
     const pollBody = Buffer.from(JSON.stringify({
       job_id: "seedance-poll-only-orphan",
       status: "completed",
       polled_at: polledAt,
+      outputs: [{ application_path: applicationPath, media_type: "video/mp4", sha256: outputSha256 }],
+      completed_count: 1,
+      cost: { state: "unknown" },
     }))
     return {
       _tag: "CommitSeedancePoll",
@@ -990,7 +1129,7 @@ test("a completed poll recovers when interrupted after poll evidence but before 
         sha256: createHash("sha256").update(pollBody).digest("hex"),
       },
       outputs: [{
-        applicationPath: "outputs/seedance-poll-only-orphan.mp4",
+        applicationPath,
         mediaType: "video/mp4",
         body: videoBody,
         sha256: outputSha256,
@@ -1007,6 +1146,12 @@ test("a completed poll recovers when interrupted after poll evidence but before 
       "outputs/seedance-poll-only-orphan.mp4",
     ).pipe(Effect.provide(memory.layer))),
   )
+
+  const replacement = await Effect.runPromise(Effect.flip(provide(record(completedPoll(
+    "second",
+    "outputs/replacement.mp4",
+  )), memory.layer)))
+  assert.equal(replacement.code, "EVIDENCE_HASH_MISMATCH")
 
   const recovered = await Effect.runPromise(provide(record(completedPoll("second")), memory.layer))
   assert.equal(recovered.view.phase, "generated_outputs_received")
@@ -1049,11 +1194,12 @@ test("a completed poll recovers orphaned write-once evidence without stranding t
     },
   })))
   const completedPoll = (polledAt: string, outputBody = videoBody): RecordOperation => {
-    const pollBody = Buffer.from(JSON.stringify({
-      job_id: "seedance-orphan",
-      status: "completed",
-      polled_at: polledAt,
-    }))
+    const outputSha256 = createHash("sha256").update(outputBody).digest("hex")
+    const pollBody = completedPollBody("seedance-orphan", [{
+      applicationPath: "outputs/seedance-orphan.mp4",
+      mediaType: "video/mp4",
+      sha256: outputSha256,
+    }], 1, { state: "unknown" }, { polled_at: polledAt })
     return {
       _tag: "CommitSeedancePoll",
       runId: reserved.runId,
@@ -1069,7 +1215,7 @@ test("a completed poll recovers orphaned write-once evidence without stranding t
         applicationPath: "outputs/seedance-orphan.mp4",
         mediaType: "video/mp4",
         body: outputBody,
-        sha256: createHash("sha256").update(outputBody).digest("hex"),
+        sha256: outputSha256,
       }],
       completedCount: 1,
       cost: { state: "unknown" },

@@ -404,7 +404,17 @@ test("advances one Seedance Run by submitting once and polling the same job to v
   const videoBody = (await Effect.runPromise(fixture.files.read("references/neutral.mp4"))).bytes
   const submissionBody = Buffer.from('{"job_id":"seedance-job-1","status":"submitted"}')
   const pendingBody = Buffer.from('{"job_id":"seedance-job-1","status":"pending"}')
-  const completedBody = Buffer.from('{"job_id":"seedance-job-1","status":"completed"}')
+  const completedBody = Buffer.from(JSON.stringify({
+    job_id: "seedance-job-1",
+    status: "completed",
+    outputs: [{
+      application_path: "outputs/seedance-result.mp4",
+      media_type: "video/mp4",
+      sha256: hash(videoBody),
+    }],
+    completed_count: 1,
+    cost: { state: "estimated-only" },
+  }))
   let submitCalls = 0
   let pollCalls = 0
   const adapter: GenerationAdapterService = {

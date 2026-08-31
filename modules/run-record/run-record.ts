@@ -554,11 +554,25 @@ const requireReplayBox = (boxes: ReadonlyArray<ReplayMp4Box>, type: string): Rep
   return box
 }
 
+type ReplayMp4MediaKind = "video" | "audio"
+
+const replaySampleTableMediaKind = (
+  value: Uint8Array,
+  stbl: ReplayMp4Box,
+): ReplayMp4MediaKind | undefined => {
+  const stsd = replayBoxes(value, stbl.contentStart, stbl.end).find((box) => box.type === "stsd")
+  if (stsd === undefined || stsd.contentStart + 16 > stsd.end) return undefined
+  const codec = Buffer.from(value.subarray(stsd.contentStart + 12, stsd.contentStart + 16)).toString("ascii")
+  if (/^(?:avc1|avc3|hvc1|hev1|av01|vp09|mp4v)$/.test(codec)) return "video"
+  if (/^(?:mp4a|ac-3|ec-3|Opus)$/.test(codec)) return "audio"
+  return undefined
+}
+
 const validReplaySampleTable = (
   value: Uint8Array,
   stbl: ReplayMp4Box,
   mediaData: ReadonlyArray<ReplayMp4Box>,
-  handler: string,
+  mediaKind: ReplayMp4MediaKind,
 ): boolean => {
   const children = replayBoxes(value, stbl.contentStart, stbl.end)
   const stsd = children.find((box) => box.type === "stsd")
@@ -587,9 +601,8 @@ const validReplaySampleTable = (
   if (sampleEntrySize < 8 || stsd.contentStart + 8 + sampleEntrySize > stsd.end) return false
   const codec = Buffer.from(value.subarray(stsd.contentStart + 12, stsd.contentStart + 16)).toString("ascii")
   if (
-    (handler === "vide" && !/^(?:avc1|avc3|hvc1|hev1|av01|vp09|mp4v)$/.test(codec)) ||
-    (handler === "soun" && !/^(?:mp4a|ac-3|ec-3|Opus)$/.test(codec)) ||
-    (handler !== "vide" && handler !== "soun")
+    (mediaKind === "video" && !/^(?:avc1|avc3|hvc1|hev1|av01|vp09|mp4v)$/.test(codec)) ||
+    (mediaKind === "audio" && !/^(?:mp4a|ac-3|ec-3|Opus)$/.test(codec))
   ) return false
   const sampleSize = readReplayUint32(value, stsz.contentStart + 4)
   const sampleCount = readReplayUint32(value, stsz.contentStart + 8)
@@ -683,17 +696,24 @@ const inspectVideoForReplay = (
     }
     const handler = Buffer.from(value.subarray(hdlr.contentStart + 8, hdlr.contentStart + 12)).toString("ascii")
     const stbl = requireReplayBox(replayBoxes(value, minf.contentStart, minf.end), "stbl")
-    const sampleTableValid = validReplaySampleTable(value, stbl, mediaData, handler)
-    if ((handler === "vide" || handler === "soun") && !sampleTableValid) {
+    const declaredKind: ReplayMp4MediaKind | undefined = handler === "vide"
+      ? "video"
+      : handler === "soun" ? "audio" : undefined
+    const codecKind = replaySampleTableMediaKind(value, stbl)
+    if ((declaredKind !== undefined || codecKind !== undefined) && declaredKind !== codecKind) {
+      throw new RunRecordError("CHECKS_NOT_PASSED", "The replayed MP4 track handler contradicts its media codec.", "repair-evidence")
+    }
+    if (codecKind === undefined) continue
+    const sampleTableValid = validReplaySampleTable(value, stbl, mediaData, codecKind)
+    if (!sampleTableValid) {
       throw new RunRecordError("CHECKS_NOT_PASSED", "The replayed MP4 video or audio sample table is malformed.", "repair-evidence")
     }
-    if (!sampleTableValid) continue
-    if (handler === "vide") {
+    if (codecKind === "video") {
       videoTrack = {
         width: readReplayUint32(value, tkhd.end - 8) / 65_536,
         height: readReplayUint32(value, tkhd.end - 4) / 65_536,
       }
-    } else if (handler === "soun") {
+    } else if (codecKind === "audio") {
       hasAudio = true
     }
   }
@@ -1358,6 +1378,38 @@ const validateProviderEvidence = (operation: Extract<RecordOperation, { _tag: "C
   }
 }
 
+const completedPollMatchesOperation = (
+  poll: Readonly<Record<string, unknown>>,
+  operation: Extract<RecordOperation, { _tag: "CommitSeedancePoll"; status: "completed" }>,
+): boolean => {
+  if (
+    poll.completed_count !== operation.completedCount ||
+    !Array.isArray(poll.outputs) || poll.outputs.length !== operation.outputs.length
+  ) return false
+  const seen = new Set<string>()
+  for (let index = 0; index < poll.outputs.length; index += 1) {
+    if (!Object.hasOwn(poll.outputs, index)) return false
+    const receipt = poll.outputs[index]
+    if (receipt === null || typeof receipt !== "object" || Array.isArray(receipt)) return false
+    const output = operation.outputs[index]
+    const record = receipt as Readonly<Record<string, unknown>>
+    if (
+      output === undefined || record.application_path !== output.applicationPath ||
+      record.media_type !== output.mediaType || record.sha256 !== output.sha256 ||
+      seen.has(output.applicationPath)
+    ) return false
+    seen.add(output.applicationPath)
+  }
+  const cost = poll.cost
+  if (cost === null || typeof cost !== "object" || Array.isArray(cost)) return false
+  const costRecord = cost as Readonly<Record<string, unknown>>
+  return costRecord.state === operation.cost.state && (
+    operation.cost.state === "actual"
+      ? costRecord.actual_cost_usd === operation.cost.actualCostUsd
+      : costRecord.actual_cost_usd === undefined
+  )
+}
+
 export const recordOperation = (
   operation: RecordOperation,
 ): Effect.Effect<RecordResult, RunRecordError, RunRecordStoreService | RunRecordClockService> => Effect.gen(function*() {
@@ -1625,6 +1677,13 @@ export const recordOperation = (
     ) {
       return yield* Effect.fail(new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance poll evidence substituted its job identity or status.", "repair-evidence"))
     }
+    if (operation.status === "completed" && !completedPollMatchesOperation(poll, operation)) {
+      return yield* Effect.fail(new RunRecordError(
+        "EVIDENCE_HASH_MISMATCH",
+        "Completed Seedance poll evidence does not bind its exact output, count, and cost receipts.",
+        "repair-evidence",
+      ))
+    }
     const applicationPath = `polls/poll-${String((current.pollCount ?? 0) + 1).padStart(4, "0")}.json`
     const orphanedPollBody = stored.evidence[applicationPath]
     const durablePollEvidence = orphanedPollBody === undefined
@@ -1658,6 +1717,13 @@ export const recordOperation = (
         orphanedPoll.job_id !== operation.jobId || orphanedPoll.status !== operation.status
       ) {
         return yield* Effect.fail(new RunRecordError("EVIDENCE_HASH_MISMATCH", "Orphaned Seedance evidence belongs to a different job or poll status.", "repair-evidence"))
+      }
+      if (operation.status === "completed" && !completedPollMatchesOperation(orphanedPoll, operation)) {
+        return yield* Effect.fail(new RunRecordError(
+          "EVIDENCE_HASH_MISMATCH",
+          "Orphaned Seedance poll evidence contradicts the retried output, count, or cost receipts.",
+          "repair-evidence",
+        ))
       }
     }
     const orphanedOutputPaths = Object.keys(stored.evidence).filter((path) =>

@@ -10,7 +10,7 @@ A structurally consistent MP4 can still declare media samples that no decoder ca
 
 ## Decision
 
-Keep the three structural inspectors independent, reconcile timing sample counts with sample-size counts, and require each inspector to decode the exact MP4 bytes through FFmpeg 6 at `/usr/bin/ffmpeg` before accepting them.
+Keep the three structural inspectors independent, require every recognized video or audio sample-entry codec to agree with its track's declared handler kind, reconcile timing sample counts with sample-size counts, and require each inspector to decode the exact MP4 bytes through FFmpeg 6 at `/usr/bin/ffmpeg` before accepting them.
 
 The decoder receives bytes only through standard input. Its fixed argument vector disables standard input interaction, allows only the `pipe` protocol, maps the required video stream and any declared audio stream, turns decode errors into failure, uses one thread, emits no output file, and has bounded time and diagnostic buffers. No shell is involved and the child environment contains only `LANG`, `LC_ALL`, and `PATH`. Absence, timeout, or any decoder error fails closed through the owning module's typed error.
 
@@ -20,5 +20,6 @@ The deterministic baseline pins the supported FFmpeg major and permits only this
 
 - Reference intake, output verification, and replay all reject box-consistent but undecodable video.
 - A malformed declared audio track is an error rather than evidence that audio is absent.
+- An audio codec relabeled under a non-audio handler is an error rather than evidence that audio is absent.
 - The baseline now requires FFmpeg 6 at the fixed system path; another host must satisfy that prerequisite before the procedure can verify Seedance evidence.
 - The three modules retain separate container parsers so one planning assertion cannot grade its own output, while all use the same host decoder requirement.

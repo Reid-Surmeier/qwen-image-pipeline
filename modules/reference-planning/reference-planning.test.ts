@@ -12,6 +12,7 @@ import {
 } from "./index.js"
 import {
   forgedNonDecodableMp4,
+  hiddenAudioTrackMp4,
   malformedAudioTrack,
   makeFixture,
   sha256,
@@ -86,6 +87,16 @@ test("refuses a malformed declared audio track instead of treating it as no audi
     applicationPath: snapshot.applicationPath,
     bytes: malformed,
     sha256: sha256(malformed),
+  }))
+  assert.equal(result._tag, "Failure")
+})
+
+test("refuses an AAC track whose handler was relabeled to hide its audio", async () => {
+  const forged = hiddenAudioTrackMp4()
+  const result = await Effect.runPromiseExit(byteMediaInspector.inspect({
+    applicationPath: "references/hidden-audio.mp4",
+    bytes: forged,
+    sha256: sha256(forged),
   }))
   assert.equal(result._tag, "Failure")
 })

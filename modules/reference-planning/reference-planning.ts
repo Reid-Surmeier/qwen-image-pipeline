@@ -123,10 +123,22 @@ const requireBox = (boxes: ReadonlyArray<Mp4Box>, type: string): Mp4Box => {
   return box
 }
 
-const validVideoSampleTable = (
+type Mp4MediaKind = "video" | "audio"
+
+const sampleTableMediaKind = (bytes: Uint8Array, stbl: Mp4Box): Mp4MediaKind | undefined => {
+  const stsd = parseBoxes(bytes, stbl.contentStart, stbl.end).find((box) => box.type === "stsd")
+  if (stsd === undefined || stsd.contentStart + 16 > stsd.end) return undefined
+  const codec = Buffer.from(bytes.subarray(stsd.contentStart + 12, stsd.contentStart + 16)).toString("ascii")
+  if (/^(?:avc1|avc3|hvc1|hev1|av01|vp09|mp4v)$/.test(codec)) return "video"
+  if (/^(?:mp4a|ac-3|ec-3|Opus)$/.test(codec)) return "audio"
+  return undefined
+}
+
+const validMediaSampleTable = (
   bytes: Uint8Array,
   stbl: Mp4Box,
   mediaData: ReadonlyArray<Mp4Box>,
+  mediaKind: Mp4MediaKind,
 ): boolean => {
   const children = parseBoxes(bytes, stbl.contentStart, stbl.end)
   const stsd = children.find((box) => box.type === "stsd")
@@ -154,7 +166,10 @@ const validVideoSampleTable = (
   const sampleEntrySize = readUint32(bytes, stsd.contentStart + 8)
   if (sampleEntrySize < 8 || stsd.contentStart + 8 + sampleEntrySize > stsd.end) return false
   const codec = Buffer.from(bytes.subarray(stsd.contentStart + 12, stsd.contentStart + 16)).toString("ascii")
-  if (!/^(?:avc1|avc3|hvc1|hev1|av01|vp09|mp4v)$/.test(codec)) return false
+  if (
+    (mediaKind === "video" && !/^(?:avc1|avc3|hvc1|hev1|av01|vp09|mp4v)$/.test(codec)) ||
+    (mediaKind === "audio" && !/^(?:mp4a|ac-3|ec-3|Opus)$/.test(codec))
+  ) return false
   const sampleSize = readUint32(bytes, stsz.contentStart + 4)
   const sampleCount = readUint32(bytes, stsz.contentStart + 8)
   if (sampleCount < 1) return false
@@ -238,10 +253,28 @@ const inspectVideoBytes = (
       throw new MediaInspectionError("MALFORMED_MEDIA")
     }
     const handler = Buffer.from(bytes.subarray(hdlr.contentStart + 8, hdlr.contentStart + 12)).toString("ascii")
-    if (handler !== "vide") continue
-    const minf = requireBox(mediaChildren, "minf")
-    const stbl = requireBox(parseBoxes(bytes, minf.contentStart, minf.end), "stbl")
-    if (!validVideoSampleTable(bytes, stbl, mediaData)) continue
+    const declaredKind: Mp4MediaKind | undefined = handler === "vide"
+      ? "video"
+      : handler === "soun" ? "audio" : undefined
+    const minf = mediaChildren.find((box) => box.type === "minf")
+    if (minf === undefined) {
+      if (declaredKind !== undefined) throw new MediaInspectionError("MALFORMED_MEDIA")
+      continue
+    }
+    const stbl = parseBoxes(bytes, minf.contentStart, minf.end).find((box) => box.type === "stbl")
+    if (stbl === undefined) {
+      if (declaredKind !== undefined) throw new MediaInspectionError("MALFORMED_MEDIA")
+      continue
+    }
+    const codecKind = sampleTableMediaKind(bytes, stbl)
+    if ((declaredKind !== undefined || codecKind !== undefined) && declaredKind !== codecKind) {
+      throw new MediaInspectionError("MALFORMED_MEDIA")
+    }
+    if (codecKind === undefined) continue
+    if (!validMediaSampleTable(bytes, stbl, mediaData, codecKind)) {
+      throw new MediaInspectionError("MALFORMED_MEDIA")
+    }
+    if (codecKind !== "video") continue
     dimensions = {
       width: readUint32(bytes, tkhd.end - 8) / 65_536,
       height: readUint32(bytes, tkhd.end - 4) / 65_536,

@@ -28,6 +28,26 @@ import {
 
 const sha256 = (value: Uint8Array): string => createHash("sha256").update(value).digest("hex")
 
+const completedPollBody = (
+  jobId: string,
+  outputs: ReadonlyArray<Readonly<{ applicationPath: string; mediaType: string; sha256: string }>>,
+  completedCount: number,
+  cost: Readonly<{ state: string; actualCostUsd?: string }>,
+): Buffer => Buffer.from(JSON.stringify({
+  job_id: jobId,
+  status: "completed",
+  outputs: outputs.map((output) => ({
+    application_path: output.applicationPath,
+    media_type: output.mediaType,
+    sha256: output.sha256,
+  })),
+  completed_count: completedCount,
+  cost: {
+    state: cost.state,
+    ...(cost.actualCostUsd === undefined ? {} : { actual_cost_usd: cost.actualCostUsd }),
+  },
+}))
+
 test("puts exact reference bytes and hash at the locked destination and invokes one adapter once", async () => {
   const fixture = makeFixture("qwen-image")
   const decision = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
@@ -128,7 +148,11 @@ test("submits exact Seedance video once and polls only the same sanitized job id
 
   const submissionBody = Buffer.from('{"job_id":"seedance-job-1","status":"submitted"}')
   const pendingBody = Buffer.from('{"job_id":"seedance-job-1","status":"pending"}')
-  const completedBody = Buffer.from('{"job_id":"seedance-job-1","status":"completed"}')
+  const completedBody = completedPollBody("seedance-job-1", [{
+    applicationPath: "outputs/seedance-result.mp4",
+    mediaType: "video/mp4",
+    sha256: sha256(snapshot.bytes),
+  }], 1, { state: "estimated-only" })
   let submitCalls = 0
   let pollCalls = 0
   const pollResults: SeedancePollResult[] = [
@@ -205,6 +229,40 @@ test("submits exact Seedance video once and polls only the same sanitized job id
   assert.equal(completed.status, "completed")
   assert.equal(submitCalls, 1)
   assert.equal(pollCalls, 2)
+
+  const contradictoryBody = completedPollBody("seedance-job-1", [{
+    applicationPath: "outputs/substituted.mp4",
+    mediaType: "video/mp4",
+    sha256: sha256(snapshot.bytes),
+  }], 1, { state: "estimated-only" })
+  const contradictoryAdapter: GenerationAdapterService = {
+    invoke: () => Effect.die("Qwen invocation must not run"),
+    pollSeedance: () => Effect.succeed({
+      status: "completed" as const,
+      provider: "openrouter" as const,
+      model: decision.run.request.model,
+      jobId: "seedance-job-1",
+      providerEvidence: {
+        mediaType: "application/json" as const,
+        body: contradictoryBody,
+        sha256: sha256(contradictoryBody),
+      },
+      outputs: [{
+        applicationPath: "outputs/seedance-result.mp4" as const,
+        mediaType: "video/mp4" as const,
+        body: snapshot.bytes,
+        sha256: sha256(snapshot.bytes),
+      }],
+      completedCount: 1,
+      cost: { state: "estimated-only" as const },
+    }),
+  }
+  const contradiction = await Effect.runPromise(Effect.flip(pollSeedance(
+    prepared,
+    submission.jobId,
+    submission.providerEvidence,
+  ).pipe(Effect.provideService(GenerationAdapter, contradictoryAdapter))))
+  assert.equal(contradiction.code, "ADAPTER_RESULT_INVALID")
 
   const duplicate = await Effect.runPromise(Effect.flip(submitSeedance(prepared, marker.permit).pipe(
     Effect.provideService(GenerationAdapter, adapter),

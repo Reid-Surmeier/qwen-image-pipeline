@@ -78,11 +78,22 @@ const requireBox = (boxes: ReadonlyArray<Mp4Box>, type: string): Mp4Box => {
 const fullBoxEntryCount = (bytes: Uint8Array, box: Mp4Box, relativeOffset = 4): number =>
   readUint32(bytes, box.contentStart + relativeOffset)
 
+type Mp4MediaKind = "video" | "audio"
+
+const sampleTableMediaKind = (bytes: Uint8Array, stbl: Mp4Box): Mp4MediaKind | undefined => {
+  const stsd = parseBoxes(bytes, stbl.contentStart, stbl.end).find((box) => box.type === "stsd")
+  if (stsd === undefined || stsd.contentStart + 16 > stsd.end) return undefined
+  const codec = Buffer.from(bytes.subarray(stsd.contentStart + 12, stsd.contentStart + 16)).toString("ascii")
+  if (/^(?:avc1|avc3|hvc1|hev1|av01|vp09|mp4v)$/.test(codec)) return "video"
+  if (/^(?:mp4a|ac-3|ec-3|Opus)$/.test(codec)) return "audio"
+  return undefined
+}
+
 const validSampleTable = (
   bytes: Uint8Array,
   stbl: Mp4Box,
   mediaData: ReadonlyArray<Mp4Box>,
-  handler: string,
+  mediaKind: Mp4MediaKind,
 ): boolean => {
   const children = parseBoxes(bytes, stbl.contentStart, stbl.end)
   const stsd = children.find((box) => box.type === "stsd")
@@ -111,9 +122,8 @@ const validSampleTable = (
   if (sampleEntrySize < 8 || stsd.contentStart + 8 + sampleEntrySize > stsd.end) return false
   const codec = Buffer.from(bytes.subarray(stsd.contentStart + 12, stsd.contentStart + 16)).toString("ascii")
   if (
-    (handler === "vide" && !/^(?:avc1|avc3|hvc1|hev1|av01|vp09|mp4v)$/.test(codec)) ||
-    (handler === "soun" && !/^(?:mp4a|ac-3|ec-3|Opus)$/.test(codec)) ||
-    (handler !== "vide" && handler !== "soun")
+    (mediaKind === "video" && !/^(?:avc1|avc3|hvc1|hev1|av01|vp09|mp4v)$/.test(codec)) ||
+    (mediaKind === "audio" && !/^(?:mp4a|ac-3|ec-3|Opus)$/.test(codec))
   ) return false
   const sampleSize = readUint32(bytes, stsz.contentStart + 4)
   const sampleCount = readUint32(bytes, stsz.contentStart + 8)
@@ -209,17 +219,24 @@ const inspectMp4 = (
     const handler = Buffer.from(bytes.subarray(hdlr.contentStart + 8, hdlr.contentStart + 12)).toString("ascii")
     const mediaInformation = parseBoxes(bytes, minf.contentStart, minf.end)
     const stbl = requireBox(mediaInformation, "stbl")
-    const sampleTableValid = validSampleTable(bytes, stbl, mediaData, handler)
-    if ((handler === "vide" || handler === "soun") && !sampleTableValid) {
+    const declaredKind: Mp4MediaKind | undefined = handler === "vide"
+      ? "video"
+      : handler === "soun" ? "audio" : undefined
+    const codecKind = sampleTableMediaKind(bytes, stbl)
+    if ((declaredKind !== undefined || codecKind !== undefined) && declaredKind !== codecKind) {
+      throw new VideoVerificationError("VIDEO_MEDIA_INVALID", "The MP4 track handler contradicts its media codec.")
+    }
+    if (codecKind === undefined) continue
+    const sampleTableValid = validSampleTable(bytes, stbl, mediaData, codecKind)
+    if (!sampleTableValid) {
       throw new VideoVerificationError("VIDEO_MEDIA_INVALID", "The MP4 video or audio sample table is malformed.")
     }
-    if (!sampleTableValid) continue
-    if (handler === "vide") {
+    if (codecKind === "video") {
       videoTrack = {
         width: readUint32(bytes, tkhd.end - 8) / 65_536,
         height: readUint32(bytes, tkhd.end - 4) / 65_536,
       }
-    } else if (handler === "soun") {
+    } else if (codecKind === "audio") {
       hasAudio = true
     }
   }
