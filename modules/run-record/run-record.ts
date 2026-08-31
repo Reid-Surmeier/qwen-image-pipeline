@@ -235,20 +235,24 @@ const recordedRequest = (
     "videoPlan",
   ])
   const imageParameters = request.imageParameters
+  const currentQwenImageParametersValid = imageParameters !== null &&
+    typeof imageParameters === "object" &&
+    !Array.isArray(imageParameters) &&
+    Object.keys(imageParameters).sort().join(",") === "aspectRatio,resolution,seed" &&
+    ((imageParameters as Record<string, unknown>).resolution === "1K" ||
+      (imageParameters as Record<string, unknown>).resolution === "2K") &&
+    typeof (imageParameters as Record<string, unknown>).aspectRatio === "string" &&
+    /^(?:1:1|1:2|1:4|2:1|2:3|3:2|3:4|4:1|4:3|4:5|5:4|9:16|16:9)$/.test(
+      String((imageParameters as Record<string, unknown>).aspectRatio),
+    ) &&
+    Number.isSafeInteger((imageParameters as Record<string, unknown>).seed) &&
+    Number((imageParameters as Record<string, unknown>).seed) >= 0 &&
+    Number((imageParameters as Record<string, unknown>).seed) <= 2_147_483_647
   const imageParametersValid = toolIdentity.runSchemaVersion === "1"
     ? imageParameters === undefined
     : request.mode === "qwen-image"
-    ? imageParameters !== null && typeof imageParameters === "object" && !Array.isArray(imageParameters) &&
-      Object.keys(imageParameters).sort().join(",") === "aspectRatio,resolution,seed" &&
-      ((imageParameters as Record<string, unknown>).resolution === "1K" ||
-        (imageParameters as Record<string, unknown>).resolution === "2K") &&
-      typeof (imageParameters as Record<string, unknown>).aspectRatio === "string" &&
-      /^(?:1:1|1:2|1:4|2:1|2:3|3:2|3:4|4:1|4:3|4:5|5:4|9:16|16:9)$/.test(
-        String((imageParameters as Record<string, unknown>).aspectRatio),
-      ) &&
-      Number.isSafeInteger((imageParameters as Record<string, unknown>).seed) &&
-      Number((imageParameters as Record<string, unknown>).seed) >= 0 &&
-      Number((imageParameters as Record<string, unknown>).seed) <= 2_147_483_647
+    ? currentQwenImageParametersValid ||
+      (allowHistorical && toolIdentity.runSchemaVersion === "2" && imageParameters === undefined)
       : imageParameters === undefined
   if (
     Object.keys(request).some((key) => !allowedKeys.has(key)) ||
@@ -704,9 +708,12 @@ const validateChecksDocument = (
       throw new RunRecordError("CHECKS_NOT_PASSED", "Checks evidence is malformed.", "repair-evidence")
     }
     const item = check as Readonly<Record<string, unknown>>
+    const measuredValid = expectedName === "palette-growth"
+      ? typeof item.measured === "number" && Number.isFinite(item.measured) && item.measured >= 0
+      : typeof item.measured === "number" && Number.isSafeInteger(item.measured) && item.measured >= 0
     if (
       item.name !== expectedName || item.passed !== true ||
-      typeof item.measured !== "number" || !Number.isSafeInteger(item.measured) || item.measured < 0
+      !measuredValid
     ) {
       throw new RunRecordError("CHECKS_NOT_PASSED", "Every Fidelity Check must pass in the mandatory order.", "repair-evidence")
     }

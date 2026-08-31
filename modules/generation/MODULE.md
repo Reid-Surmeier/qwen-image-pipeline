@@ -3,7 +3,7 @@
 - Purpose: Prove locked references reach exact provider payload locations, authorize one submission, and normalize Qwen or Seedance adapter evidence.
 - Interface: `modules/generation/index.ts`
 - Errors: `modules/generation/errors.ts`
-- Acceptance: `modules/generation/generation.test.ts` and `modules/generation/inherited-qwen-adapter.test.ts`
+- Acceptance: `modules/generation/generation.test.ts`, `modules/generation/inherited-qwen-adapter.test.ts`, `modules/generation/python-qwen-kernel-transport.test.ts`, `tests/test_qwen_adapter.py`, and `tests/test_qwen_adapter_host.py`
 
 `inheritedQwenAdapter` is the version-1 language-neutral seam for the retained
 Python Qwen kernel. It converts only the already-validated immutable Generation
@@ -17,6 +17,11 @@ preflights the logical `OPENROUTER_API_KEY`, launches the fixed Python stdio hos
 without a shell, supplies only a narrow child environment, and never includes
 stderr or provider exception text in typed evidence. Conductor and the one-use
 Submission Permit remain the only normal submission authorization.
+The production transport acceptance test executes the real Node-to-Python stdio
+exchange with a malformed closed request and a fixture credential, so the host
+refuses before provider dispatch. The deterministic ordinary-CI baseline skips
+that provider-capable descendant while retaining OS network denial; the explicit
+local acceptance command runs it without a provider request.
 
 The shared Provider Evidence Sanitizer requires provider evidence to match the closed receipt schema for its exact stage before Generation can return it or pass recovery evidence to an adapter. It snapshots the closed evidence wrapper and copies its bytes before Generation validates or uses it. Recovery retains that private snapshot as the comparison oracle and gives the adapter a separate disposable copy, so adapter mutation cannot redefine the receipt being recovered. Unknown fields and wrapper accessors are refused, so persistence safety does not depend on recognizing every possible encoding of a diagnostic or credential. Its recursive credential and duplicate-key checks remain defense-in-depth.
 

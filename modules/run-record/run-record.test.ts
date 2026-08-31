@@ -259,14 +259,17 @@ const markerOnlyMp4 = (): Uint8Array => {
 }
 
 const raster = (pixels: ReadonlyArray<number>): Uint8Array =>
-  Buffer.from(JSON.stringify({ height: 1, pixels, width: 2 }), "utf8")
+  Buffer.from(JSON.stringify({ height: 1, pixels, width: pixels.length / 4 }), "utf8")
 
-const plannedAssemblyRun = async (baseline: Uint8Array): Promise<PlannedRun> => {
+const plannedAssemblyRun = async (
+  baseline: Uint8Array,
+  assemblyPlan?: PlannedRun["request"]["assemblyPlan"],
+): Promise<PlannedRun> => {
   const planned = await plannedRun()
   const exactCopyCore = { x: 1, y: 0, rgba: [80, 80, 80, 255] as const }
   const request = {
     ...planned.request,
-    assemblyPlan: {
+    assemblyPlan: assemblyPlan ?? {
       required: true as const,
       baselineReferenceSlot: "source",
       ownedRegion: { x: 1, y: 0, width: 1, height: 1 },
@@ -2424,6 +2427,46 @@ test("replay interprets an authentic fixed-point Run through its recorded v1 pro
   assert.equal("artifactRoot" in recorded, false)
 })
 
+test("replay keeps pre-parameter schema-2 Qwen records readable", async () => {
+  const planned = await plannedRun()
+  const memory = await memoryHarness()
+  const reserved = await Effect.runPromise(reserve(reservationFor(planned)).pipe(
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, clock),
+  ))
+  const diagnostics = await Effect.runPromise(readDiagnostics(reserved.runId).pipe(Effect.provide(memory.layer)))
+  const request = JSON.parse(Buffer.from(diagnostics.request).toString("utf8")) as Record<string, unknown>
+  delete request.imageParameters
+  const canonicalRequest = canonicalJson(request)
+  const requestSha256 = createHash("sha256").update(canonicalRequest).digest("hex")
+  const runId = `run-${requestSha256.slice(0, 24)}`
+  const event = JSON.parse(Buffer.from(diagnostics.events).toString("utf8").trimEnd()) as Record<string, unknown>
+  const payload = event.payload as Record<string, unknown>
+  const withoutDigest: Record<string, unknown> = {
+    ...event,
+    runId,
+    operationId: `reserve-${runId}`,
+    payload: {
+      ...payload,
+      attemptId: `attempt-${requestSha256.slice(0, 24)}-1`,
+      payloadSha256: requestSha256,
+      requestSha256,
+    },
+  }
+  delete withoutDigest.eventSha256
+  const recordedEvent = canonicalJson({
+    ...withoutDigest,
+    eventSha256: createHash("sha256").update(canonicalJson(withoutDigest)).digest("hex"),
+  })
+  const layer = capturedRunLayer(
+    runId,
+    Buffer.from(canonicalRequest, "utf8"),
+    Buffer.from(`${recordedEvent}\n`, "utf8"),
+  )
+  const view = await Effect.runPromise(load(runId).pipe(Effect.provide(layer)))
+  assert.equal(view.phase, "reserved")
+})
+
 test("load refuses a v1 record silently reinterpreted with a v2 ownership field", async () => {
   const capturedRequest = JSON.parse(await readFile(
     join(process.cwd(), "tests/fixtures/run-record-v1/request.json"),
@@ -3235,9 +3278,20 @@ test("replay rejects a donor checkpoint that omits part of the reserved output s
 test("persists separately hashed assembled output and canonical Assembly report", async () => {
   const baseline = raster([
     10, 10, 10, 255,
+    10, 10, 10, 255,
     20, 20, 20, 255,
   ])
-  const planned = await plannedAssemblyRun(baseline)
+  const exactCopyCore = { x: 1, y: 0, rgba: [80, 80, 80, 255] as const }
+  const planned = await plannedAssemblyRun(baseline, {
+    required: true,
+    baselineReferenceSlot: "source",
+    paletteMaxGrowth: 2,
+    ownedRegion: { x: 0, y: 0, width: 3, height: 1 },
+    exactCopy: [{
+      ...exactCopyCore,
+      sha256: createHash("sha256").update(JSON.stringify(exactCopyCore)).digest("hex"),
+    }],
+  })
   const memory = await memoryHarness()
   const provide = <Success, Error>(
     effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
@@ -3256,7 +3310,8 @@ test("persists separately hashed assembled output and canonical Assembly report"
   })))
   const donor = raster([
     90, 90, 90, 255,
-    80, 80, 80, 255,
+    81, 81, 81, 255,
+    70, 70, 70, 255,
   ])
   const donorSha256 = createHash("sha256").update(donor).digest("hex")
   await Effect.runPromise(provide(record({
@@ -3279,8 +3334,9 @@ test("persists separately hashed assembled output and canonical Assembly report"
   })))
 
   const assembled = raster([
-    10, 10, 10, 255,
+    90, 90, 90, 255,
     80, 80, 80, 255,
+    70, 70, 70, 255,
   ])
   const assembledSha256 = createHash("sha256").update(assembled).digest("hex")
   const assemblyPlan = planned.request.assemblyPlan!
@@ -3345,9 +3401,10 @@ test("persists separately hashed assembled output and canonical Assembly report"
     { name: "media", passed: true, measured: 0 },
     { name: "outside-region-preservation", passed: true, measured: 0 },
     { name: "donor-equality-inside-region", passed: true, measured: 0 },
-    { name: "palette-growth", passed: true, measured: 1 },
+    { name: "palette-growth", passed: true, measured: 1.5 },
   ] as const
   const arbitraryBaseline = raster([
+    0, 0, 0, 0,
     0, 0, 0, 0,
     0, 0, 0, 0,
   ])
@@ -3471,6 +3528,117 @@ test("persists separately hashed assembled output and canonical Assembly report"
       persisted[0] ^= 1
     }))
   }
+})
+
+test("Run Record independently rejects palette growth over the immutable maximum", async () => {
+  const baseline = raster([
+    10, 10, 10, 255,
+    10, 10, 10, 255,
+  ])
+  const exactCopyCore = { x: 0, y: 0, rgba: [90, 90, 90, 255] as const }
+  const planned = await plannedAssemblyRun(baseline, {
+    required: true,
+    baselineReferenceSlot: "source",
+    paletteMaxGrowth: 1,
+    ownedRegion: { x: 0, y: 0, width: 2, height: 1 },
+    exactCopy: [{
+      ...exactCopyCore,
+      sha256: createHash("sha256").update(JSON.stringify(exactCopyCore)).digest("hex"),
+    }],
+  })
+  const memory = await memoryHarness()
+  const provide = <Success, Error>(
+    effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
+  ): Effect.Effect<Success, Error> => effect.pipe(
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, clock),
+  )
+  const reserved = await Effect.runPromise(provide(reserve(reservationFor(planned))))
+  await Effect.runPromise(provide(record({
+    _tag: "SubmissionMayHaveStarted",
+    runId: reserved.runId,
+    operationId: "palette-submit",
+  })))
+  const providerBody = Buffer.from('{"request_id":"palette-fixture","status":"succeeded"}', "utf8")
+  await Effect.runPromise(provide(record({
+    _tag: "CommitProviderEvidence",
+    runId: reserved.runId,
+    operationId: "palette-provider",
+    evidence: {
+      mediaType: "application/json",
+      body: providerBody,
+      sha256: createHash("sha256").update(providerBody).digest("hex"),
+    },
+  })))
+  const donor = raster([
+    91, 91, 91, 255,
+    80, 80, 80, 255,
+  ])
+  const donorSha256 = createHash("sha256").update(donor).digest("hex")
+  await Effect.runPromise(provide(record({
+    _tag: "CommitGeneratedOutput",
+    runId: reserved.runId,
+    operationId: "palette-donor",
+    output: {
+      applicationPath: "outputs/palette-donor.rgba.json",
+      mediaType: "application/vnd.qwen.rgba+json",
+      body: donor,
+      sha256: donorSha256,
+    },
+  })))
+  await Effect.runPromise(provide(record({
+    _tag: "OpenDonorChoice",
+    runId: reserved.runId,
+    operationId: "palette-choice",
+    candidateSha256s: [donorSha256],
+  })))
+  await Effect.runPromise(provide(record({
+    _tag: "SelectDonor",
+    runId: reserved.runId,
+    operationId: "palette-select",
+    selectedSha256: donorSha256,
+  })))
+  const assembled = raster([
+    90, 90, 90, 255,
+    80, 80, 80, 255,
+  ])
+  const assembledSha256 = createHash("sha256").update(assembled).digest("hex")
+  const assemblyPlan = planned.request.assemblyPlan!
+  const report = {
+    baselineSha256: createHash("sha256").update(baseline).digest("hex"),
+    donorSha256,
+    regionSha256: createHash("sha256").update(JSON.stringify(assemblyPlan.ownedRegion)).digest("hex"),
+    exactCopySha256: createHash("sha256").update(JSON.stringify(assemblyPlan.exactCopy.map((copy) => copy.sha256))).digest("hex"),
+    outputSha256: assembledSha256,
+  }
+  await Effect.runPromise(provide(record({
+    _tag: "CommitAssembly",
+    runId: reserved.runId,
+    operationId: "palette-assembly",
+    output: {
+      applicationPath: "outputs/palette-assembled.rgba.json",
+      mediaType: "application/vnd.qwen.rgba+json",
+      body: assembled,
+      sha256: assembledSha256,
+    },
+    report,
+  })))
+  const error = await Effect.runPromise(Effect.flip(provide(record({
+    _tag: "CommitChecks",
+    runId: reserved.runId,
+    operationId: "palette-checks",
+    candidateSha256: assembledSha256,
+    classification: "verified-candidate",
+    baseline: { body: baseline, sha256: report.baselineSha256 },
+    checks: [
+      { name: "integrity", passed: true, measured: 0 },
+      { name: "media", passed: true, measured: 0 },
+      { name: "outside-region-preservation", passed: true, measured: 0 },
+      { name: "donor-equality-inside-region", passed: true, measured: 0 },
+      { name: "palette-growth", passed: true, measured: 2 },
+    ],
+  }))))
+  assert.equal(error.code, "CHECKS_NOT_PASSED")
 })
 
 test("a fresh filesystem adapter replays the completed Assembly Run and reads verified evidence", async (context) => {

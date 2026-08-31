@@ -180,22 +180,22 @@
     {
       "path": "qwen_ui_pipeline/providers/alibaba.py:AlibabaImageClient.generate->self._opener",
       "replacement": "Generation.invoke through OpenRouter",
-      "retirementCondition": "Issue #28 removes the direct Alibaba client after captured compatibility evidence is preserved."
+      "retirementCondition": "Issue #29 migrates remaining ComfyUI callers; Issue #30 may then remove direct Alibaba reachability after captured compatibility evidence is preserved."
     },
     {
       "path": "qwen_ui_pipeline/providers/openrouter.py:OpenRouterImageClient.generate->self._opener",
       "replacement": "Generation.invoke",
-      "retirementCondition": "Issue #28 makes Generation the sole caller of the OpenRouter transport."
+      "retirementCondition": "Issue #29 migrates remaining ComfyUI callers; Issue #30 makes Generation the sole authorized OpenRouter transport caller."
     },
     {
       "path": "qwen_ui_pipeline/providers/router.py:generate_with_provider->alibaba_client.generate",
       "replacement": "Generation.invoke through OpenRouter",
-      "retirementCondition": "Issue #28 removes the direct Alibaba route."
+      "retirementCondition": "Issue #29 migrates remaining ComfyUI callers; Issue #30 removes the direct Alibaba route."
     },
     {
       "path": "qwen_ui_pipeline/providers/router.py:generate_with_provider->openrouter_client.generate",
       "replacement": "Generation.invoke",
-      "retirementCondition": "Issue #28 makes Generation the only provider adapter caller."
+      "retirementCondition": "Issue #29 migrates remaining ComfyUI callers; Issue #30 makes Generation the only provider adapter caller."
     },
     {
       "path": "qwen_ui_pipeline/qwen_adapter.py:invoke_qwen_kernel->client.generate",
