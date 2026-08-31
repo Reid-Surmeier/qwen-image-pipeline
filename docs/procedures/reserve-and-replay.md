@@ -26,7 +26,7 @@ Done when `load` returns `provider_evidence_received` and the evidence receipt m
 
 ## 4. Resume by replay
 
-Provide a fresh `fileRunRecordLayer` for the same application root and call `Run Record.load(runId)`. Authority is evaluated in this order:
+Acquire a fresh Layer by running the Effect-valued `fileRunRecordLayer` constructor for the same application root, provide that Layer, and call `Run Record.load(runId)`. Authority is evaluated in this order:
 
 1. immutable `request.json` bytes;
 2. the complete SHA-256 chain in `events.jsonl`;

@@ -5,7 +5,6 @@ import {
   lstat,
   mkdir,
   open,
-  readFile,
   readdir,
   realpath,
   rename,
@@ -120,17 +119,21 @@ const atomicReplace = async (directory: string, name: string, body: Uint8Array):
 const collectEvidence = async (
   directory: string,
   prefix = "",
+  verifiedRoot = directory,
 ): Promise<Record<string, Uint8Array>> => {
   const result: Record<string, Uint8Array> = {}
   for (const entry of await readdir(directory, { withFileTypes: true })) {
     if (entry.name.startsWith(".") || ["request.json", "events.jsonl", "state.json"].includes(entry.name)) continue
-    if (entry.isSymbolicLink()) throw durabilityError("Run evidence contains a symbolic link.")
     const applicationPath = prefix === "" ? entry.name : `${prefix}/${entry.name}`
     const absolute = join(directory, entry.name)
-    if (entry.isDirectory()) {
-      Object.assign(result, await collectEvidence(absolute, applicationPath))
-    } else if (entry.isFile()) {
-      result[applicationPath] = await readFile(absolute)
+    const metadata = await lstat(absolute)
+    if (metadata.isSymbolicLink()) throw durabilityError("Run evidence contains a symbolic link.")
+    if (metadata.isDirectory()) {
+      const actual = await realpath(absolute)
+      if (!inside(verifiedRoot, actual)) throw durabilityError("Run evidence escapes the verified Run directory.")
+      Object.assign(result, await collectEvidence(actual, applicationPath, verifiedRoot))
+    } else if (metadata.isFile()) {
+      result[applicationPath] = await readRegularFile(absolute)
     } else {
       throw durabilityError("Run evidence contains an unsupported filesystem entry.")
     }
@@ -318,7 +321,7 @@ const buildFileRunRecordStore = (
             if (metadata.isSymbolicLink() || !metadata.isFile()) {
               throw new RunRecordError("EVIDENCE_REWRITE", `${applicationPath} is not a regular write-once file.`)
             }
-            const existing = await readFile(destination)
+            const existing = await readRegularFile(destination)
             if (!Buffer.from(existing).equals(Buffer.from(body))) {
               throw new RunRecordError("EVIDENCE_REWRITE", `${applicationPath} is write-once.`)
             }
@@ -339,8 +342,8 @@ const buildFileRunRecordStore = (
 export const fileRunRecordLayer = (
   applicationRoot: string,
   artifactRoot: string,
-): Layer.Layer<RunRecordStoreService, RunRecordError> =>
-  Layer.effect(RunRecordStore, buildFileRunRecordStore(applicationRoot, artifactRoot))
+): Effect.Effect<Layer.Layer<RunRecordStoreService, RunRecordError>> =>
+  Effect.succeed(Layer.effect(RunRecordStore, buildFileRunRecordStore(applicationRoot, artifactRoot)))
 
 export const makeFileRunRecordHarness = (
   applicationRoot: string,

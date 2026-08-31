@@ -200,10 +200,34 @@ const replay = (
   if (runIdentity(requestSha256) !== runId) {
     throw new RunRecordError("REQUEST_TAMPERED", "The immutable request no longer matches the Run identity.", "repair-evidence")
   }
+  let canonicalRequest: JsonValue
+  try {
+    canonicalRequest = JSON.parse(Buffer.from(request).toString("utf8")) as JsonValue
+  } catch {
+    throw new RunRecordError("REQUEST_TAMPERED", "The immutable request is not valid JSON.", "repair-evidence")
+  }
+  if (
+    canonicalRequest === null ||
+    typeof canonicalRequest !== "object" ||
+    Array.isArray(canonicalRequest) ||
+    canonicalJson(canonicalRequest) !== Buffer.from(request).toString("utf8")
+  ) {
+    throw new RunRecordError("REQUEST_TAMPERED", "The immutable request is not canonical JSON.", "repair-evidence")
+  }
+  const requestDocument = canonicalRequest as Readonly<Record<string, JsonValue>>
   if (stringPayload(genesis.payload, "requestSha256") !== requestSha256) {
     throw new RunRecordError("REQUEST_TAMPERED", "The immutable request bytes changed.", "repair-evidence")
   }
   const linkedFrom = linkPayload(genesis.payload)
+  if (
+    stringPayload(genesis.payload, "estimatedMaximumCostUsd") !== requestDocument.estimatedMaximumCostUsd ||
+    numberPayload(genesis.payload, "maximumCount") !== requestDocument.requestedCount ||
+    stringPayload(genesis.payload, "maximumSpendUsd") !== requestDocument.budgetCeilingUsd ||
+    canonicalJson((linkedFrom ?? null) as unknown as JsonValue) !==
+      canonicalJson((requestDocument.linkedRun ?? null) as JsonValue)
+  ) {
+    throw new RunRecordError("REQUEST_TAMPERED", "The attempt reservation contradicts its immutable Run Request.", "repair-evidence")
+  }
   const base = {
     runId,
     requestSha256,
@@ -379,10 +403,15 @@ export const reserveRun = (
 
 const credentialFieldName = (key: string): boolean => {
   const normalized = key.toLowerCase().replace(/[^a-z0-9]/g, "").replace(/^x/, "")
+  if (["prompttokens", "completiontokens", "totaltokens", "cachedtokens", "reasoningtokens"].includes(normalized)) {
+    return false
+  }
   return /(?:api|access|private)key$/.test(normalized) ||
     /(?:client)?secret$/.test(normalized) ||
     /(?:password|authorization)$/.test(normalized) ||
-    /^(?:access|refresh|id)token$/.test(normalized) ||
+    /token$/.test(normalized) ||
+    /cookie$/.test(normalized) ||
+    /^(?:request|response)?headers$/.test(normalized) ||
     normalized === "credential"
 }
 

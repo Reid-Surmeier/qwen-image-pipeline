@@ -287,6 +287,9 @@ test("sanitized token counts pass while credential query strings are refused", a
   for (const [suffix, unsafeJson] of [
     ["header", '{"headers":{"x-api-key":"actual-private-value"}}'],
     ["relative-url", '{"status_url":"/jobs/1?api_key=actual-private-value"}'],
+    ["generic-token", '{"token":"opaque-private-value"}'],
+    ["api-token", '{"api_token":"opaque-private-value"}'],
+    ["cookie", '{"request_headers":{"cookie":"session=opaque-private-value"}}'],
   ] as const) {
     const memory = await memoryHarness()
     const run = await prepare(memory, suffix)
@@ -528,7 +531,7 @@ test("a fresh process reloads the same hash-chained Run from an application file
   context.after(async () => rm(applicationRoot, { recursive: true, force: true }))
   const artifactRoot = "artifacts/qwen-pipeline"
   const planned = await plannedRun()
-  const firstLayer = fileRunRecordLayer(applicationRoot, artifactRoot)
+  const firstLayer = await Effect.runPromise(fileRunRecordLayer(applicationRoot, artifactRoot))
   const execute = <Success, Error>(
     effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
   ): Promise<Success> => Effect.runPromise(effect.pipe(
@@ -556,7 +559,7 @@ test("a fresh process reloads the same hash-chained Run from an application file
   assert.equal((await readFile(join(runDirectory, "events.jsonl"), "utf8")).trimEnd().split("\n").length, 3)
   assert.deepEqual(await readFile(join(runDirectory, "provider-response.json")), body)
 
-  const freshLayer = fileRunRecordLayer(applicationRoot, artifactRoot)
+  const freshLayer = await Effect.runPromise(fileRunRecordLayer(applicationRoot, artifactRoot))
   const reloaded = await Effect.runPromise(
     load(reserved.runId).pipe(Effect.provide(freshLayer)),
   )
@@ -580,9 +583,10 @@ test("the filesystem adapter refuses symlink escapes before writing outside the 
   await mkdir(join(applicationRoot, "artifacts"))
   await symlink(outsideRoot, join(applicationRoot, "artifacts", "qwen-pipeline"), "dir")
   const planned = await plannedRun()
+  const layer = await Effect.runPromise(fileRunRecordLayer(applicationRoot, "artifacts/qwen-pipeline"))
   const error = await Effect.runPromise(Effect.flip(
     reserve(reservationFor(planned)).pipe(
-      Effect.provide(fileRunRecordLayer(applicationRoot, "artifacts/qwen-pipeline")),
+      Effect.provide(layer),
       Effect.provideService(RunRecordClock, clock),
     ),
   ))
@@ -597,7 +601,7 @@ test("the filesystem adapter refuses symlinked authoritative control files", asy
     rm(applicationRoot, { recursive: true, force: true }),
     rm(outsideRoot, { recursive: true, force: true }),
   ]))
-  const layer = fileRunRecordLayer(applicationRoot, "artifacts/qwen-pipeline")
+  const layer = await Effect.runPromise(fileRunRecordLayer(applicationRoot, "artifacts/qwen-pipeline"))
   const planned = await plannedRun()
   const reserved = await Effect.runPromise(reserve(reservationFor(planned)).pipe(
     Effect.provide(layer),
@@ -634,7 +638,7 @@ test("filesystem interruption after an immutable event frame reloads without ano
   )))
   assert.equal(interrupted.code, "DURABILITY_FAILURE")
 
-  const freshLayer = fileRunRecordLayer(applicationRoot, "artifacts/qwen-pipeline")
+  const freshLayer = await Effect.runPromise(fileRunRecordLayer(applicationRoot, "artifacts/qwen-pipeline"))
   const reloaded = await Effect.runPromise(load(reserved.runId).pipe(Effect.provide(freshLayer)))
   assert.equal(reloaded.phase, "submission_may_have_started")
   assert.equal(reloaded.retryState, "reconcile-only")
@@ -712,7 +716,7 @@ test("temporary-filesystem faults recover reservation, evidence, and derived sta
   )))
   assert.equal(interruptedState.code, "DURABILITY_FAILURE")
 
-  const freshLayer = fileRunRecordLayer(applicationRoot, "artifacts/qwen-pipeline")
+  const freshLayer = await Effect.runPromise(fileRunRecordLayer(applicationRoot, "artifacts/qwen-pipeline"))
   const recovered = await Effect.runPromise(load(reserved.runId).pipe(Effect.provide(freshLayer)))
   assert.equal(recovered.phase, "provider_evidence_received")
   assert.equal(recovered.runId, reserved.runId)
@@ -721,7 +725,7 @@ test("temporary-filesystem faults recover reservation, evidence, and derived sta
 test("concurrent filesystem writers preserve one complete append without erasing the winner", async (context) => {
   const applicationRoot = await mkdtemp(join(tmpdir(), "qwen-run-record-concurrent-"))
   context.after(async () => rm(applicationRoot, { recursive: true, force: true }))
-  const layer = fileRunRecordLayer(applicationRoot, "artifacts/qwen-pipeline")
+  const layer = await Effect.runPromise(fileRunRecordLayer(applicationRoot, "artifacts/qwen-pipeline"))
   const planned = await plannedRun()
   const reserved = await Effect.runPromise(reserve(reservationFor(planned)).pipe(
     Effect.provide(layer),
@@ -801,6 +805,21 @@ test("tampered requests, event chains, evidence, and illegal rewrites fail by na
     load(eventRun.runId).pipe(Effect.provide(brokenEvents.layer)),
   ))
   assert.equal(chainError.code, "EVENT_CHAIN_BROKEN")
+
+  const contradictoryReservation = await memoryHarness()
+  const contradictoryRun = await execute(contradictoryReservation, reserve(reservationFor(planned)))
+  await Effect.runPromise(contradictoryReservation.mutate(contradictoryRun.runId, (stored) => {
+    const event = JSON.parse(Buffer.from(stored.events).toString("utf8")) as Record<string, unknown>
+    event.payload = { ...(event.payload as object), maximumCount: 99 }
+    const { eventSha256: _discarded, ...withoutDigest } = event
+    event.eventSha256 = createHash("sha256").update(canonicalJson(withoutDigest)).digest("hex")
+    stored.events = Buffer.from(`${canonicalJson(event)}\n`, "utf8")
+    delete stored.state
+  }))
+  const reservationError = await Effect.runPromise(Effect.flip(
+    load(contradictoryRun.runId).pipe(Effect.provide(contradictoryReservation.layer)),
+  ))
+  assert.equal(reservationError.code, "REQUEST_TAMPERED")
 
   const changedEvidence = await memoryHarness()
   const evidenceRun = await execute(changedEvidence, reserve(reservationFor(planned)))
