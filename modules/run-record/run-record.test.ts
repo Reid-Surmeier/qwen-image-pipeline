@@ -593,6 +593,97 @@ test("commits provider evidence write-once and replays its verified hash", async
   assert.equal(changedError.code, "IDEMPOTENCY_CONFLICT")
 })
 
+test("freezes Qwen provider bytes before validation and durable persistence", async () => {
+  const planned = await plannedRun()
+  const memory = await memoryHarness()
+  const provide = <Success, Error>(
+    effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
+  ): Effect.Effect<Success, Error> => effect.pipe(
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, clock),
+  )
+  const reserved = await Effect.runPromise(provide(reserve(reservationFor(planned))))
+  await Effect.runPromise(provide(record({
+    _tag: "SubmissionMayHaveStarted",
+    runId: reserved.runId,
+    operationId: "stateful-qwen-marker",
+  })))
+  const safeBody = Buffer.from('{"id":"stateful-qwen","status":"completed"}')
+  const unsafeBody = Buffer.from('{"id":"stateful-qwen","status":"completed","debug":"unknown"}')
+  let reads = 0
+  const evidence = {
+    mediaType: "application/json" as const,
+    sha256: createHash("sha256").update(safeBody).digest("hex"),
+  } as { mediaType: "application/json"; body: Uint8Array; sha256: string }
+  Object.defineProperty(evidence, "body", {
+    enumerable: true,
+    get: () => (++reads <= 5 ? safeBody : unsafeBody),
+  })
+  await Effect.runPromise(provide(record({
+    _tag: "CommitProviderEvidence",
+    runId: reserved.runId,
+    operationId: "stateful-qwen-provider",
+    evidence,
+  })))
+  let durable: Uint8Array | undefined
+  await Effect.runPromise(memory.mutate(reserved.runId, (stored) => {
+    durable = stored.evidence["provider-response.json"]
+  }))
+  assert.deepEqual(Buffer.from(durable!), safeBody)
+})
+
+test("freezes Seedance poll bytes before validation and durable persistence", async () => {
+  const { planned } = await plannedSeedanceRun()
+  const memory = await memoryHarness()
+  const provide = <Success, Error>(
+    effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
+  ): Effect.Effect<Success, Error> => effect.pipe(
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, clock),
+  )
+  const reserved = await Effect.runPromise(provide(reserve(reservationFor(planned))))
+  await Effect.runPromise(provide(record({
+    _tag: "SubmissionMayHaveStarted",
+    runId: reserved.runId,
+    operationId: "stateful-seedance-marker",
+  })))
+  const submissionBody = Buffer.from('{"job_id":"stateful-seedance","status":"submitted"}')
+  await Effect.runPromise(provide(record({
+    _tag: "CommitProviderEvidence",
+    runId: reserved.runId,
+    operationId: "stateful-seedance-provider",
+    evidence: {
+      mediaType: "application/json",
+      body: submissionBody,
+      sha256: createHash("sha256").update(submissionBody).digest("hex"),
+    },
+  })))
+  const safeBody = Buffer.from('{"job_id":"stateful-seedance","status":"pending"}')
+  const unsafeBody = Buffer.from('{"job_id":"stateful-seedance","status":"pending","debug":"unknown"}')
+  let reads = 0
+  const evidence = {
+    mediaType: "application/json" as const,
+    sha256: createHash("sha256").update(safeBody).digest("hex"),
+  } as { mediaType: "application/json"; body: Uint8Array; sha256: string }
+  Object.defineProperty(evidence, "body", {
+    enumerable: true,
+    get: () => (++reads <= 3 ? safeBody : unsafeBody),
+  })
+  await Effect.runPromise(provide(record({
+    _tag: "CommitSeedancePoll",
+    runId: reserved.runId,
+    operationId: "stateful-seedance-poll",
+    jobId: "stateful-seedance",
+    status: "pending",
+    evidence,
+  })))
+  let durable: Uint8Array | undefined
+  await Effect.runPromise(memory.mutate(reserved.runId, (stored) => {
+    durable = stored.evidence["polls/poll-0001.json"]
+  }))
+  assert.deepEqual(Buffer.from(durable!), safeBody)
+})
+
 test("persists one Seedance job, polls only that identity, and records verified video evidence", async () => {
   const { planned, body: videoBody } = await plannedSeedanceRun()
   const memory = await memoryHarness()

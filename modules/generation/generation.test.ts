@@ -21,6 +21,7 @@ import {
   invoke,
   pollSeedance,
   prepare,
+  recover,
   submitSeedance,
   type GenerationAdapterService,
   type GenerationResult,
@@ -112,6 +113,42 @@ test("puts exact reference bytes and hash at the locked destination and invokes 
   )))
   assert.equal(duplicate.code, "DUPLICATE_SUBMISSION_BLOCKED")
   assert.equal(calls, 1)
+})
+
+test("refuses an unknown Qwen recovery receipt before calling the adapter", async () => {
+  const fixture = makeFixture("qwen-image")
+  const decision = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(MediaInspector, byteMediaInspector),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+  ))
+  assert.equal(decision._tag, "Planned")
+  if (decision._tag !== "Planned") return
+  const locked = decision.run.request.references[0]!
+  const reference = await Effect.runPromise(fixture.files.read(locked.applicationPath))
+  const prepared = await Effect.runPromise(prepare(decision.run.request, [{
+    slot: locked.slot,
+    applicationPath: locked.applicationPath,
+    sha256: locked.sha256,
+    payloadDestination: locked.payloadDestination,
+    mediaType: locked.mediaType,
+    bytes: reference.bytes,
+  }]))
+  const body = Buffer.from(JSON.stringify({ id: "fake-qwen-1", status: "completed", debug: "unknown" }))
+  const unsafeEvidence = { mediaType: "application/json" as const, body, sha256: sha256(body) }
+  let calls = 0
+  const adapter: GenerationAdapterService = {
+    invoke: () => Effect.die("unused"),
+    recover: () => {
+      calls += 1
+      return Effect.die("invalid evidence must not reach recovery")
+    },
+  }
+  const failure = await Effect.runPromise(Effect.flip(recover(prepared, unsafeEvidence).pipe(
+    Effect.provideService(GenerationAdapter, adapter),
+  )))
+  assert.equal(failure.code, "ADAPTER_RESULT_INVALID")
+  assert.equal(calls, 0)
 })
 
 test("submits exact Seedance video once and polls only the same sanitized job identity", async () => {

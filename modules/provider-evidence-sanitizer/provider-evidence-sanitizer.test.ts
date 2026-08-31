@@ -77,6 +77,54 @@ test("accepts only the exact persisted schemas for each provider stage", () => {
     status: "completed",
   })
   assert.equal(isSanitizedProviderDocument("qwen", inheritedField), false)
+
+  const outputArrayWithSymbol = [{
+    application_path: "outputs/result.mp4",
+    media_type: "video/mp4",
+    sha256: "a".repeat(64),
+  }]
+  Object.defineProperty(outputArrayWithSymbol, Symbol("debug"), { value: "hidden" })
+  assert.equal(isSanitizedProviderDocument("seedance-poll", {
+    job_id: "seedance-job-1",
+    status: "completed",
+    outputs: outputArrayWithSymbol,
+    completed_count: 1,
+    cost: { state: "unknown" },
+  }), false)
+
+  const outputArrayWithHiddenField = [{
+    application_path: "outputs/result.mp4",
+    media_type: "video/mp4",
+    sha256: "a".repeat(64),
+  }]
+  Object.defineProperty(outputArrayWithHiddenField, "debug", { value: "hidden", enumerable: false })
+  assert.equal(isSanitizedProviderDocument("seedance-poll", {
+    job_id: "seedance-job-1",
+    status: "completed",
+    outputs: outputArrayWithHiddenField,
+    completed_count: 1,
+    cost: { state: "unknown" },
+  }), false)
+
+  assert.equal(isSanitizedProviderDocument("seedance-poll", {
+    job_id: "seedance-job-1",
+    status: "completed",
+    polled_at: "2026-02-30T12:00:00.000Z",
+    outputs: [{
+      application_path: "outputs/result.mp4",
+      media_type: "video/mp4",
+      sha256: "a".repeat(64),
+    }],
+    completed_count: 1,
+    cost: { state: "unknown" },
+  }), false)
+
+  const throwingField = { id: "fake-qwen-1", status: "completed" }
+  Object.defineProperty(throwingField, "debug", {
+    enumerable: true,
+    get: () => { throw new Error("hostile accessor") },
+  })
+  assert.doesNotThrow(() => assert.equal(isSanitizedProviderDocument("qwen", throwingField), false))
 })
 
 test("preserves ordinary provider usage metadata", () => {

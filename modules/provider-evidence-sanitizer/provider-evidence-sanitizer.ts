@@ -280,6 +280,26 @@ const sanitizedSeedanceOutput = (value: unknown): boolean => {
     typeof output.sha256 === "string" && /^[a-f0-9]{64}$/.test(output.sha256)
 }
 
+const denseClosedArray = (value: ReadonlyArray<unknown>): boolean => {
+  const keys = Reflect.ownKeys(value)
+  if (keys.length !== value.length + 1 || !keys.includes("length")) return false
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.hasOwn(value, index)) return false
+  }
+  return keys.every((key) => key === "length" || (
+    typeof key === "string" && /^(?:0|[1-9]\d*)$/.test(key) &&
+    Number.isSafeInteger(Number(key)) && Number(key) < value.length
+  ))
+}
+
+const exactUtcTimestamp = (value: unknown): value is string => {
+  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value)) {
+    return false
+  }
+  const epoch = Date.parse(value)
+  return !Number.isNaN(epoch) && new Date(epoch).toISOString() === value
+}
+
 const sanitizedSeedancePoll = (document: Readonly<Record<string, unknown>>): boolean => {
   if (!safeIdentifier(document.job_id)) return false
   if (document.status === "pending") return hasExactKeys(document, ["job_id", "status"])
@@ -289,12 +309,9 @@ const sanitizedSeedancePoll = (document: Readonly<Record<string, unknown>>): boo
   if (
     document.status !== "completed" ||
     !hasExactKeys(document, completedKeys) ||
-    (Object.hasOwn(document, "polled_at") && (
-      typeof document.polled_at !== "string" ||
-      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(document.polled_at) ||
-      Number.isNaN(Date.parse(document.polled_at))
-    )) ||
+    (Object.hasOwn(document, "polled_at") && !exactUtcTimestamp(document.polled_at)) ||
     !Array.isArray(document.outputs) ||
+    !denseClosedArray(document.outputs) ||
     typeof document.completed_count !== "number" ||
     !Number.isSafeInteger(document.completed_count) || document.completed_count < 1 ||
     document.outputs.length !== document.completed_count ||
@@ -310,11 +327,16 @@ export const isSanitizedProviderDocument = (
   kind: SanitizedProviderDocumentKind,
   value: unknown,
 ): boolean => {
-  const document = objectRecord(value)
-  if (document === undefined || hasProviderCredentialMaterial(document)) return false
-  return kind === "qwen"
-    ? sanitizedQwenDocument(document)
-    : kind === "seedance-submission"
-      ? sanitizedSeedanceSubmission(document)
-      : sanitizedSeedancePoll(document)
+  try {
+    const document = objectRecord(value)
+    if (document === undefined) return false
+    const schemaMatches = kind === "qwen"
+      ? sanitizedQwenDocument(document)
+      : kind === "seedance-submission"
+        ? sanitizedSeedanceSubmission(document)
+        : sanitizedSeedancePoll(document)
+    return schemaMatches && !hasProviderCredentialMaterial(document)
+  } catch {
+    return false
+  }
 }

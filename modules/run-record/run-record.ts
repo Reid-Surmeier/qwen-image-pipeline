@@ -11,6 +11,7 @@ import {
 import { RunRecordError } from "./errors.js"
 import type { CanonicalRunRequest } from "../run-contract/index.js"
 import type {
+  ProviderEvidenceInput,
   RecordOperation,
   RecordResult,
   ReserveRun,
@@ -1539,6 +1540,30 @@ const validateProviderEvidence = (operation: Extract<RecordOperation, { _tag: "C
   return parsed
 }
 
+const snapshotProviderEvidence = (value: unknown): ProviderEvidenceInput | undefined => {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined
+  const evidence = value as Readonly<Record<string, unknown>>
+  const prototype = Object.getPrototypeOf(evidence)
+  if (
+    (prototype !== Object.prototype && prototype !== null) ||
+    Reflect.ownKeys(evidence).length !== 3 ||
+    !Object.hasOwn(evidence, "mediaType") ||
+    !Object.hasOwn(evidence, "body") ||
+    !Object.hasOwn(evidence, "sha256")
+  ) return undefined
+  const mediaType = evidence.mediaType
+  const body = evidence.body
+  const digest = evidence.sha256
+  if (mediaType !== "application/json" || !(body instanceof Uint8Array) || typeof digest !== "string") {
+    return undefined
+  }
+  return {
+    mediaType,
+    body: Buffer.isBuffer(body) ? Buffer.from(body) : Uint8Array.from(body),
+    sha256: digest,
+  }
+}
+
 const validateProviderEvidenceForRequest = (
   operation: Extract<RecordOperation, { _tag: "CommitProviderEvidence" }>,
   runRequest: CanonicalRunRequest,
@@ -1622,6 +1647,16 @@ export const recordOperation = (
       : new RunRecordError("DERIVED_VIEW_CONTRADICTION", "The derived state view could not be read.", "repair-evidence"),
   })
   const runRequest = JSON.parse(Buffer.from(stored.request).toString("utf8")) as CanonicalRunRequest
+  let stableProviderEvidence: ProviderEvidenceInput | undefined
+  if (operation._tag === "CommitProviderEvidence" || operation._tag === "CommitSeedancePoll") {
+    stableProviderEvidence = yield* Effect.try({
+      try: () => snapshotProviderEvidence(operation.evidence),
+      catch: () => new RunRecordError("EVIDENCE_HASH_MISMATCH", "Provider evidence could not be snapshotted safely.", "repair-evidence"),
+    })
+    if (stableProviderEvidence === undefined) {
+      return yield* Effect.fail(new RunRecordError("EVIDENCE_HASH_MISMATCH", "Provider evidence must match its closed wrapper schema.", "repair-evidence"))
+    }
+  }
   const expectedKind = operation._tag === "SubmissionMayHaveStarted"
     ? "submission_may_have_started"
     : operation._tag === "CommitProviderEvidence"
@@ -1649,8 +1684,8 @@ export const recordOperation = (
     if (
       operation._tag === "CommitProviderEvidence" &&
       (
-        stringPayload(replayed.payload, "sha256") !== operation.evidence.sha256 ||
-        sha256(operation.evidence.body) !== operation.evidence.sha256
+        stringPayload(replayed.payload, "sha256") !== stableProviderEvidence!.sha256 ||
+        sha256(stableProviderEvidence!.body) !== stableProviderEvidence!.sha256
       )
     ) {
       return yield* Effect.fail(new RunRecordError("IDEMPOTENCY_CONFLICT", "The operation identity was replayed with different provider evidence."))
@@ -1679,8 +1714,8 @@ export const recordOperation = (
       if (
         stringPayload(replayed.payload, "jobId") !== operation.jobId ||
         stringPayload(replayed.payload, "status") !== operation.status ||
-        stringPayload(replayed.payload, "sha256") !== operation.evidence.sha256 ||
-        sha256(operation.evidence.body) !== operation.evidence.sha256 ||
+        stringPayload(replayed.payload, "sha256") !== stableProviderEvidence!.sha256 ||
+        sha256(stableProviderEvidence!.body) !== stableProviderEvidence!.sha256 ||
         canonicalJson((replayedOutputs ?? null) as JsonValue) !== canonicalJson((operationOutputs ?? null) as JsonValue) ||
         (operation.status === "completed" && (
           operation.outputs.some((output) => sha256(output.body) !== output.sha256) ||
@@ -1751,7 +1786,7 @@ export const recordOperation = (
       return yield* Effect.fail(new RunRecordError("ILLEGAL_TRANSITION", "Provider evidence requires the durable submission marker."))
     }
     yield* Effect.try({
-      try: () => validateProviderEvidenceForRequest(operation, runRequest),
+      try: () => validateProviderEvidenceForRequest({ ...operation, evidence: stableProviderEvidence! }, runRequest),
       catch: (error) => error instanceof RunRecordError
         ? error
         : new RunRecordError("EVIDENCE_HASH_MISMATCH", "Provider evidence validation failed.", "repair-evidence"),
@@ -1765,9 +1800,9 @@ export const recordOperation = (
       existingIntent.kind !== "provider_evidence_intent" ||
       existingIntent.eventSha256 !== events.at(-1)?.eventSha256 ||
       stringPayload(existingIntent.payload, "completionOperationId") !== operation.operationId ||
-      stringPayload(existingIntent.payload, "sha256") !== operation.evidence.sha256 ||
-      numberPayload(existingIntent.payload, "byteLength") !== operation.evidence.body.byteLength ||
-      stringPayload(existingIntent.payload, "mediaType") !== operation.evidence.mediaType
+      stringPayload(existingIntent.payload, "sha256") !== stableProviderEvidence!.sha256 ||
+      numberPayload(existingIntent.payload, "byteLength") !== stableProviderEvidence!.body.byteLength ||
+      stringPayload(existingIntent.payload, "mediaType") !== stableProviderEvidence!.mediaType
     )) {
       return yield* Effect.fail(new RunRecordError("IDEMPOTENCY_CONFLICT", "Provider evidence contradicts its durable write intent."))
     }
@@ -1781,9 +1816,9 @@ export const recordOperation = (
       previousEventSha256: current.chainHeadSha256,
       payload: {
         completionOperationId: operation.operationId,
-        sha256: operation.evidence.sha256,
-        byteLength: operation.evidence.body.byteLength,
-        mediaType: operation.evidence.mediaType,
+        sha256: stableProviderEvidence!.sha256,
+        byteLength: stableProviderEvidence!.body.byteLength,
+        mediaType: stableProviderEvidence!.mediaType,
       },
     })
     const eventsWithIntent = existingIntent === undefined ? [...events, intent] : events
@@ -1797,14 +1832,14 @@ export const recordOperation = (
       previousEventSha256: intent.eventSha256,
       payload: {
         applicationPath,
-        sha256: operation.evidence.sha256,
-        byteLength: operation.evidence.body.byteLength,
-        mediaType: operation.evidence.mediaType,
+        sha256: stableProviderEvidence!.sha256,
+        byteLength: stableProviderEvidence!.body.byteLength,
+        mediaType: stableProviderEvidence!.mediaType,
       },
     })
     const evidenceWithProvider = {
       ...stored.evidence,
-      [applicationPath]: operation.evidence.body,
+      [applicationPath]: stableProviderEvidence!.body,
     }
     const next = yield* Effect.try({
       try: () => replay(operation.runId, stored.request, [...eventsWithIntent, receipt], evidenceWithProvider),
@@ -1815,7 +1850,7 @@ export const recordOperation = (
     if (existingIntent === undefined) {
       yield* store.appendEvent(operation.runId, current.chainHeadSha256, encodeEvent(intent))
     }
-    yield* store.writeEvidence(operation.runId, applicationPath, operation.evidence.body)
+    yield* store.writeEvidence(operation.runId, applicationPath, stableProviderEvidence!.body)
     yield* store.appendEvent(operation.runId, intent.eventSha256, encodeEvent(receipt))
     yield* store.writeState(operation.runId, encodeView(next))
     return { _tag: "Recorded" as const, view: next }
@@ -1891,7 +1926,7 @@ export const recordOperation = (
         _tag: "CommitProviderEvidence",
         runId: operation.runId,
         operationId: operation.operationId,
-        evidence: operation.evidence,
+        evidence: stableProviderEvidence!,
       }),
       catch: (error) => error instanceof RunRecordError
         ? error
@@ -1899,7 +1934,7 @@ export const recordOperation = (
     })
     let pollDocument: unknown
     try {
-      pollDocument = JSON.parse(Buffer.from(operation.evidence.body).toString("utf8"))
+      pollDocument = JSON.parse(Buffer.from(stableProviderEvidence!.body).toString("utf8"))
     } catch {
       return yield* Effect.fail(new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance poll evidence is not valid JSON.", "repair-evidence"))
     }
@@ -1921,7 +1956,7 @@ export const recordOperation = (
     const applicationPath = `polls/poll-${String((current.pollCount ?? 0) + 1).padStart(4, "0")}.json`
     const orphanedPollBody = stored.evidence[applicationPath]
     const durablePollEvidence = orphanedPollBody === undefined
-      ? operation.evidence
+      ? stableProviderEvidence!
       : {
           mediaType: "application/json" as const,
           body: orphanedPollBody,

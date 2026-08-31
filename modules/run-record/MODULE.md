@@ -5,7 +5,7 @@
 - Errors: `modules/run-record/errors.ts`
 - Acceptance: `modules/run-record/run-record.test.ts`
 
-Provider response and poll evidence must match the shared closed schema for the Run mode and exact provider stage before any bytes are persisted. Unknown fields fail closed, including diagnostic fields whose contents use an unrecognized encoding. The shared Provider Evidence Sanitizer also owns recursive credential and duplicate-key checks as defense-in-depth; Run Record owns the typed refusal and persistence decision.
+Provider response and poll evidence must match the shared closed schema for the Run mode and exact provider stage before any bytes are persisted. Run Record snapshots each closed evidence wrapper and copies its bytes once, then uses only that immutable snapshot for validation, trial replay, intent, and persistence. Unknown or statefully substituted fields fail closed, including diagnostic fields whose contents use an unrecognized encoding. The shared Provider Evidence Sanitizer also owns recursive credential and duplicate-key checks as defense-in-depth; Run Record owns the typed refusal and persistence decision.
 
 Before writing `provider-response.json`, Run Record validates the mode-specific document, proves a complete trial replay, and journals a pre-write intent containing its expected hash, length, media type, and completion identity. Reservation reload reconciles an interrupted write only when the orphaned bytes match that earlier durable intent; substituted or intent-free storage is refused, and recovery never issues a new Submission Permit.
 

@@ -44,13 +44,8 @@ const normalizeAdapterResult = (value: unknown): GenerationResult | undefined =>
     typeof result.provider !== "string" ||
     typeof result.model !== "string" || result.model.length === 0
   ) return undefined
-  const providerEvidence = objectRecord(result.providerEvidence)
-  if (
-    providerEvidence === undefined ||
-    providerEvidence.mediaType !== "application/json" ||
-    !(providerEvidence.body instanceof Uint8Array) ||
-    typeof providerEvidence.sha256 !== "string"
-  ) return undefined
+  const providerEvidence = snapshotProviderEvidence(result.providerEvidence)
+  if (providerEvidence === undefined) return undefined
   if (!Array.isArray(result.outputs)) return undefined
   const outputs: GenerationResult["outputs"][number][] = []
   for (let index = 0; index < result.outputs.length; index += 1) {
@@ -102,14 +97,14 @@ const parseProviderDocument = (
   evidence: GenerationProviderEvidence,
   kind: SanitizedProviderDocumentKind,
 ): Record<string, unknown> | undefined => {
+  const snapshot = snapshotProviderEvidence(evidence)
+  if (snapshot === undefined) return undefined
   if (
-    evidence.mediaType !== "application/json" ||
-    !(evidence.body instanceof Uint8Array) ||
-    !/^[a-f0-9]{64}$/.test(evidence.sha256) ||
-    sha256(evidence.body) !== evidence.sha256
+    !/^[a-f0-9]{64}$/.test(snapshot.sha256) ||
+    sha256(snapshot.body) !== snapshot.sha256
   ) return undefined
   try {
-    const source = Buffer.from(evidence.body).toString("utf8")
+    const source = Buffer.from(snapshot.body).toString("utf8")
     if (hasDuplicateJsonKeys(source)) return undefined
     const document: unknown = JSON.parse(source)
     if (
@@ -127,17 +122,33 @@ const parseProviderDocument = (
   }
 }
 
-type ProviderEvidenceSnapshot = Readonly<{
-  mediaType: unknown
-  body: unknown
-  sha256: unknown
-}>
+type ProviderEvidenceSnapshot = GenerationProviderEvidence
 
 const snapshotProviderEvidence = (value: unknown): ProviderEvidenceSnapshot | undefined => {
-  const evidence = objectRecord(value)
-  if (evidence === undefined) return undefined
-  const { mediaType, body, sha256: digest } = evidence
-  return { mediaType, body, sha256: digest }
+  try {
+    const evidence = objectRecord(value)
+    if (
+      evidence === undefined ||
+      (Object.getPrototypeOf(evidence) !== Object.prototype && Object.getPrototypeOf(evidence) !== null) ||
+      Reflect.ownKeys(evidence).length !== 3 ||
+      !Object.hasOwn(evidence, "mediaType") ||
+      !Object.hasOwn(evidence, "body") ||
+      !Object.hasOwn(evidence, "sha256")
+    ) return undefined
+    const mediaType = evidence.mediaType
+    const body = evidence.body
+    const digest = evidence.sha256
+    if (mediaType !== "application/json" || !(body instanceof Uint8Array) || typeof digest !== "string") {
+      return undefined
+    }
+    return {
+      mediaType,
+      body: Buffer.isBuffer(body) ? Buffer.from(body) : Uint8Array.from(body),
+      sha256: digest,
+    }
+  } catch {
+    return undefined
+  }
 }
 
 const snapshotSeedanceSubmission = (value: unknown): Readonly<{
@@ -478,10 +489,10 @@ export const recoverGeneration = (
   providerEvidence: GenerationProviderEvidence,
 ): Effect.Effect<GenerationResult, GenerationError, GenerationAdapterService> => Effect.gen(function*() {
   const validatedPrepared = yield* validatePreparedGeneration(prepared)
+  const stableProviderEvidence = snapshotProviderEvidence(providerEvidence)
   if (
-    providerEvidence.mediaType !== "application/json" ||
-    !/^[a-f0-9]{64}$/.test(providerEvidence.sha256) ||
-    sha256(providerEvidence.body) !== providerEvidence.sha256
+    stableProviderEvidence === undefined ||
+    parseProviderDocument(stableProviderEvidence, "qwen") === undefined
   ) {
     return yield* Effect.fail(new GenerationError(
       "ADAPTER_RESULT_INVALID",
@@ -496,7 +507,7 @@ export const recoverGeneration = (
     ))
   }
   const adapterEffect: unknown = yield* Effect.try({
-    try: () => adapter.recover!(validatedPrepared, providerEvidence) as unknown,
+    try: () => adapter.recover!(validatedPrepared, stableProviderEvidence) as unknown,
     catch: () => new GenerationError("ADAPTER_RESULT_INVALID", "The recovery adapter threw before returning its Effect."),
   })
   if (!Effect.isEffect(adapterEffect)) {
@@ -511,7 +522,7 @@ export const recoverGeneration = (
       "The recovery adapter terminated with a defect.",
     ))),
   )
-  return yield* validateGenerationResult(validatedPrepared, untrustedResult, providerEvidence)
+  return yield* validateGenerationResult(validatedPrepared, untrustedResult, stableProviderEvidence)
 })
 
 export const submitSeedanceGeneration = (
@@ -592,7 +603,10 @@ export const pollSeedanceGeneration = (
 ): Effect.Effect<SeedancePollResult, GenerationError, GenerationAdapterService> =>
   Effect.gen(function*() {
     const validatedPrepared = yield* validatePreparedGeneration(prepared)
-    const submissionDocument = parseProviderDocument(submissionEvidence, "seedance-submission")
+    const stableSubmissionEvidence = snapshotProviderEvidence(submissionEvidence)
+    const submissionDocument = stableSubmissionEvidence === undefined
+      ? undefined
+      : parseProviderDocument(stableSubmissionEvidence, "seedance-submission")
     if (
       validatedPrepared.request.mode !== "seedance-video" ||
       !isSafeJobId(jobId) || submissionDocument?.job_id !== jobId ||
@@ -608,7 +622,7 @@ export const pollSeedanceGeneration = (
       return yield* Effect.fail(new GenerationError("ADAPTER_RESULT_INVALID", "The adapter cannot poll Seedance."))
     }
     const untrusted = yield* adapterEffect<unknown>(
-      () => adapter.pollSeedance!(validatedPrepared, jobId, submissionEvidence),
+      () => adapter.pollSeedance!(validatedPrepared, jobId, stableSubmissionEvidence!),
       "The Seedance polling adapter",
     )
     const result = yield* Effect.try({
