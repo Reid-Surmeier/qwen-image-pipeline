@@ -21,6 +21,7 @@ import {
   multipleVideoTracksMp4,
   sha256,
   zeroVideoTimingSampleCount,
+  withReportedFfmpegMajor,
 } from "../../tests/control-plane-fixture.js"
 
 const markerOnlyMp4 = (): Uint8Array => {
@@ -68,6 +69,17 @@ test("refuses a box-consistent MP4 whose declared video stream cannot decode", a
     bytes: forged,
     sha256: sha256(forged),
   }))
+  assert.equal(result._tag, "Failure")
+})
+
+test("refuses a non-FFmpeg-6 runtime before accepting decoded reference evidence", async () => {
+  const fixture = makeFixture("seedance-video")
+  const snapshot = await Effect.runPromise(fixture.files.read("references/neutral.mp4"))
+  const result = await withReportedFfmpegMajor(7, () => Effect.runPromiseExit(byteMediaInspector.inspect({
+    applicationPath: snapshot.applicationPath,
+    bytes: snapshot.bytes,
+    sha256: sha256(snapshot.bytes),
+  })))
   assert.equal(result._tag, "Failure")
 })
 

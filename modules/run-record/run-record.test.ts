@@ -23,8 +23,10 @@ import {
   malformedAudioTrack,
   makeFixture,
   multipleVideoTracksMp4,
+  withReportedFfmpegMajor,
 } from "../../tests/control-plane-fixture.js"
 import { verifyVideo } from "../video-verification/index.js"
+import { EMBEDDED_PROVIDER_SECRET_CASES } from "../../tests/provider-evidence-attacks.js"
 import {
   RunRecordClock,
   RunRecordError,
@@ -128,8 +130,12 @@ const plannedSeedanceRun = async (requestedCount = 1): Promise<Readonly<{
   return { planned, body }
 }
 
-const assertRunRecordRejectsMedia = async (body: Uint8Array, suffix: string): Promise<void> => {
-  const { planned } = await plannedSeedanceRun()
+const assertRunRecordRejectsMedia = async (
+  body: Uint8Array,
+  suffix: string,
+  plannedOverride?: PlannedRun,
+): Promise<void> => {
+  const planned = plannedOverride ?? (await plannedSeedanceRun()).planned
   const memory = await memoryHarness()
   const provide = <Success, Error>(
     effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
@@ -510,6 +516,7 @@ test("sanitized token counts pass while credential query strings are refused", a
     ["signed-url-sig", '{"url":"https://provider.test/result?sig=opaque-private-value"}'],
     ["signed-url-signature", '{"url":"https://provider.test/result?signature=opaque-private-value"}'],
     ["duplicate-secret-key", '{"note":"sk-private-value-123456","note":"redacted","status":"accepted"}'],
+    ...EMBEDDED_PROVIDER_SECRET_CASES,
   ] as const) {
     const memory = await memoryHarness()
     const run = await prepare(memory, suffix)
@@ -982,6 +989,11 @@ test("Run Record replay refuses MP4 metadata that contradicts decoded frames", a
     falsifiedVideoMetadataMp4(body, { width: 32, height: 24 }),
     "forged-metadata",
   )
+})
+
+test("Run Record replay refuses a non-FFmpeg-6 runtime", async () => {
+  const { planned, body } = await plannedSeedanceRun()
+  await withReportedFfmpegMajor(7, () => assertRunRecordRejectsMedia(body, "ffmpeg-7", planned))
 })
 
 test("Run Record replay refuses ambiguous MP4 evidence with multiple video tracks", async () => {

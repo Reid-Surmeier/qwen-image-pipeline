@@ -15,6 +15,17 @@ const options = {
   windowsHide: true,
 };
 
+const version = spawnSync("/usr/bin/ffmpeg", ["-version"], {
+  timeout: 5_000,
+  maxBuffer: 65_536,
+  env: { LANG: "C", LC_ALL: "C", PATH: "/usr/bin:/bin" },
+  windowsHide: true,
+  encoding: "utf8",
+});
+if (version.error || version.status !== 0 || !/^ffmpeg version 6(?:\.|\s)/.test(version.stdout)) {
+  throw new Error("FFmpeg 6 identity check failed");
+}
+
 const decode = spawnSync("/usr/bin/ffmpeg", arguments_, options);
 if (decode.error) throw decode.error;
 

@@ -180,6 +180,13 @@ static int approved_ffmpeg_arguments(char *const argv[]) {
     return argv[19] == NULL;
 }
 
+static int approved_ffmpeg_version_arguments(char *const argv[]) {
+    return argv != NULL
+        && argv[1] != NULL
+        && strcmp(argv[1], "-version") == 0
+        && argv[2] == NULL;
+}
+
 static const char *environment_value(char *const envp[], const char *name) {
     if (envp == NULL) {
         return NULL;
@@ -239,7 +246,7 @@ static int approved_ffmpeg_exec(const char *path, char *const argv[]) {
     return pinned_ffmpeg[0] != '\0'
         && resolve_executable(path, resolved)
         && strcmp(resolved, pinned_ffmpeg) == 0
-        && approved_ffmpeg_arguments(argv);
+        && (approved_ffmpeg_arguments(argv) || approved_ffmpeg_version_arguments(argv));
 }
 
 static int approved_exec(const char *path, char *const argv[]) {

@@ -92,17 +92,29 @@ const isNormalizedRgbaRaster = (body: Uint8Array): boolean => {
 const isSafeJobId = (value: unknown): value is string =>
   typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)
 
-const hasSecretMaterial = (value: unknown, parentKey = ""): boolean => {
+const hasSecretMaterial = (value: unknown, parentKey = "", embeddedDepth = 0): boolean => {
   if (/(?:credential|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|authorization|password|secret|(?:access|refresh|id)[_-]?token)/i.test(parentKey)) {
     return true
   }
   if (typeof value === "string") {
-    return /(?:sk-|gh[pousr]_|Bearer\s+)[A-Za-z0-9_-]{6,}/i.test(value) ||
-      /https?:\/\/[^/\s:@]+:[^/\s@]+@/i.test(value)
+    if (
+      /(?:sk-|gh[pousr]_|Bearer\s+)[A-Za-z0-9_-]{6,}/i.test(value) ||
+      /https?:\/\/[^/\s:@]+:[^/\s@]+@/i.test(value) ||
+      /"(?:credential|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|authorization|password|secret|(?:access|refresh|id)[_-]?token)"\s*:/i.test(value)
+    ) return true
+    if (embeddedDepth < 4 && /^\s*[\[{]/.test(value)) {
+      try {
+        if (hasDuplicateJsonKeys(value)) return true
+        if (hasSecretMaterial(JSON.parse(value), parentKey, embeddedDepth + 1)) return true
+      } catch {
+        return false
+      }
+    }
+    return false
   }
-  if (Array.isArray(value)) return value.some((child) => hasSecretMaterial(child, parentKey))
+  if (Array.isArray(value)) return value.some((child) => hasSecretMaterial(child, parentKey, embeddedDepth))
   if (value !== null && typeof value === "object") {
-    return Object.entries(value).some(([key, child]) => hasSecretMaterial(child, key))
+    return Object.entries(value).some(([key, child]) => hasSecretMaterial(child, key, embeddedDepth))
   }
   return false
 }

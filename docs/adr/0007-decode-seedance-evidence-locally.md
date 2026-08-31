@@ -1,5 +1,7 @@
 # ADR 0007: Decode Seedance evidence locally
 
+Runtime enforcement requires each independent inspector to prove that `/usr/bin/ffmpeg` reports major 6 before it accepts the decoder's framehash evidence; verifying the baseline host alone is insufficient.
+
 - Status: Accepted
 - Date: 2026-08-30
 - Governing specification: GitHub Issue #23

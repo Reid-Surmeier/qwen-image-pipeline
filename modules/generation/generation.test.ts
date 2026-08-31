@@ -15,6 +15,7 @@ import {
   type SubmissionPermit,
 } from "../run-record/index.js"
 import { makeFixture } from "../../tests/control-plane-fixture.js"
+import { EMBEDDED_PROVIDER_SECRET_CASES } from "../../tests/provider-evidence-attacks.js"
 import {
   GenerationAdapter,
   invoke,
@@ -301,6 +302,34 @@ test("submits exact Seedance video once and polls only the same sanitized job id
     submission.providerEvidence,
   ).pipe(Effect.provideService(GenerationAdapter, duplicateSecretAdapter))))
   assert.equal(duplicateSecret.code, "ADAPTER_RESULT_INVALID")
+
+  for (const [, raw] of EMBEDDED_PROVIDER_SECRET_CASES) {
+    const parsed = JSON.parse(raw) as Record<string, unknown>
+    const nestedJsonSecretBody = Buffer.from(JSON.stringify({
+      job_id: "seedance-job-1",
+      ...parsed,
+      status: "pending",
+    }))
+    const nestedJsonSecretAdapter: GenerationAdapterService = {
+      invoke: () => Effect.die("Qwen invocation must not run"),
+      pollSeedance: () => Effect.succeed({
+        status: "pending" as const,
+        provider: "openrouter" as const,
+        model: decision.run.request.model,
+        jobId: "seedance-job-1",
+        providerEvidence: {
+          mediaType: "application/json" as const,
+          body: nestedJsonSecretBody,
+          sha256: sha256(nestedJsonSecretBody),
+        },
+      }),
+    }
+    assert.equal((await Effect.runPromise(Effect.flip(pollSeedance(
+      prepared,
+      submission.jobId,
+      submission.providerEvidence,
+    ).pipe(Effect.provideService(GenerationAdapter, nestedJsonSecretAdapter))))).code, "ADAPTER_RESULT_INVALID")
+  }
 
   let costStateReads = 0
   const statefulCostBody = completedPollBody("seedance-job-1", [{

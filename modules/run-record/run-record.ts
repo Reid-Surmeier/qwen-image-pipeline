@@ -715,6 +715,21 @@ const parseReplayFramehash = (value: string): ReplayDecodedVideo | undefined => 
 }
 
 const requireReplayDecodableVideo = (value: Uint8Array): ReplayDecodedVideo => {
+  const version = spawnSync(
+    "/usr/bin/ffmpeg",
+    ["-version"],
+    {
+      timeout: 5_000,
+      maxBuffer: 65_536,
+      env: { LANG: "C", LC_ALL: "C", PATH: "/usr/bin:/bin" },
+      windowsHide: true,
+      encoding: "utf8",
+    },
+  )
+  const firstLine = version.stdout?.split("\n", 1)[0] ?? ""
+  if (version.error !== undefined || version.status !== 0 || !/^ffmpeg version 6(?:\.|\s)/.test(firstLine)) {
+    throw new RunRecordError("CHECKS_NOT_PASSED", "FFmpeg 6 is required to replay video evidence.", "repair-evidence")
+  }
   const result = spawnSync(
     "/usr/bin/ffmpeg",
     [
@@ -1431,7 +1446,7 @@ const credentialFieldName = (key: string): boolean => {
     normalized === "credential"
 }
 
-const valueHasSecret = (value: unknown, key?: string): boolean => {
+const valueHasSecret = (value: unknown, key?: string, embeddedDepth = 0): boolean => {
   if (key !== undefined && credentialFieldName(key)) {
     return true
   }
@@ -1443,14 +1458,25 @@ const valueHasSecret = (value: unknown, key?: string): boolean => {
     } catch {
       credentialQuery = /[?&](?:api[_-]?key|access[_-]?key|password|secret|authorization|(?:access|refresh|id)?[_-]?token)=/i.test(value)
     }
-    return credentialQuery ||
+    if (credentialQuery ||
       /(?:sk-|gh[pousr]_|Bearer\s+)[A-Za-z0-9_-]{6,}/i.test(value) ||
       /-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(value) ||
-      /https?:\/\/[^/\s:@]+:[^/\s@]+@/i.test(value)
+      /https?:\/\/[^/\s:@]+:[^/\s@]+@/i.test(value) ||
+      /"(?:credential|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|authorization|password|secret|(?:access|refresh|id)[_-]?token)"\s*:/i.test(value)
+    ) return true
+    if (embeddedDepth < 4 && /^\s*[\[{]/.test(value)) {
+      try {
+        if (hasDuplicateJsonKeys(value)) return true
+        if (valueHasSecret(JSON.parse(value), key, embeddedDepth + 1)) return true
+      } catch {
+        return false
+      }
+    }
+    return false
   }
-  if (Array.isArray(value)) return value.some((child) => valueHasSecret(child))
+  if (Array.isArray(value)) return value.some((child) => valueHasSecret(child, undefined, embeddedDepth))
   if (value !== null && typeof value === "object") {
-    return Object.entries(value).some(([childKey, child]) => valueHasSecret(child, childKey))
+    return Object.entries(value).some(([childKey, child]) => valueHasSecret(child, childKey, embeddedDepth))
   }
   return false
 }

@@ -105,13 +105,50 @@ def validate_repository(root: Path) -> list[str]:
         problems.append("missing Verify workflow")
     else:
         workflow_text = workflow.read_text(encoding="utf-8")
+        workflow_lines = workflow_text.splitlines()
+        try:
+            verify_start = workflow_lines.index("  verify:")
+        except ValueError:
+            verify_lines: list[str] = []
+        else:
+            verify_end = next(
+                (
+                    index
+                    for index in range(verify_start + 1, len(workflow_lines))
+                    if workflow_lines[index].startswith("  ")
+                    and not workflow_lines[index].startswith("    ")
+                    and workflow_lines[index].rstrip().endswith(":")
+                ),
+                len(workflow_lines),
+            )
+            verify_lines = workflow_lines[verify_start:verify_end]
         if "build/**" not in workflow_text:
             problems.append("Verify workflow does not run on build branches")
         if "scripts/verify.sh" not in workflow_text:
             problems.append("Verify workflow does not call the canonical baseline")
-        if "runs-on: ubuntu-24.04" not in workflow_text:
+        if verify_lines.count("    runs-on: ubuntu-24.04") != 1:
             problems.append("Verify workflow does not pin the FFmpeg 6 runner image")
-        if "sudo apt-get install --yes --no-install-recommends ffmpeg" not in workflow_text:
+        expected_ffmpeg_step = [
+            "      - name: Install the FFmpeg 6 prerequisite",
+            "        run: |",
+            "          sudo apt-get update",
+            "          sudo apt-get install --yes --no-install-recommends ffmpeg",
+        ]
+        ffmpeg_step_valid = False
+        for index, line in enumerate(verify_lines):
+            if line != expected_ffmpeg_step[0]:
+                continue
+            end = next(
+                (
+                    candidate
+                    for candidate in range(index + 1, len(verify_lines))
+                    if verify_lines[candidate].startswith("      - ")
+                ),
+                len(verify_lines),
+            )
+            ffmpeg_step_valid = [item for item in verify_lines[index:end] if item.strip()] == expected_ffmpeg_step
+            break
+        if not ffmpeg_step_valid:
             problems.append("Verify workflow does not install the FFmpeg 6 prerequisite")
 
     verify = root / "scripts" / "verify.sh"

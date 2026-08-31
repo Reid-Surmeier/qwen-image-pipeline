@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { createRequire, syncBuiltinESMExports } from "node:module"
 import { gunzipSync } from "node:zlib"
 
 import { Effect } from "effect"
@@ -32,6 +33,28 @@ const ALAC_VIDEO_MP4_BYTES = gunzipSync(Buffer.from(
 
 export const sha256 = (bytes: Uint8Array): string =>
   createHash("sha256").update(bytes).digest("hex")
+
+export const withReportedFfmpegMajor = async <Result>(
+  major: number,
+  action: () => Promise<Result>,
+): Promise<Result> => {
+  const childProcess = createRequire(import.meta.url)("node:child_process") as typeof import("node:child_process")
+  const original = childProcess.spawnSync
+  childProcess.spawnSync = ((file: string, arguments_?: ReadonlyArray<string>, options?: unknown) => {
+    if (file === "/usr/bin/ffmpeg" && arguments_?.length === 1 && arguments_[0] === "-version") {
+      const stdout = `ffmpeg version ${major}.0 test fixture\n`
+      return { pid: 1, output: [null, stdout, ""], stdout, stderr: "", status: 0, signal: null }
+    }
+    return original(file, arguments_, options as never)
+  }) as typeof original
+  syncBuiltinESMExports()
+  try {
+    return await action()
+  } finally {
+    childProcess.spawnSync = original
+    syncBuiltinESMExports()
+  }
+}
 
 const mp4Uint32 = (value: number): Buffer => {
   const result = Buffer.alloc(4)

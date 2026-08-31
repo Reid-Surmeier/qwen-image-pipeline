@@ -14,6 +14,7 @@ import {
   makeFixture,
   multipleVideoTracksMp4,
   zeroVideoTimingSampleCount,
+  withReportedFfmpegMajor,
 } from "../../tests/control-plane-fixture.js"
 import { verifyVideo, type VerifyVideoInput } from "./index.js"
 
@@ -108,6 +109,23 @@ test("catches an independently mutated bad-media fixture", async () => {
   })))
 
   assert.equal(failure.code, "VIDEO_MEDIA_INVALID")
+})
+
+test("rejects a non-FFmpeg-6 runtime before accepting decoded output evidence", async () => {
+  const body = await fixtureVideo()
+  const result = await withReportedFfmpegMajor(7, () => Effect.runPromiseExit(verifyVideo({
+    outputs: [{
+      applicationPath: "outputs/seedance-result.mp4",
+      mediaType: "video/mp4",
+      body,
+      sha256: hash(body),
+    }],
+    expected: { width: 64, height: 48, durationSeconds: 0.2, audioExpected: false },
+    requestedCount: 1,
+    completedCount: 1,
+    cost: { state: "unknown", estimatedMaximumCostUsd: "0.20" },
+  })))
+  assert.equal(result._tag, "Failure")
 })
 
 test("rejects marker-shaped bytes without a structural playable MP4 track", async () => {

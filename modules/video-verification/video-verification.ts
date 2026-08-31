@@ -237,6 +237,21 @@ const parseFramehash = (value: string): DecodedVideo | undefined => {
 }
 
 const requireDecodableVideo = (bytes: Uint8Array): DecodedVideo => {
+  const version = spawnSync(
+    "/usr/bin/ffmpeg",
+    ["-version"],
+    {
+      timeout: 5_000,
+      maxBuffer: 65_536,
+      env: { LANG: "C", LC_ALL: "C", PATH: "/usr/bin:/bin" },
+      windowsHide: true,
+      encoding: "utf8",
+    },
+  )
+  const firstLine = version.stdout?.split("\n", 1)[0] ?? ""
+  if (version.error !== undefined || version.status !== 0 || !/^ffmpeg version 6(?:\.|\s)/.test(firstLine)) {
+    throw new VideoVerificationError("VIDEO_MEDIA_INVALID", "FFmpeg 6 is required to verify video evidence.")
+  }
   const result = spawnSync(
     "/usr/bin/ffmpeg",
     [

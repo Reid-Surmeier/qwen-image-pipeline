@@ -19,6 +19,18 @@ if (process.env.QWEN_BASELINE_OFFLINE === "1") {
     "-protocol_whitelist", "pipe", "-i", "pipe:0", "-map", "0:v:0", "-map", "0:a?",
     "-f", "framehash", "-",
   ];
+  const hasSanitizedEnvironment = (options) => {
+    const environment = options.env;
+    return environment !== null && typeof environment === "object" && !Array.isArray(environment) &&
+      Object.keys(environment).sort().join(",") === "LANG,LC_ALL,PATH" &&
+      environment.LANG === "C" && environment.LC_ALL === "C" && environment.PATH === "/usr/bin:/bin";
+  };
+  const isExactFfmpegVersion = (file, arguments_, options) =>
+    file === "/usr/bin/ffmpeg" &&
+    Array.isArray(arguments_) && arguments_.length === 1 && arguments_[0] === "-version" &&
+    options !== null && typeof options === "object" && !Array.isArray(options) &&
+    options.input === undefined && options.timeout === 5_000 && options.maxBuffer === 65_536 &&
+    options.windowsHide === true && hasSanitizedEnvironment(options);
   const isExactFfmpegDecode = (file, arguments_, options) => {
     if (
       file !== "/usr/bin/ffmpeg" ||
@@ -30,10 +42,7 @@ if (process.env.QWEN_BASELINE_OFFLINE === "1") {
       options.timeout !== 15_000 || options.maxBuffer !== 1_048_576 ||
       options.windowsHide !== true
     ) return false;
-    const environment = options.env;
-    return environment !== null && typeof environment === "object" && !Array.isArray(environment) &&
-      Object.keys(environment).sort().join(",") === "LANG,LC_ALL,PATH" &&
-      environment.LANG === "C" && environment.LC_ALL === "C" && environment.PATH === "/usr/bin:/bin";
+    return hasSanitizedEnvironment(options);
   };
 
   net.Socket.prototype.connect = blockedNetwork;
@@ -51,7 +60,9 @@ if (process.env.QWEN_BASELINE_OFFLINE === "1") {
     childProcess[name] = blockedChild;
   }
   childProcess.spawnSync = (file, arguments_, options) => {
-    if (!isExactFfmpegDecode(file, arguments_, options)) return blockedChild();
+    if (!(isExactFfmpegDecode(file, arguments_, options) || isExactFfmpegVersion(file, arguments_, options))) {
+      return blockedChild();
+    }
     return originalSpawnSync(file, arguments_, options);
   };
 }
