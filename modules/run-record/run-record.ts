@@ -2869,7 +2869,9 @@ export const recordOperation = (
       ? current.phase === "donor_selected"
       : failure.class === "verification_failure"
         ? proof?.module === "Verification" ? current.phase === "assembly_completed" : current.phase === "generated_outputs_received"
-        : current.phase === "submission_may_have_started" || current.phase === "provider_evidence_received"
+        : current.phase === "submission_may_have_started" ||
+          current.phase === "provider_evidence_received" ||
+          (runRequest.mode === "qwen-image" && current.phase === "generated_outputs_received")
     if (!phaseAllowed || !assemblyProofAllowed || !rasterVerificationProofAllowed || !videoVerificationProofAllowed) {
       return yield* Effect.fail(new RunRecordError(
         "ILLEGAL_TRANSITION",

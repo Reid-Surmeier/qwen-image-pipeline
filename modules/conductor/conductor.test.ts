@@ -469,35 +469,37 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
     assert.equal(recoveryCalls, 1)
   }
 
-  const { recoveryMemory: failedRecoveryMemory } = await setupRecovery(false)
-  let failedRecoveryCalls = 0
-  const failedRecoveryAdapter: GenerationAdapterService = {
-    invoke: () => Effect.die("recovery must not resubmit"),
-    recover: () => {
-      failedRecoveryCalls += 1
-      return Effect.fail(new GenerationError(
-        "ADAPTER_NOT_STARTED",
-        "Recovery cannot claim that the original submission did not start.",
-      ))
-    },
+  for (const persistOutput of [false, true]) {
+    const { recoveryMemory: failedRecoveryMemory } = await setupRecovery(persistOutput)
+    let failedRecoveryCalls = 0
+    const failedRecoveryAdapter: GenerationAdapterService = {
+      invoke: () => Effect.die("recovery must not resubmit"),
+      recover: () => {
+        failedRecoveryCalls += 1
+        return Effect.fail(new GenerationError(
+          "ADAPTER_NOT_STARTED",
+          "Recovery cannot claim that the original submission did not start.",
+        ))
+      },
+    }
+    const executeFailedRecovery = () => Effect.runPromise(advance({ run: plannedRun }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(GenerationAdapter, failedRecoveryAdapter),
+      Effect.provide(failedRecoveryMemory.layer),
+      Effect.provideService(RunRecordClock, clock),
+    ))
+    const failedRecovery = await executeFailedRecovery()
+    assert.equal(failedRecovery._tag, "Blocked")
+    if (failedRecovery._tag !== "Blocked") return
+    assert.equal(failedRecovery.finding.code, "submission_unreconciled")
+    assert.equal(failedRecovery.finding.correctionOwner, "Generation")
+    assert.equal(failedRecovery.diagnostics.view.spendState, "possibly_spent")
+    assert.equal(failedRecovery.diagnostics.view.retryState, "reconcile-only")
+    assert.equal(failedRecoveryCalls, 1)
+    const replayedRecovery = await executeFailedRecovery()
+    assert.equal(replayedRecovery._tag, "Blocked")
+    assert.equal(failedRecoveryCalls, 1)
   }
-  const executeFailedRecovery = () => Effect.runPromise(advance({ run: plannedRun }).pipe(
-    Effect.provideService(ApplicationFiles, fixture.files),
-    Effect.provideService(GenerationAdapter, failedRecoveryAdapter),
-    Effect.provide(failedRecoveryMemory.layer),
-    Effect.provideService(RunRecordClock, clock),
-  ))
-  const failedRecovery = await executeFailedRecovery()
-  assert.equal(failedRecovery._tag, "Blocked")
-  if (failedRecovery._tag !== "Blocked") return
-  assert.equal(failedRecovery.finding.code, "submission_unreconciled")
-  assert.equal(failedRecovery.finding.correctionOwner, "Generation")
-  assert.equal(failedRecovery.diagnostics.view.spendState, "possibly_spent")
-  assert.equal(failedRecovery.diagnostics.view.retryState, "reconcile-only")
-  assert.equal(failedRecoveryCalls, 1)
-  const replayedRecovery = await executeFailedRecovery()
-  assert.equal(replayedRecovery._tag, "Blocked")
-  assert.equal(failedRecoveryCalls, 1)
 })
 
 test("advances one Seedance Run by submitting once and polling the same job to verified video", async () => {
