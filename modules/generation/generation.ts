@@ -5,6 +5,8 @@ import { Effect } from "effect"
 import {
   hasDuplicateJsonKeys,
   hasProviderCredentialMaterial,
+  isSanitizedProviderDocument,
+  type SanitizedProviderDocumentKind,
 } from "../provider-evidence-sanitizer/index.js"
 import type { CanonicalRunRequest } from "../run-contract/index.js"
 import { consumeSubmission, type SubmissionPermit } from "../run-record/index.js"
@@ -98,6 +100,7 @@ const isSafeJobId = (value: unknown): value is string =>
 
 const parseProviderDocument = (
   evidence: GenerationProviderEvidence,
+  kind: SanitizedProviderDocumentKind,
 ): Record<string, unknown> | undefined => {
   if (
     evidence.mediaType !== "application/json" ||
@@ -113,7 +116,8 @@ const parseProviderDocument = (
       document === null ||
       typeof document !== "object" ||
       Array.isArray(document) ||
-      hasProviderCredentialMaterial(document)
+      hasProviderCredentialMaterial(document) ||
+      !isSanitizedProviderDocument(kind, document)
     ) {
       return undefined
     }
@@ -409,6 +413,7 @@ const validateGenerationResult = (
   }
   if (
     sha256(result.providerEvidence.body) !== result.providerEvidence.sha256 ||
+    parseProviderDocument(result.providerEvidence, "qwen") === undefined ||
     result.outputs.some((output) =>
       sha256(output.body) !== output.sha256 ||
       !isNormalizedRgbaRaster(output.body) ||
@@ -555,7 +560,9 @@ export const submitSeedanceGeneration = (
           body: evidenceRecord.body,
           sha256: evidenceRecord.sha256,
         }
-    const document = providerEvidence === undefined ? undefined : parseProviderDocument(providerEvidence)
+    const document = providerEvidence === undefined
+      ? undefined
+      : parseProviderDocument(providerEvidence, "seedance-submission")
     if (
       result === undefined || result.provider !== validatedPrepared.request.provider ||
       result.model !== validatedPrepared.request.model || !isSafeJobId(result.jobId) ||
@@ -585,7 +592,7 @@ export const pollSeedanceGeneration = (
 ): Effect.Effect<SeedancePollResult, GenerationError, GenerationAdapterService> =>
   Effect.gen(function*() {
     const validatedPrepared = yield* validatePreparedGeneration(prepared)
-    const submissionDocument = parseProviderDocument(submissionEvidence)
+    const submissionDocument = parseProviderDocument(submissionEvidence, "seedance-submission")
     if (
       validatedPrepared.request.mode !== "seedance-video" ||
       !isSafeJobId(jobId) || submissionDocument?.job_id !== jobId ||
@@ -619,7 +626,9 @@ export const pollSeedanceGeneration = (
           body: evidenceRecord.body,
           sha256: evidenceRecord.sha256,
         }
-    const document = providerEvidence === undefined ? undefined : parseProviderDocument(providerEvidence)
+    const document = providerEvidence === undefined
+      ? undefined
+      : parseProviderDocument(providerEvidence, "seedance-poll")
     if (
       result === undefined || result.provider !== validatedPrepared.request.provider ||
       result.model !== validatedPrepared.request.model || result.jobId !== jobId ||

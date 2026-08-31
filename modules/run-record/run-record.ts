@@ -6,6 +6,7 @@ import { Effect } from "effect"
 import {
   hasDuplicateJsonKeys,
   hasProviderCredentialMaterial,
+  isSanitizedProviderDocument,
 } from "../provider-evidence-sanitizer/index.js"
 import { RunRecordError } from "./errors.js"
 import type { CanonicalRunRequest } from "../run-contract/index.js"
@@ -972,23 +973,30 @@ const replay = (
         throw new RunRecordError("EVIDENCE_HASH_MISMATCH", `${applicationPath} no longer matches its event receipt.`, "repair-evidence")
       }
       evidence.push({ applicationPath, sha256: evidenceSha256, byteLength, mediaType })
+      const providerSource = Buffer.from(storedEvidence).toString("utf8")
+      if (hasDuplicateJsonKeys(providerSource)) {
+        throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Provider evidence contains duplicate JSON keys.", "repair-evidence")
+      }
+      let providerDocument: unknown
+      try {
+        providerDocument = JSON.parse(providerSource)
+      } catch {
+        throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Provider evidence is not valid JSON.", "repair-evidence")
+      }
       if (runRequest.mode === "seedance-video") {
-        let providerDocument: unknown
-        try {
-          providerDocument = JSON.parse(Buffer.from(storedEvidence).toString("utf8"))
-        } catch {
-          throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance provider evidence is not valid JSON.", "repair-evidence")
-        }
         const provider = providerDocument as Readonly<Record<string, unknown>>
         if (
           providerDocument === null || typeof providerDocument !== "object" || Array.isArray(providerDocument) ||
           hasProviderCredentialMaterial(providerDocument) ||
+          !isSanitizedProviderDocument("seedance-submission", providerDocument) ||
           typeof provider.job_id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(provider.job_id) ||
           (provider.status !== "submitted" && provider.status !== "queued")
         ) {
           throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance provider evidence must bind one sanitized submitted job.", "repair-evidence")
         }
         providerJobId = provider.job_id
+      } else if (!isSanitizedProviderDocument("qwen", providerDocument)) {
+        throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Qwen provider evidence must match its sanitized receipt schema.", "repair-evidence")
       }
       phase = "provider_evidence_received"
       providerEvidenceIntent = undefined
@@ -1030,6 +1038,7 @@ const replay = (
       if (
         pollDocument === null || typeof pollDocument !== "object" || Array.isArray(pollDocument) ||
         hasProviderCredentialMaterial(pollDocument) ||
+        !isSanitizedProviderDocument("seedance-poll", pollDocument) ||
         poll.job_id !== providerJobId || poll.status !== status
       ) {
         throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance poll evidence substituted its job identity or status.", "repair-evidence")
@@ -1535,12 +1544,18 @@ const validateProviderEvidenceForRequest = (
   runRequest: CanonicalRunRequest,
 ): void => {
   const parsed = validateProviderEvidence(operation)
-  if (runRequest.mode !== "seedance-video") return
+  if (runRequest.mode !== "seedance-video") {
+    if (!isSanitizedProviderDocument("qwen", parsed)) {
+      throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Qwen provider evidence must match its sanitized receipt schema.", "repair-evidence")
+    }
+    return
+  }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance provider evidence must be one submitted job object.", "repair-evidence")
   }
   const provider = parsed as Readonly<Record<string, unknown>>
   if (
+    !isSanitizedProviderDocument("seedance-submission", provider) ||
     typeof provider.job_id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(provider.job_id) ||
     (provider.status !== "submitted" && provider.status !== "queued")
   ) {
@@ -1860,6 +1875,17 @@ export const recordOperation = (
     ) {
       return yield* Effect.fail(new RunRecordError("ILLEGAL_TRANSITION", "Seedance polling must continue the one persisted submitted job."))
     }
+    if (operation.status === "completed" && (
+      !Number.isSafeInteger(operation.completedCount) ||
+      operation.completedCount !== current.maximumCount ||
+      operation.outputs.length !== operation.completedCount ||
+      (operation.cost.state !== "actual" && operation.cost.state !== "estimated-only" && operation.cost.state !== "unknown") ||
+      (operation.cost.state !== "actual" && operation.cost.actualCostUsd !== undefined) ||
+      (operation.cost.state === "actual" &&
+        (operation.cost.actualCostUsd === undefined || !/^(?:0|[1-9]\d*)\.\d{2,6}$/.test(operation.cost.actualCostUsd)))
+    )) {
+      return yield* Effect.fail(new RunRecordError("RESERVATION_OUTSIDE_PLAN", "Seedance completion contradicts the reserved count or cost contract."))
+    }
     yield* Effect.try({
       try: () => validateProviderEvidence({
         _tag: "CommitProviderEvidence",
@@ -1880,6 +1906,7 @@ export const recordOperation = (
     const poll = pollDocument as Readonly<Record<string, unknown>>
     if (
       pollDocument === null || typeof pollDocument !== "object" || Array.isArray(pollDocument) ||
+      !isSanitizedProviderDocument("seedance-poll", pollDocument) ||
       poll.job_id !== operation.jobId || poll.status !== operation.status
     ) {
       return yield* Effect.fail(new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance poll evidence substituted its job identity or status.", "repair-evidence"))
@@ -1921,6 +1948,7 @@ export const recordOperation = (
       const orphanedPoll = orphanedDocument as Readonly<Record<string, unknown>>
       if (
         orphanedDocument === null || typeof orphanedDocument !== "object" || Array.isArray(orphanedDocument) ||
+        !isSanitizedProviderDocument("seedance-poll", orphanedDocument) ||
         orphanedPoll.job_id !== operation.jobId
       ) {
         return yield* Effect.fail(new RunRecordError("EVIDENCE_HASH_MISMATCH", "Orphaned Seedance evidence belongs to a different job.", "repair-evidence"))
@@ -1992,17 +2020,6 @@ export const recordOperation = (
     }
     let outputReceipts: ReadonlyArray<Readonly<Record<string, JsonValue>>> | undefined
     if (operation.status === "completed") {
-      if (
-        !Number.isSafeInteger(operation.completedCount) ||
-        operation.completedCount !== current.maximumCount ||
-        operation.outputs.length !== operation.completedCount ||
-        (operation.cost.state !== "actual" && operation.cost.state !== "estimated-only" && operation.cost.state !== "unknown") ||
-        (operation.cost.state !== "actual" && operation.cost.actualCostUsd !== undefined) ||
-        (operation.cost.state === "actual" &&
-          (operation.cost.actualCostUsd === undefined || !/^(?:0|[1-9]\d*)\.\d{2,6}$/.test(operation.cost.actualCostUsd)))
-      ) {
-        return yield* Effect.fail(new RunRecordError("RESERVATION_OUTSIDE_PLAN", "Seedance completion contradicts the reserved count or cost contract."))
-      }
       const paths = new Set<string>()
       for (const output of durableOutputs) {
         if (

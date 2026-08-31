@@ -5,5 +5,6 @@
 - Errors: None; malformed or ambiguous evidence is conservatively classified as unsafe.
 - Acceptance: `modules/provider-evidence-sanitizer/provider-evidence-sanitizer.test.ts`
 
-This module owns one credential classifier and one duplicate-JSON-key parser for both provider-facing persistence seams. It treats Unicode disguises, serialized diagnostics, malformed embedded JSON, credential-bearing URLs, and loose field syntax as unsafe. Generation and Run Record still translate that classification into their own typed errors.
+This module owns the closed receipt schemas shared by both provider-facing persistence seams. Qwen completion identity, Qwen usage, Seedance submission, pending poll, and completed poll receipts each admit only their named fields and constrained values; unknown fields fail closed even when their contents use an encoding the diagnostic classifier does not understand. Completed Seedance receipts bind the dense output set, count, cost state, and an optional constrained poll timestamp.
 
+The module also owns one credential classifier and one duplicate-JSON-key parser as defense-in-depth. They treat known Unicode disguises, serialized diagnostics, malformed embedded JSON, credential-bearing URLs, and loose field syntax as unsafe, but they are not the authority for persistence. Generation and Run Record translate all refusals into their own typed errors.

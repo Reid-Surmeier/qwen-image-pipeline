@@ -211,3 +211,110 @@ export const hasProviderCredentialMaterial = (
   }
   return false
 }
+
+export type SanitizedProviderDocumentKind =
+  | "qwen"
+  | "seedance-submission"
+  | "seedance-poll"
+
+const objectRecord = (value: unknown): Readonly<Record<string, unknown>> | undefined => {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+    ? value as Readonly<Record<string, unknown>>
+    : undefined
+}
+
+const hasExactKeys = (
+  value: Readonly<Record<string, unknown>>,
+  keys: ReadonlyArray<string>,
+): boolean => Reflect.ownKeys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
+
+const safeIdentifier = (value: unknown): value is string =>
+  typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)
+
+const safeTokenCount = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+
+const sanitizedQwenUsage = (value: unknown): boolean => {
+  const usage = objectRecord(value)
+  return usage !== undefined &&
+    hasExactKeys(usage, ["prompt_tokens", "completion_tokens"]) &&
+    safeTokenCount(usage.prompt_tokens) &&
+    safeTokenCount(usage.completion_tokens)
+}
+
+const sanitizedQwenDocument = (document: Readonly<Record<string, unknown>>): boolean => {
+  if (hasExactKeys(document, ["id", "status"])) {
+    return safeIdentifier(document.id) && document.status === "completed"
+  }
+  if (hasExactKeys(document, ["request_id", "status"])) {
+    return safeIdentifier(document.request_id) &&
+      (document.status === "accepted" || document.status === "succeeded")
+  }
+  return hasExactKeys(document, ["usage"]) && sanitizedQwenUsage(document.usage)
+}
+
+const sanitizedSeedanceSubmission = (document: Readonly<Record<string, unknown>>): boolean =>
+  hasExactKeys(document, ["job_id", "status"]) &&
+  safeIdentifier(document.job_id) &&
+  (document.status === "submitted" || document.status === "queued")
+
+const sanitizedSeedanceCost = (value: unknown): boolean => {
+  const cost = objectRecord(value)
+  if (cost === undefined) return false
+  if (cost.state === "actual") {
+    return hasExactKeys(cost, ["state", "actual_cost_usd"]) &&
+      typeof cost.actual_cost_usd === "string" && /^(?:0|[1-9]\d*)\.\d{2,6}$/.test(cost.actual_cost_usd)
+  }
+  return (cost.state === "estimated-only" || cost.state === "unknown") && hasExactKeys(cost, ["state"])
+}
+
+const sanitizedSeedanceOutput = (value: unknown): boolean => {
+  const output = objectRecord(value)
+  return output !== undefined &&
+    hasExactKeys(output, ["application_path", "media_type", "sha256"]) &&
+    typeof output.application_path === "string" &&
+    /^outputs\/[a-z0-9][a-z0-9._-]*\.mp4$/.test(output.application_path) &&
+    output.media_type === "video/mp4" &&
+    typeof output.sha256 === "string" && /^[a-f0-9]{64}$/.test(output.sha256)
+}
+
+const sanitizedSeedancePoll = (document: Readonly<Record<string, unknown>>): boolean => {
+  if (!safeIdentifier(document.job_id)) return false
+  if (document.status === "pending") return hasExactKeys(document, ["job_id", "status"])
+  const completedKeys = Object.hasOwn(document, "polled_at")
+    ? ["job_id", "status", "polled_at", "outputs", "completed_count", "cost"]
+    : ["job_id", "status", "outputs", "completed_count", "cost"]
+  if (
+    document.status !== "completed" ||
+    !hasExactKeys(document, completedKeys) ||
+    (Object.hasOwn(document, "polled_at") && (
+      typeof document.polled_at !== "string" ||
+      !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(document.polled_at) ||
+      Number.isNaN(Date.parse(document.polled_at))
+    )) ||
+    !Array.isArray(document.outputs) ||
+    typeof document.completed_count !== "number" ||
+    !Number.isSafeInteger(document.completed_count) || document.completed_count < 1 ||
+    document.outputs.length !== document.completed_count ||
+    !sanitizedSeedanceCost(document.cost)
+  ) return false
+  for (let index = 0; index < document.outputs.length; index += 1) {
+    if (!Object.hasOwn(document.outputs, index) || !sanitizedSeedanceOutput(document.outputs[index])) return false
+  }
+  return true
+}
+
+export const isSanitizedProviderDocument = (
+  kind: SanitizedProviderDocumentKind,
+  value: unknown,
+): boolean => {
+  const document = objectRecord(value)
+  if (document === undefined || hasProviderCredentialMaterial(document)) return false
+  return kind === "qwen"
+    ? sanitizedQwenDocument(document)
+    : kind === "seedance-submission"
+      ? sanitizedSeedanceSubmission(document)
+      : sanitizedSeedancePoll(document)
+}

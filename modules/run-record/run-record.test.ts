@@ -443,7 +443,7 @@ test("a contradictory current-head view blocks record operations, not only load"
   assert.equal(fabricated.code, "DERIVED_VIEW_CONTRADICTION")
 })
 
-test("sanitized token counts pass while credential query strings are refused", async () => {
+test("an exact usage receipt passes while credential query strings are refused", async () => {
   const planned = await plannedRun()
   const prepare = async (memory: MemoryRunRecordHarness, suffix: string) => {
     const reserved = await Effect.runPromise(reserve(reservationFor(planned)).pipe(
@@ -1339,7 +1339,7 @@ test("a completed poll recovers when interrupted after poll evidence but before 
   })))
   const outputSha256 = createHash("sha256").update(videoBody).digest("hex")
   const completedPoll = (
-    polledAt: string,
+    polledAt: `${string}Z`,
     applicationPath: `outputs/${string}` = "outputs/seedance-poll-only-orphan.mp4",
   ): RecordOperation => {
     const pollBody = Buffer.from(JSON.stringify({
@@ -1371,7 +1371,9 @@ test("a completed poll recovers when interrupted after poll evidence but before 
       cost: { state: "unknown" },
     }
   }
-  const interrupted = await Effect.runPromise(Effect.flip(provide(record(completedPoll("first")))))
+  const firstPollAt = "2026-08-30T12:00:00.000Z" as const
+  const secondPollAt = "2026-08-30T12:00:01.000Z" as const
+  const interrupted = await Effect.runPromise(Effect.flip(provide(record(completedPoll(firstPollAt)))))
   assert.equal(interrupted.code, "DURABILITY_FAILURE")
   await assert.rejects(
     Effect.runPromise(readEvidence(
@@ -1381,12 +1383,12 @@ test("a completed poll recovers when interrupted after poll evidence but before 
   )
 
   const replacement = await Effect.runPromise(Effect.flip(provide(record(completedPoll(
-    "second",
+    secondPollAt,
     "outputs/replacement.mp4",
   )), memory.layer)))
   assert.equal(replacement.code, "EVIDENCE_HASH_MISMATCH")
 
-  const recovered = await Effect.runPromise(provide(record(completedPoll("second")), memory.layer))
+  const recovered = await Effect.runPromise(provide(record(completedPoll(secondPollAt)), memory.layer))
   assert.equal(recovered.view.phase, "generated_outputs_received")
   assert.equal(recovered.view.pollCount, 1)
   assert.equal(recovered.view.completedCount, 1)
@@ -1397,7 +1399,7 @@ test("a completed poll recovers when interrupted after poll evidence but before 
   const durablePoll = JSON.parse(Buffer.from(await Effect.runPromise(
     readEvidence(reserved.runId, "polls/poll-0001.json").pipe(Effect.provide(memory.layer)),
   )).toString("utf8")) as Record<string, unknown>
-  assert.equal(durablePoll.polled_at, "first")
+  assert.equal(durablePoll.polled_at, firstPollAt)
 })
 
 test("a completed poll recovers orphaned write-once evidence without stranding the Run", async () => {
@@ -1426,7 +1428,7 @@ test("a completed poll recovers orphaned write-once evidence without stranding t
       sha256: createHash("sha256").update(submissionBody).digest("hex"),
     },
   })))
-  const completedPoll = (polledAt: string, outputBody = videoBody): RecordOperation => {
+  const completedPoll = (polledAt: `${string}Z`, outputBody = videoBody): RecordOperation => {
     const outputSha256 = createHash("sha256").update(outputBody).digest("hex")
     const pollBody = completedPollBody("seedance-orphan", [{
       applicationPath: "outputs/seedance-orphan.mp4",
@@ -1455,23 +1457,25 @@ test("a completed poll recovers orphaned write-once evidence without stranding t
     }
   }
   await Effect.runPromise(memory.failNext("append-event"))
-  const interrupted = await Effect.runPromise(Effect.flip(provide(record(completedPoll("first")))))
+  const firstPollAt = "2026-08-30T12:00:00.000Z" as const
+  const secondPollAt = "2026-08-30T12:00:01.000Z" as const
+  const interrupted = await Effect.runPromise(Effect.flip(provide(record(completedPoll(firstPollAt)))))
   assert.equal(interrupted.code, "DURABILITY_FAILURE")
   assert.equal((await Effect.runPromise(load(reserved.runId).pipe(Effect.provide(memory.layer)))).phase, "provider_evidence_received")
 
   const changedOutput = Uint8Array.from(videoBody)
   changedOutput[changedOutput.length - 1] = (changedOutput[changedOutput.length - 1] ?? 0) ^ 1
-  const contradiction = await Effect.runPromise(Effect.flip(provide(record(completedPoll("second", changedOutput)))))
+  const contradiction = await Effect.runPromise(Effect.flip(provide(record(completedPoll(secondPollAt, changedOutput)))))
   assert.equal(contradiction.code, "EVIDENCE_HASH_MISMATCH")
 
-  const recovered = await Effect.runPromise(provide(record(completedPoll("second"))))
+  const recovered = await Effect.runPromise(provide(record(completedPoll(secondPollAt))))
   assert.equal(recovered.view.phase, "generated_outputs_received")
   assert.equal(recovered.view.pollCount, 1)
   assert.equal(recovered.view.completedCount, 1)
   const durablePoll = JSON.parse(Buffer.from(await Effect.runPromise(
     readEvidence(reserved.runId, "polls/poll-0001.json").pipe(Effect.provide(memory.layer)),
   )).toString("utf8")) as Record<string, unknown>
-  assert.equal(durablePoll.polled_at, "first")
+  assert.equal(durablePoll.polled_at, firstPollAt)
 })
 
 test("a durable pending poll is journaled before a later completed response", async () => {
