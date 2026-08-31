@@ -89,7 +89,7 @@
       "surface": "python-api.qwen_ui_pipeline.providers.openrouter.OpenRouterImageClient.generate",
       "disposition": "retained implementation",
       "replacement": "Generation.invoke",
-      "retirementCondition": "Issue #28 makes Generation the only caller; Issue #30 removes direct public reachability."
+      "retirementCondition": "Issue #28 places the client behind the versioned Qwen kernel; Issues #29 and #30 remove the remaining recorded direct callers and public reachability."
     },
     {
       "surface": "python-api.qwen_ui_pipeline.providers.openrouter.build_openrouter_request",
@@ -137,9 +137,9 @@
   "materials": [
     {
       "material": "inherited-qwen-openrouter-kernel",
-      "path": "qwen_ui_pipeline/qwen_adapter.py",
+      "path": "qwen_ui_pipeline/qwen_adapter.py, qwen_ui_pipeline/qwen_adapter_host.py, and modules/generation/python-qwen-kernel-transport.ts",
       "disposition": "retained implementation",
-      "evidence": "tests/test_qwen_adapter.py proves closed protocol input, exact model/count/references, success, rejection, and count mismatch."
+      "evidence": "Tests prove a repository-owned stdio route, missing-key preflight, closed protocol input, exact model/count/resolution/aspect/seed/references, success, rejection, secret-context removal, and count mismatch."
     },
     {
       "material": "legacy-python-generate-command",

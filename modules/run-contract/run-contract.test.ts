@@ -13,6 +13,7 @@ import {
   byteMediaInspector,
   compilePlannedRun,
   filePlanningIdentity,
+  verifyPlannedRunIdentity,
 } from "./index.js"
 import { FIXTURE_TOOL, UNSUPPORTED_FIXTURE_IDENTITY, UPGRADED_FIXTURE_IDENTITY, makeFixture } from "../../tests/control-plane-fixture.js"
 
@@ -53,8 +54,25 @@ test("compiles canonical, recursively immutable run evidence", async () => {
   assert.equal(Object.isFrozen(run.request.references), true)
   assert.equal(Object.isFrozen(run.request.references[0]), true)
   assert.equal(run.request.maximumCorrectionRuns, 2)
+  assert.deepEqual(run.request.imageParameters, { aspectRatio: "1:1", resolution: "1K", seed: 42 })
   assert.equal(run.request.artifactRoot, "artifacts/qwen-pipeline")
   assert.equal("assemblyPlan" in run.request, false)
+})
+
+test("locks Qwen capability parameters and rejects later Procedure drift", async () => {
+  const fixture = makeFixture("qwen-image")
+  const planned = await compileFixture(fixture)
+  assert.deepEqual(planned.request.imageParameters, { aspectRatio: "1:1", resolution: "1K", seed: 42 })
+  const changedContract = JSON.parse(fixture.documents.projectContract) as Record<string, unknown>
+  const procedures = changedContract.procedures as Array<Record<string, unknown>>
+  const parameters = procedures.find((procedure) => procedure.id === "qwen-neutral")!.parameters as Record<string, unknown>
+  parameters.seed = 43
+  await assert.rejects(
+    Effect.runPromise(verifyPlannedRunIdentity(planned, JSON.stringify(changedContract), fixture.documents.toolLock).pipe(
+      Effect.provideService(PlanningIdentity, fixture.identity),
+    )),
+    (error: unknown) => error instanceof Error && "code" in error && error.code === "PROCEDURE_NOT_LOCKED",
+  )
 })
 
 test("planning refuses a caller-asserted identity that did not verify installed artifact bytes", async () => {
@@ -210,6 +228,7 @@ test("seals a hash-locked Assembly plan into an immutable Qwen Run Request", asy
   assert.deepEqual(run.request.assemblyPlan, {
     required: true,
     baselineReferenceSlot: "source",
+    paletteMaxGrowth: 4,
     ownedRegion: { x: 0, y: 0, width: 1, height: 1 },
     exactCopy: [
       {

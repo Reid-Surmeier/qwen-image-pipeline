@@ -202,6 +202,7 @@ class MigrationLedgerTests(unittest.TestCase):
                 "model": "qwen/qwen-image-3-pro",
                 "objective": "Runtime bypass inventory probe.",
                 "requested_count": 1,
+                "parameters": {"resolution": "1K", "aspect_ratio": "1:1", "seed": 42},
                 "references": [{
                     "slot": "source",
                     "application_path": "references/source.png",

@@ -61,6 +61,13 @@ const protocolRequest = (prepared: PreparedGeneration): Uint8Array => {
     model: prepared.request.model,
     objective: prepared.request.objective,
     requested_count: prepared.request.requestedCount,
+    parameters: prepared.request.imageParameters === undefined
+      ? undefined
+      : {
+          resolution: prepared.request.imageParameters.resolution,
+          aspect_ratio: prepared.request.imageParameters.aspectRatio,
+          seed: prepared.request.imageParameters.seed,
+        },
     references,
   }), "utf8")
 }

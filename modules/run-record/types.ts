@@ -65,7 +65,7 @@ export type AssemblyReportInput = Readonly<{
 }>
 
 export type FidelityCheckInput = Readonly<{
-  name: "integrity" | "media" | "outside-region-preservation" | "donor-equality-inside-region"
+  name: "integrity" | "media" | "outside-region-preservation" | "donor-equality-inside-region" | "palette-growth"
   passed: boolean
   measured: number
 }>

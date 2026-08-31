@@ -104,6 +104,7 @@ def invoke_qwen_kernel(
         "model",
         "objective",
         "requested_count",
+        "parameters",
         "references",
     }
     if not isinstance(document, Mapping) or not _exact_keys(document, required):
@@ -124,6 +125,22 @@ def invoke_qwen_kernel(
     ):
         raise QwenKernelError("ADAPTER_NOT_STARTED", "Provider, model, count, objective, or protocol is invalid.")
 
+    parameters = document["parameters"]
+    allowed_aspects = {
+        "1:1", "1:2", "1:4", "2:1", "2:3", "3:2", "3:4",
+        "4:1", "4:3", "4:5", "5:4", "9:16", "16:9",
+    }
+    if (
+        not isinstance(parameters, Mapping)
+        or not _exact_keys(parameters, {"resolution", "aspect_ratio", "seed"})
+        or parameters["resolution"] not in {"1K", "2K"}
+        or parameters["aspect_ratio"] not in allowed_aspects
+        or isinstance(parameters["seed"], bool)
+        or not isinstance(parameters["seed"], int)
+        or not 0 <= parameters["seed"] <= 2_147_483_647
+    ):
+        raise QwenKernelError("ADAPTER_NOT_STARTED", "Qwen resolution, aspect ratio, or seed is invalid.")
+
     reference_urls = [
         _decode_reference(reference, index)
         for index, reference in enumerate(document["references"])
@@ -136,20 +153,25 @@ def invoke_qwen_kernel(
         "objective": document["objective"],
         "output": {
             "count": document["requested_count"],
-            "resolution": "2K",
-            "aspect_ratio": "16:9",
+            "resolution": parameters["resolution"],
+            "aspect_ratio": parameters["aspect_ratio"],
+            "seed": parameters["seed"],
         },
     }
     provider_request = build_openrouter_request(brief, reference_urls=reference_urls)
     if provider_request["model"] != document["model"] or provider_request["n"] != document["requested_count"]:
         raise QwenKernelError("ADAPTER_NOT_STARTED", "The inherited builder substituted locked request fields.")
+    provider_failed = False
     try:
         response = client.generate(provider_request)
-    except Exception as error:
+    except Exception:
+        provider_failed = True
+        response = None
+    if provider_failed:
         raise QwenKernelError(
             "PROVIDER_AMBIGUOUS",
             "Provider submission failed after dispatch; reconcile this Run without resubmitting.",
-        ) from None
+        )
     if not isinstance(response, dict) or not isinstance(response.get("data"), list):
         raise QwenKernelError("ADAPTER_RESULT_INVALID", "Provider response is not a supported object.")
     outputs = response["data"]

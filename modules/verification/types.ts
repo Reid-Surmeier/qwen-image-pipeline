@@ -6,6 +6,7 @@ export type VerificationInput = Readonly<{
   candidate: RasterEvidence
   ownedRegion: OwnedRegion
   exactCopy: ReadonlyArray<ExactCopyPixel>
+  paletteMaxGrowth?: number
 }>
 
 export type VerificationResult = Readonly<{
@@ -13,7 +14,7 @@ export type VerificationResult = Readonly<{
   candidateSha256: string
   assemblyReport: AssemblyResult["report"]
   checks: ReadonlyArray<Readonly<{
-    name: "integrity" | "media" | "outside-region-preservation" | "donor-equality-inside-region"
+    name: "integrity" | "media" | "outside-region-preservation" | "donor-equality-inside-region" | "palette-growth"
     passed: true
     measured: number
   }>>

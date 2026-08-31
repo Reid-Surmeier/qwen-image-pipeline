@@ -97,6 +97,30 @@ export const verifyRaster = (input: VerificationInput): Effect.Effect<Verificati
           completed,
         )
       }
+      const paletteMaxGrowth = input.paletteMaxGrowth ?? 4
+      if (!Number.isFinite(paletteMaxGrowth) || paletteMaxGrowth < 1) {
+        throw new VerificationError("MEDIA_CHECK_FAILED", "Palette growth tolerance must be a finite number at least 1.", completed)
+      }
+      const regionColours = (raster: Raster): Set<string> => {
+        const colours = new Set<string>()
+        for (let y = region.y; y < region.y + region.height; y += 1) {
+          for (let x = region.x; x < region.x + region.width; x += 1) {
+            const offset = (y * raster.width + x) * 4
+            colours.add(raster.pixels.slice(offset, offset + 4).join(":"))
+          }
+        }
+        return colours
+      }
+      const baselineColours = regionColours(baseline).size
+      const candidateColours = regionColours(candidate).size
+      const paletteGrowth = candidateColours / baselineColours
+      if (paletteGrowth > paletteMaxGrowth) {
+        throw new VerificationError(
+          "FIDELITY_CHECK_FAILED",
+          `Palette growth failed: ${baselineColours} to ${candidateColours} colours (${paletteGrowth.toFixed(1)}x).`,
+          [...completed, "outside-region-preservation", "donor-equality-inside-region"],
+        )
+      }
       return {
         classification: "verified-candidate" as const,
         candidateSha256: input.candidate.sha256,
@@ -114,6 +138,7 @@ export const verifyRaster = (input: VerificationInput): Effect.Effect<Verificati
           { name: "media" as const, passed: true as const, measured: 0 },
           { name: "outside-region-preservation" as const, passed: true as const, measured: outsideChanged },
           { name: "donor-equality-inside-region" as const, passed: true as const, measured: donorMismatch },
+          { name: "palette-growth" as const, passed: true as const, measured: paletteGrowth },
         ],
       }
     },

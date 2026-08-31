@@ -582,6 +582,7 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
       { measured: 0, name: "media", passed: true },
       { measured: 0, name: "outside-region-preservation", passed: true },
       { measured: 0, name: "donor-equality-inside-region", passed: true },
+      { measured: 1, name: "palette-growth", passed: true },
     ],
     classification: "verified-candidate",
     inputs: {

@@ -8,6 +8,7 @@ import {
   type CanonicalRunRequest,
   type LinkedRunRelationship,
   type PlannedRun,
+  type QwenImageParameters,
   type PlanningIdentityService,
   type RawPlanningDocuments,
   type ToolIdentity,
@@ -70,6 +71,37 @@ const numberField = (record: JsonRecord, field: string): number => {
     throw new RunContractError("DOCUMENT_INVALID", `${field} must be an integer.`)
   }
   return value
+}
+
+const qwenAspectRatios = new Set([
+  "1:1", "1:2", "1:4", "2:1", "2:3", "3:2", "3:4",
+  "4:1", "4:3", "4:5", "5:4", "9:16", "16:9",
+])
+
+const decodeQwenImageParameters = (
+  procedure: JsonRecord,
+  mode: "qwen-image" | "seedance-video",
+): QwenImageParameters | undefined => {
+  if (mode !== "qwen-image") return undefined
+  const parameters = recordField(procedure, "parameters")
+  if (Object.keys(parameters).sort().join(",") !== "aspectRatio,resolution,seed") {
+    throw new RunContractError("PROCEDURE_NOT_LOCKED", "Qwen image parameters must be a closed resolution, aspectRatio, and seed record.")
+  }
+  const resolution = stringField(parameters, "resolution")
+  const aspectRatio = stringField(parameters, "aspectRatio")
+  const seed = numberField(parameters, "seed")
+  if (
+    (resolution !== "1K" && resolution !== "2K") ||
+    !qwenAspectRatios.has(aspectRatio) ||
+    seed < 0 || seed > 2_147_483_647
+  ) {
+    throw new RunContractError("PROCEDURE_NOT_LOCKED", "Qwen resolution, aspect ratio, or seed is unsupported.")
+  }
+  return {
+    resolution,
+    aspectRatio: aspectRatio as QwenImageParameters["aspectRatio"],
+    seed,
+  }
 }
 
 const recordField = (record: JsonRecord, field: string): JsonRecord => {
@@ -323,7 +355,11 @@ const decodeAssemblyPlan = (
     }
     return { ...canonicalPixel, sha256: pixelSha256 }
   })
-  return { required: true, baselineReferenceSlot, ownedRegion, exactCopy }
+  const paletteMaxGrowth = plan.paletteMaxGrowth ?? 4
+  if (typeof paletteMaxGrowth !== "number" || !Number.isFinite(paletteMaxGrowth) || paletteMaxGrowth < 1) {
+    throw assemblyPlanError("Assembly plan paletteMaxGrowth must be a finite number at least 1.")
+  }
+  return { required: true, baselineReferenceSlot, paletteMaxGrowth, ownedRegion, exactCopy }
 }
 
 const videoPlanError = (message: string): RunContractError =>
@@ -450,6 +486,7 @@ export const verifyPlannedRunIdentity = (
         stringField(procedure, "model") !== request.model ||
         request.schemaVersion !== decoded.lock.runSchemaVersion ||
         request.adapterProtocolVersion !== decoded.lock.adapterProtocolVersion ||
+        canonicalize(request.imageParameters ?? null) !== canonicalize(decodeQwenImageParameters(procedure, request.mode) ?? null) ||
         request.requestedCount < 1 || request.requestedCount > maximumCount ||
         formatCents(estimatedCost) !== request.estimatedMaximumCostUsd ||
         estimatedCost > requestBudget || estimatedCost > projectBudget ||
@@ -582,6 +619,7 @@ export const compileDocuments = (
         procedureId,
         mode,
         model: stringField(procedure, "model"),
+        imageParameters: decodeQwenImageParameters(procedure, mode),
         referenceRoots,
         artifactRoot,
         outputRoot,
@@ -639,6 +677,7 @@ export const compileDocuments = (
     mode: decoded.mode,
     provider: "openrouter",
     model: decoded.model,
+    ...(decoded.imageParameters === undefined ? {} : { imageParameters: decoded.imageParameters }),
     adapterProtocolVersion: lock.adapterProtocolVersion,
     requestedCount: decoded.requestedCount,
     estimatedMaximumCostUsd: formatCents(decoded.estimatedCost),

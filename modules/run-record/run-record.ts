@@ -218,6 +218,7 @@ const recordedRequest = (
     "assemblyPlan",
     "budgetCeilingUsd",
     "estimatedMaximumCostUsd",
+    "imageParameters",
     "linkedRun",
     "maximumCorrectionRuns",
     "mode",
@@ -233,6 +234,22 @@ const recordedRequest = (
     "tool",
     "videoPlan",
   ])
+  const imageParameters = request.imageParameters
+  const imageParametersValid = toolIdentity.runSchemaVersion === "1"
+    ? imageParameters === undefined
+    : request.mode === "qwen-image"
+    ? imageParameters !== null && typeof imageParameters === "object" && !Array.isArray(imageParameters) &&
+      Object.keys(imageParameters).sort().join(",") === "aspectRatio,resolution,seed" &&
+      ((imageParameters as Record<string, unknown>).resolution === "1K" ||
+        (imageParameters as Record<string, unknown>).resolution === "2K") &&
+      typeof (imageParameters as Record<string, unknown>).aspectRatio === "string" &&
+      /^(?:1:1|1:2|1:4|2:1|2:3|3:2|3:4|4:1|4:3|4:5|5:4|9:16|16:9)$/.test(
+        String((imageParameters as Record<string, unknown>).aspectRatio),
+      ) &&
+      Number.isSafeInteger((imageParameters as Record<string, unknown>).seed) &&
+      Number((imageParameters as Record<string, unknown>).seed) >= 0 &&
+      Number((imageParameters as Record<string, unknown>).seed) <= 2_147_483_647
+      : imageParameters === undefined
   if (
     Object.keys(request).some((key) => !allowedKeys.has(key)) ||
     Object.keys(toolIdentity).sort().join(",") !==
@@ -254,6 +271,7 @@ const recordedRequest = (
     request.adapterProtocolVersion !== toolIdentity.adapterProtocolVersion ||
     toolIdentity.procedureVersion !== "1" ||
     toolIdentity.adapterProtocolVersion !== "1" ||
+    !imageParametersValid ||
     (
       toolIdentity.runSchemaVersion === "1"
         ? (!allowHistorical || "artifactRoot" in request)
@@ -306,6 +324,7 @@ const correctionMaterial = (request: CanonicalRunRequest): JsonValue => ({
   assemblyPlan: request.assemblyPlan ?? null,
   budgetCeilingUsd: request.budgetCeilingUsd,
   estimatedMaximumCostUsd: request.estimatedMaximumCostUsd,
+  imageParameters: request.imageParameters ?? null,
   mode: request.mode,
   model: request.model,
   objective: request.objective,
@@ -402,6 +421,7 @@ const expectedCheckNames = [
   "media",
   "outside-region-preservation",
   "donor-equality-inside-region",
+  "palette-growth",
 ] as const
 
 const verificationAlgorithm = "rgba-fidelity-v1" as const
@@ -622,11 +642,26 @@ const recomputeChecks = (
       "repair-evidence",
     )
   }
+  const colours = (raster: Raster): Set<string> => {
+    const values = new Set<string>()
+    for (let y = region.y; y < region.y + region.height; y += 1) {
+      for (let x = region.x; x < region.x + region.width; x += 1) {
+        const offset = (y * raster.width + x) * 4
+        values.add(raster.pixels.slice(offset, offset + 4).join(":"))
+      }
+    }
+    return values
+  }
+  const paletteGrowth = colours(candidate).size / colours(baseline).size
+  if (paletteGrowth > (plan.paletteMaxGrowth ?? 4)) {
+    throw new RunRecordError("CHECKS_NOT_PASSED", "The candidate exceeded the immutable palette-growth tolerance.", "repair-evidence")
+  }
   return [
     { name: "integrity", passed: true, measured: 0 },
     { name: "media", passed: true, measured: 0 },
     { name: "outside-region-preservation", passed: true, measured: outsideChanged },
     { name: "donor-equality-inside-region", passed: true, measured: donorMismatch },
+    { name: "palette-growth", passed: true, measured: paletteGrowth },
   ]
 }
 

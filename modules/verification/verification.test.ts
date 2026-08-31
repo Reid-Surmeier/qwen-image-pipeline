@@ -82,7 +82,40 @@ test("proves independent zero-drift and donor-equality truths in mandatory order
     ["media", 0],
     ["outside-region-preservation", 0],
     ["donor-equality-inside-region", 0],
+    ["palette-growth", 1],
   ])
+})
+
+test("rejects flat-band palette growth beyond the immutable tolerance", async () => {
+  const wideRaster = (pixels: ReadonlyArray<number>) => {
+    const body = Buffer.from(JSON.stringify({ height: 1, pixels, width: 6 }), "utf8")
+    return { body, sha256: sha256(body) }
+  }
+  const flatBaseline = wideRaster([
+    0, 0, 0, 255,
+    10, 10, 10, 255, 10, 10, 10, 255, 10, 10, 10, 255, 10, 10, 10, 255,
+    20, 20, 20, 255,
+  ])
+  const continuousDonor = wideRaster([
+    90, 90, 90, 255,
+    1, 1, 1, 255, 2, 2, 2, 255, 3, 3, 3, 255, 4, 4, 4, 255,
+    80, 80, 80, 255,
+  ])
+  const candidate = wideRaster([
+    0, 0, 0, 255,
+    1, 1, 1, 255, 2, 2, 2, 255, 3, 3, 3, 255, 4, 4, 4, 255,
+    20, 20, 20, 255,
+  ])
+  const error = await Effect.runPromise(Effect.flip(verify({
+    baseline: flatBaseline,
+    donor: continuousDonor,
+    candidate,
+    ownedRegion: { x: 1, y: 0, width: 4, height: 1 },
+    exactCopy: [],
+    paletteMaxGrowth: 2,
+  })))
+  assert.equal(error.code, "FIDELITY_CHECK_FAILED")
+  assert.match(error.message, /1 to 4 colours/)
 })
 
 test("binds a verified candidate to the canonical Assembly report", async () => {

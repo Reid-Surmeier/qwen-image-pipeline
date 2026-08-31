@@ -3345,6 +3345,7 @@ test("persists separately hashed assembled output and canonical Assembly report"
     { name: "media", passed: true, measured: 0 },
     { name: "outside-region-preservation", passed: true, measured: 0 },
     { name: "donor-equality-inside-region", passed: true, measured: 0 },
+    { name: "palette-growth", passed: true, measured: 1 },
   ] as const
   const arbitraryBaseline = raster([
     0, 0, 0, 0,
@@ -3558,6 +3559,7 @@ test("a fresh filesystem adapter replays the completed Assembly Run and reads ve
       { name: "media", passed: true, measured: 0 },
       { name: "outside-region-preservation", passed: true, measured: 0 },
       { name: "donor-equality-inside-region", passed: true, measured: 0 },
+      { name: "palette-growth", passed: true, measured: 1 },
     ],
   })))
 

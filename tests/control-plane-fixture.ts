@@ -305,6 +305,11 @@ export const makeFixture = (
         mode: "qwen-image",
         provider: "openrouter",
         model: "qwen/qwen-image-edit",
+        parameters: {
+          resolution: "1K",
+          aspectRatio: "1:1",
+          seed: 42,
+        },
         maximumCount: 4,
         unitCostUsd: "0.04",
         referenceRequirements: [

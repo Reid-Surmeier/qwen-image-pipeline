@@ -32,6 +32,7 @@ export type LinkedRunRelationship = Readonly<{
 export type AssemblyPlan = Readonly<{
   required: true
   baselineReferenceSlot: string
+  paletteMaxGrowth?: number
   ownedRegion: Readonly<{
     x: number
     y: number
@@ -44,6 +45,12 @@ export type AssemblyPlan = Readonly<{
     rgba: readonly [number, number, number, number]
     sha256: string
   }>>
+}>
+
+export type QwenImageParameters = Readonly<{
+  resolution: "1K" | "2K"
+  aspectRatio: "1:1" | "1:2" | "1:4" | "2:1" | "2:3" | "3:2" | "3:4" | "4:1" | "4:3" | "4:5" | "5:4" | "9:16" | "16:9"
+  seed: number
 }>
 
 export type VideoPlan = Readonly<{
@@ -68,6 +75,7 @@ export type CanonicalRunRequest = Readonly<{
   mode: "qwen-image" | "seedance-video"
   provider: "openrouter"
   model: string
+  imageParameters?: QwenImageParameters
   adapterProtocolVersion: string
   requestedCount: number
   estimatedMaximumCostUsd: string

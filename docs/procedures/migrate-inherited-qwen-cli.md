@@ -9,18 +9,19 @@ Move the saved intent into the application repository:
 
 1. Put the objective in `objectives/<name>.json` and preserve the legacy text as
    its `summary`.
-2. Declare the exact OpenRouter model, count ceiling, cost, and reference roles
-   in `.qwen-pipeline/project-contract.json`.
+2. Declare the exact OpenRouter model, count ceiling, cost, resolution, aspect
+   ratio, seed, and reference roles in `.qwen-pipeline/project-contract.json`.
 3. Pin the installed tool, Procedure, Run schema, and adapter protocol in
    `.qwen-pipeline/tool-lock.json`.
 4. Store each authoritative reference under an allowed application-owned
    reference root with its SHA-256 and exact payload destination.
-5. Call `Conductor.plan({ objectivePath })`, then provide
-   `inheritedQwenAdapter` as Generation's adapter when calling
-   `Conductor.advance`.
+5. Resolve `inheritedQwenPythonAdapter()` before reservation, then call
+   `Conductor.plan({ objectivePath })` and provide that repository-owned service
+   as Generation's adapter when calling `Conductor.advance`.
 
 The version-1 adapter request is closed and contains the exact provider, model,
-count, objective, and reference role/path/hash/media/bytes/destination evidence.
+count, resolution, aspect ratio, seed, objective, and reference
+role/path/hash/media/bytes/destination evidence.
 The retained Python kernel accepts only OpenRouter, calls its injected client
 once, normalizes PNG output into canonical RGBA evidence, and returns no Run
 writer, Assembly, Verification, retry, or Approval authority. Provider

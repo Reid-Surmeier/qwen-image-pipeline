@@ -1154,6 +1154,7 @@ export const advanceRun = (
       candidate: { body: candidateBytes, sha256: current.assemblyOutputSha256! },
       ownedRegion: request.assemblyPlan.ownedRegion,
       exactCopy: request.assemblyPlan.exactCopy,
+      paletteMaxGrowth: request.assemblyPlan.paletteMaxGrowth ?? 4,
     }).pipe(Effect.match({
       onFailure: (error) => ({ _tag: "Failure" as const, error }),
       onSuccess: (value) => ({ _tag: "Success" as const, value }),

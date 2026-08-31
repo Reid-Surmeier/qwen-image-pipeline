@@ -52,6 +52,7 @@ test("the inherited Qwen adapter sends one closed versioned request with exact r
         "model",
         "objective",
         "operation",
+        "parameters",
         "provider",
         "references",
         "requested_count",
@@ -62,6 +63,7 @@ test("the inherited Qwen adapter sends one closed versioned request with exact r
       assert.equal(request.model, prepared.request.model)
       assert.equal(request.requested_count, 1)
       assert.equal(request.objective, prepared.request.objective)
+      assert.deepEqual(request.parameters, { aspect_ratio: "1:1", resolution: "1K", seed: 42 })
       assert.deepEqual((request.references as Array<Record<string, unknown>>).map((reference) => ({
         application_path: reference.application_path,
         media_type: reference.media_type,

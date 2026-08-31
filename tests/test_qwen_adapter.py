@@ -32,6 +32,7 @@ def _request(count=1):
         "model": "qwen/qwen-image-3-pro",
         "objective": "Preserve the source and replace only the named region.",
         "requested_count": count,
+        "parameters": {"resolution": "1K", "aspect_ratio": "1:1", "seed": 42},
         "references": [
             {
                 "slot": "source",
@@ -100,6 +101,9 @@ class QwenAdapterTests(unittest.TestCase):
         provider_request = client.requests[0]
         self.assertEqual(provider_request["model"], "qwen/qwen-image-3-pro")
         self.assertEqual(provider_request["n"], 1)
+        self.assertEqual(provider_request["resolution"], "1K")
+        self.assertEqual(provider_request["aspect_ratio"], "1:1")
+        self.assertEqual(provider_request["seed"], 42)
         self.assertIn(_request()["objective"], provider_request["prompt"])
         self.assertEqual(len(provider_request["input_references"]), 1)
         self.assertTrue(
@@ -133,6 +137,21 @@ class QwenAdapterTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, "PROVIDER_AMBIGUOUS")
         self.assertNotIn("super-secret-value", str(raised.exception))
         self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
+
+    def test_rejects_capability_drift_before_dispatch(self):
+        for field, value in (
+            ("resolution", "4K"),
+            ("aspect_ratio", "source"),
+            ("seed", -1),
+        ):
+            with self.subTest(field=field):
+                request = _request()
+                request["parameters"][field] = value
+                client = _Client({"id": "must-not-run", "data": []})
+                with self.assertRaisesRegex(QwenKernelError, "ADAPTER_NOT_STARTED"):
+                    invoke_qwen_kernel(request, client=client)
+                self.assertEqual(client.requests, [])
 
 
 if __name__ == "__main__":
