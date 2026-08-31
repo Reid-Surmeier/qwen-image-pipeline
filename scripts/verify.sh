@@ -11,7 +11,23 @@ if [ "${QWEN_BASELINE_CLEAN_BOOTSTRAP:-}" != "1" ]; then
 fi
 export PATH=/usr/bin:/bin
 
-PYTHON_BIN=/usr/bin/python3.12
+resolve_bootstrap_python() {
+  local candidate
+  for candidate in \
+    /usr/bin/python3.12 \
+    /usr/local/bin/python3.12 \
+    /home/agent/.local/bin/python3.12
+  do
+    if [ -x "$candidate" ]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  echo "missing deterministic baseline tool: Python 3.12" >&2
+  return 1
+}
+
+PYTHON_BIN="$(resolve_bootstrap_python)" || exit 1
 
 cd "${0%/*}/.."
 

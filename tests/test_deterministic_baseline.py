@@ -9,8 +9,10 @@ from pathlib import Path
 
 from scripts.run_deterministic_command import (
     TRUSTED_NODE_MAJOR,
+    TRUSTED_PYTHON_CANDIDATES,
     _toolcache_node_candidates,
     _trusted_node,
+    _trusted_python,
     build_environment,
     validate_command,
 )
@@ -78,7 +80,11 @@ class DeterministicBaselineTests(unittest.TestCase):
         self.assertIn("no_external_effects.cjs", environment["NODE_OPTIONS"])
         self.assertIn("no_external_effects-", environment["LD_PRELOAD"])
         self.assertTrue(environment["PATH"].endswith(":/usr/bin:/bin"))
-        self.assertEqual(environment["QWEN_BASELINE_PYTHON"], "/usr/bin/python3.12")
+        self.assertEqual(environment["QWEN_BASELINE_PYTHON"], str(_trusted_python()))
+        self.assertIn(
+            environment["QWEN_BASELINE_PYTHON"],
+            {str(path.resolve()) for path in TRUSTED_PYTHON_CANDIDATES if path.exists()},
+        )
         self.assertEqual(Path(environment["QWEN_BASELINE_NODE"]).name, "node")
         self.assertEqual(environment["QWEN_BASELINE_GIT"], "/usr/bin/git")
 

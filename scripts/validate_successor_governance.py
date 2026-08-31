@@ -121,8 +121,12 @@ def validate_repository(root: Path) -> list[str]:
             problems.append("canonical baseline omits the deterministic command runner")
         if "VERIFY_PYTHON" in verify_text:
             problems.append("canonical baseline permits an environment-selected executable")
-        if "PYTHON_BIN=/usr/bin/python3.12" not in verify_text:
-            problems.append("canonical baseline does not pin its bootstrap interpreter")
+        if "resolve_bootstrap_python()" not in verify_text:
+            problems.append("canonical baseline does not resolve its bootstrap interpreter from trusted paths")
+        if "/usr/bin/python3.12" not in verify_text:
+            problems.append("canonical baseline is missing the system Python bootstrap path")
+        if "/usr/local/bin/python3.12" not in verify_text:
+            problems.append("canonical baseline is missing the local Python bootstrap path")
         if not verify_text.startswith("#!/bin/bash\n"):
             problems.append("canonical baseline does not pin its shell interpreter")
         if "export PATH=/usr/bin:/bin" not in verify_text:

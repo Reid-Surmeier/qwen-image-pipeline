@@ -46,7 +46,11 @@ NODE_COMMANDS = {
 }
 GIT_COMMANDS = {("diff", "--check")}
 
-TRUSTED_PYTHON = Path("/usr/bin/python3.12")
+TRUSTED_PYTHON_CANDIDATES = (
+    Path("/usr/bin/python3.12"),
+    Path("/usr/local/bin/python3.12"),
+    Path("/home/agent/.local/bin/python3.12"),
+)
 TRUSTED_GIT = Path("/usr/bin/git")
 TRUSTED_COMPILER = Path("/usr/bin/cc")
 TRUSTED_NODE_MAJOR = 22
@@ -105,7 +109,7 @@ def _node_major(candidate: Path) -> int | None:
 
 
 def _trusted_node() -> Path:
-    candidates = [Path("/usr/bin/node")]
+    candidates = [Path("/usr/bin/node"), Path("/usr/local/bin/node")]
     candidates.extend(_toolcache_node_candidates())
     for candidate in candidates:
         if (
@@ -119,9 +123,16 @@ def _trusted_node() -> Path:
     )
 
 
+def _trusted_python() -> Path:
+    for candidate in TRUSTED_PYTHON_CANDIDATES:
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return candidate.resolve()
+    raise RuntimeError("missing deterministic baseline tool: Python 3.12")
+
+
 def _resolve_command(command: Sequence[str]) -> tuple[str, ...]:
     executables = {
-        "@python": TRUSTED_PYTHON.resolve(),
+        "@python": _trusted_python(),
         "@node": _trusted_node(),
         "@git": TRUSTED_GIT.resolve(),
     }
@@ -173,7 +184,8 @@ def build_environment(source: Mapping[str, str], repository: Path) -> dict[str, 
     }
     guard_directory = repository / "tests" / "baseline_guard"
     node = _trusted_node()
-    for executable in (TRUSTED_PYTHON, TRUSTED_GIT):
+    python = _trusted_python()
+    for executable in (python, TRUSTED_GIT):
         if not executable.is_file():
             raise RuntimeError(f"missing deterministic baseline tool: {executable}")
     environment.update(
@@ -186,10 +198,10 @@ def build_environment(source: Mapping[str, str], repository: Path) -> dict[str, 
             "PYTHONUTF8": "1",
             "QWEN_BASELINE_OFFLINE": "1",
             "QWEN_BASELINE_REPOSITORY": str(repository.resolve()),
-            "QWEN_BASELINE_PYTHON": str(TRUSTED_PYTHON.resolve()),
+            "QWEN_BASELINE_PYTHON": str(python),
             "QWEN_BASELINE_NODE": str(node),
             "QWEN_BASELINE_GIT": str(TRUSTED_GIT.resolve()),
-            "PATH": f"{node.parent}:/usr/bin:/bin",
+            "PATH": f"{python.parent}:{node.parent}:/usr/bin:/bin",
             "QWEN_BASELINE_ALLOWED_SCRIPTS": os.pathsep.join(
                 str((repository / relative).resolve())
                 for relative in SAFE_CHILD_SCRIPTS
