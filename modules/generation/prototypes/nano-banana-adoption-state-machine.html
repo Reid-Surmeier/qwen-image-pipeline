@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Nano Banana adoption state machine — throwaway prototype</title>
+  <style>
+    :root { color-scheme: light; --ink:#15201c; --muted:#5d6b65; --paper:#f7f5ef; --card:#fffdfa; --line:#d8ddd8; --accent:#176a50; --bad:#a13d35; --warn:#98651d; }
+    * { box-sizing:border-box; }
+    body { margin:0; font:15px/1.5 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:var(--ink); background:var(--paper); }
+    main { width:min(1180px,calc(100% - 32px)); margin:32px auto 64px; }
+    h1,h2,h3 { line-height:1.15; }
+    h1 { margin-bottom:8px; }
+    .lede { max-width:850px; color:var(--muted); }
+    .notice { border-left:4px solid var(--warn); background:#fff7df; padding:12px 16px; margin:20px 0; }
+    .grid { display:grid; grid-template-columns:minmax(0,1.15fr) minmax(320px,.85fr); gap:20px; }
+    .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:18px; box-shadow:0 7px 22px rgb(37 55 47 / 6%); }
+    .state-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px 18px; }
+    .field { border-bottom:1px solid #eceeea; padding:7px 0 10px; }
+    .field dt { color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.06em; }
+    .field dd { margin:3px 0 0; overflow-wrap:anywhere; }
+    .status { display:inline-block; border-radius:999px; background:#e5f2ec; color:var(--accent); padding:3px 9px; font-weight:700; }
+    .status.bad { background:#f9e7e5; color:var(--bad); }
+    .actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+    button { border:1px solid #bfc9c3; border-radius:9px; background:white; color:var(--ink); padding:9px 11px; text-align:left; cursor:pointer; }
+    button:hover { border-color:var(--accent); }
+    button.primary { background:var(--accent); color:white; border-color:var(--accent); }
+    .event { min-height:48px; padding:10px 12px; border-radius:8px; background:#eef1ee; margin-bottom:12px; }
+    .event.error { background:#fae9e7; color:#742a25; }
+    .tabs { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
+    .tabs button[aria-selected="true"] { background:var(--ink); color:white; border-color:var(--ink); }
+    .steps { display:flex; flex-wrap:wrap; gap:8px; }
+    .steps button.done { opacity:.45; text-decoration:line-through; }
+    .steps button.next { outline:3px solid #bfdbd0; }
+    .scenario-copy { color:var(--muted); min-height:48px; }
+    pre { background:#14211c; color:#dceae3; border-radius:10px; padding:14px; max-height:310px; overflow:auto; font-size:12px; }
+    code { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+    @media (max-width:850px) { .grid { grid-template-columns:1fr; } .state-grid { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Nano Banana adoption state machine</h1>
+  <p class="lede"><strong>Question:</strong> Can one model-neutral state machine drive both text generation and reference editing while locking exact identity, refusing drift and fallback before spending, reserving only one attempt, preserving ambiguous billing, and making zero real network calls?</p>
+  <div class="notice"><strong>Throwaway prototype.</strong> Every provider result is a hand-authored fake. The network-call counter must remain zero in every scenario.</div>
+
+  <section class="grid">
+    <div class="card">
+      <h2>Current Run</h2>
+      <div id="last-event" class="event">Choose a mode or start a walkthrough.</div>
+      <dl id="state" class="state-grid"></dl>
+      <h3>Complete state</h3>
+      <pre id="json"></pre>
+    </div>
+    <div class="card">
+      <h2>Free play</h2>
+      <div id="actions" class="actions"></div>
+    </div>
+  </section>
+
+  <section class="card" style="margin-top:20px">
+    <h2>Guided walkthroughs</h2>
+    <div id="tabs" class="tabs"></div>
+    <p id="scenario-copy" class="scenario-copy"></p>
+    <div id="steps" class="steps"></div>
+  </section>
+</main>
+
+<script>
+const PROFILE = Object.freeze({
+  id: "openrouter-google-gemini-3.1-flash-image-v1",
+  label: "Nano Banana 2 — Gemini 3.1 Flash Image",
+  requestModel: "google/gemini-3.1-flash-image",
+  permanentModel: "google/gemini-3.1-flash-image-20260528",
+  providerEndpoint: "google-vertex/global",
+  allowFallbacks: false,
+  profileSha256: "sha256:nano-profile-v1-demo",
+  supports: { count: [1], references: [0,14], resolution: ["512","1K","2K","4K"], seed: false }
+});
+
+const initialState = () => ({
+  phase: "unplanned",
+  mode: null,
+  profile: null,
+  profileStatus: "not-refreshed",
+  requestedCount: 1,
+  requestedControls: [],
+  references: [],
+  assemblyRequired: false,
+  requestSha256: null,
+  attemptReserved: false,
+  submissionPermitAvailable: false,
+  submissionCount: 0,
+  externalNetworkCalls: 0,
+  spendState: "not-submitted",
+  retryState: "not-applicable",
+  completedCount: 0,
+  receipt: null,
+  machineOutcome: null,
+  finding: null,
+  lastEvent: "Reset to an empty, unpaid Run."
+});
+
+function reject(state, code, message, spend = state.spendState, retry = state.retryState) {
+  return { ...state, phase:"blocked", machineOutcome:"blocked", finding:{ code, owner:"Generation", message }, spendState:spend, retryState:retry, lastEvent:message };
+}
+
+function reduce(state, action) {
+  if (action.type === "reset") return initialState();
+  if (action.type === "choose-text") return { ...initialState(), mode:"text-to-image", assemblyRequired:false, lastEvent:"Selected text generation: no authoritative pixels, so Assembly may be omitted." };
+  if (action.type === "choose-edit") return { ...initialState(), mode:"reference-edit", references:[{ slot:"source", sha256:"sha256:reference-demo", payloadDestination:"/input_references/0/image_url/url" }], assemblyRequired:true, lastEvent:"Selected reference editing: exact reference placement and deterministic Assembly are required." };
+  if (!state.mode) return reject(state,"MODE_REQUIRED","Choose text generation or reference editing first.");
+
+  if (action.type === "refresh-profile") return { ...state, profile:PROFILE, profileStatus:"locked", phase:"profile-locked", finding:null, machineOutcome:null, lastEvent:"Locked the exact GA model, permanent identity, Vertex endpoint, no-fallback policy, and capability digest." };
+  if (action.type === "refresh-drift") return reject({ ...state, profile:PROFILE, profileStatus:"drifted" },"MODEL_PROFILE_DRIFT","Official capability or privacy evidence differs from the reviewed Model Profile. Refused before reservation.");
+  if (action.type === "request-seed") return { ...state, requestedControls:[...new Set([...state.requestedControls,"seed"])], lastEvent:"Added an unsupported seed request; planning must refuse it." };
+  if (action.type === "request-fallback") return { ...state, profile:state.profile ? { ...state.profile, allowFallbacks:true } : { ...PROFILE, allowFallbacks:true }, lastEvent:"Requested provider fallback; planning must refuse it." };
+
+  if (action.type === "plan") {
+    if (state.profileStatus !== "locked" || !state.profile) return reject(state,"MODEL_PROFILE_UNAVAILABLE","A current locked Model Profile is required before planning.");
+    if (state.profile.allowFallbacks) return reject(state,"PROVIDER_FALLBACK_FORBIDDEN","Provider fallback is forbidden; the Run was refused before reservation.");
+    if (state.requestedControls.includes("seed")) return reject(state,"UNSUPPORTED_IMAGE_CONTROL","Nano Banana does not advertise seed on the dedicated Image API. Refused before reservation.");
+    if (state.mode === "reference-edit" && (state.references.length !== 1 || state.references[0].payloadDestination !== "/input_references/0/image_url/url")) return reject(state,"REFERENCE_PAYLOAD_MISMATCH","The locked source did not reach the exact first reference location.");
+    return { ...state, phase:"planned", requestSha256:`sha256:${state.mode}-request-demo`, lastEvent:"Created one immutable Planned Run with exact profile and reference evidence." };
+  }
+
+  if (action.type === "reserve") {
+    if (state.phase !== "planned") return reject(state,"RESERVATION_OUT_OF_ORDER","Only a Planned Run can reserve an attempt.");
+    return { ...state, phase:"reserved", attemptReserved:true, submissionPermitAvailable:true, spendState:"possibly-spent", retryState:"reconcile-only", lastEvent:"Durably reserved one attempt and marked submission-may-have-started before adapter invocation." };
+  }
+
+  if (action.type === "fake-success") {
+    if (state.phase !== "reserved" || !state.submissionPermitAvailable) return reject(state,"SUBMISSION_PERMIT_UNAVAILABLE","Submission refused: no fresh one-use permit exists.",state.spendState,state.retryState);
+    return { ...state, phase:"provider-evidence", submissionPermitAvailable:false, submissionCount:state.submissionCount+1, completedCount:1, spendState:"confirmed-spent", retryState:"not-applicable", receipt:{ kind:"openrouter-image", model:PROFILE.requestModel, permanentModel:PROFILE.permanentModel, providerEndpoint:PROFILE.providerEndpoint, completedCount:1, mediaType:"image/png", width:1024, height:1024, outputSha256:"sha256:fake-output", actualCostUsd:"0.067" }, lastEvent:"Accepted one fake normalized response. No network call occurred." };
+  }
+
+  if (action.type === "fake-ambiguous") {
+    if (state.phase !== "reserved" || !state.submissionPermitAvailable) return reject(state,"SUBMISSION_PERMIT_UNAVAILABLE","Ambiguous-result simulation requires one fresh reserved attempt.",state.spendState,state.retryState);
+    return reject({ ...state, submissionPermitAvailable:false, submissionCount:state.submissionCount+1 },"SUBMISSION_UNRECONCILED","The fake transport lost the response after submission may have started. This Run is possibly spent and can never submit again.","possibly-spent","reconcile-only");
+  }
+
+  if (action.type === "persist") {
+    if (state.phase !== "provider-evidence" || !state.receipt) return reject(state,"PROVIDER_EVIDENCE_REQUIRED","A complete normalized receipt is required before output persistence.",state.spendState,state.retryState);
+    return { ...state, phase:"output-persisted", lastEvent:"Persisted the one fake output and its receipt by immutable identity." };
+  }
+
+  if (action.type === "verify") {
+    if (state.phase !== "output-persisted") return reject(state,"OUTPUT_EVIDENCE_REQUIRED","Verification requires the complete persisted output set.",state.spendState,state.retryState);
+    return { ...state, phase:"verified", machineOutcome:"verified_candidate", lastEvent:state.assemblyRequired ? "Verified reference placement, deterministic Assembly, fidelity, receipt, count, and cost evidence." : "Verified identity, receipt, count, media, task evidence, and cost; no pixel authority required Assembly." };
+  }
+
+  if (action.type === "submit-again") return reject(state,"DUPLICATE_SUBMISSION_REFUSED","The Run cannot acquire another Submission Permit. Reconcile the existing identity; never retry blindly.",state.spendState,state.retryState);
+  return { ...state, lastEvent:`Unknown action: ${action.type}` };
+}
+
+const ACTIONS = [
+  ["choose-text","Choose text generation"],["choose-edit","Choose reference edit"],
+  ["refresh-profile","Refresh and lock profile"],["refresh-drift","Simulate profile drift"],
+  ["request-seed","Request unsupported seed"],["request-fallback","Request provider fallback"],
+  ["plan","Plan immutable Run"],["reserve","Reserve one attempt"],
+  ["fake-success","Return fake success"],["fake-ambiguous","Lose fake response"],
+  ["persist","Persist fake output"],["verify","Run declared checks"],
+  ["submit-again","Try duplicate submission"],["reset","Reset"]
+];
+
+const SCENARIOS = [
+  { name:"Text happy path", copy:"No authoritative pixels exist. Watch the exact profile lock, one attempt, generic receipt, and zero network calls.", steps:["choose-text","refresh-profile","plan","reserve","fake-success","persist","verify"] },
+  { name:"Reference edit", copy:"The source hash must occupy the exact first reference destination, and the candidate requires deterministic Assembly.", steps:["choose-edit","refresh-profile","plan","reserve","fake-success","persist","verify"] },
+  { name:"Capability drift", copy:"A changed official profile must stop planning before reservation or possible spend.", steps:["choose-text","refresh-drift","plan"] },
+  { name:"Unsupported control", copy:"Nano does not advertise seed. The control is rejected instead of silently omitted.", steps:["choose-text","refresh-profile","request-seed","plan"] },
+  { name:"Fallback refused", copy:"An easy switch is explicit selection before planning, never upstream fallback.", steps:["choose-text","refresh-profile","request-fallback","plan"] },
+  { name:"Ambiguous billing", copy:"Once submission may have started, a lost response freezes the Run as possibly spent and duplicate submission remains illegal.", steps:["choose-edit","refresh-profile","plan","reserve","fake-ambiguous","submit-again"] }
+];
+
+let state = initialState();
+let scenarioIndex = 0;
+let scenarioStep = 0;
+
+function dispatch(type) {
+  state = reduce(state,{type});
+  if (SCENARIOS[scenarioIndex]?.steps[scenarioStep] === type) scenarioStep += 1;
+  render();
+}
+
+function field(label,value) {
+  const shown = value === null || value === undefined ? "—" : typeof value === "object" ? JSON.stringify(value) : String(value);
+  return `<div class="field"><dt>${label}</dt><dd>${shown}</dd></div>`;
+}
+
+function render() {
+  const bad = state.machineOutcome === "blocked" || state.machineOutcome === "failed";
+  document.querySelector("#last-event").className = `event${bad ? " error" : ""}`;
+  document.querySelector("#last-event").textContent = state.lastEvent;
+  document.querySelector("#state").innerHTML = [
+    field("Phase",`<span class=status>${state.phase}</span>`),
+    field("Mode",state.mode), field("Model Profile",state.profile?.id),
+    field("Provider endpoint",state.profile?.providerEndpoint),
+    field("Profile status",state.profileStatus), field("Request identity",state.requestSha256),
+    field("References",state.references.length), field("Assembly required",state.assemblyRequired),
+    field("Attempt reserved",state.attemptReserved), field("Submission permit",state.submissionPermitAvailable ? "fresh" : "none"),
+    field("Submission count",state.submissionCount), field("Real network calls",state.externalNetworkCalls),
+    field("Spend state",state.spendState), field("Retry state",state.retryState),
+    field("Completed outputs",state.completedCount), field("Machine outcome",state.machineOutcome),
+    field("Finding",state.finding?.code), field("Actual cost",state.receipt?.actualCostUsd)
+  ].join("").replaceAll("&lt;","<").replaceAll("&gt;",">");
+  document.querySelector("#json").textContent = JSON.stringify(state,null,2);
+  document.querySelector("#actions").innerHTML = ACTIONS.map(([id,label])=>`<button class="${id === "reset" ? "" : "primary"}" data-action="${id}">${label}</button>`).join("");
+  document.querySelectorAll("[data-action]").forEach(button=>button.onclick=()=>dispatch(button.dataset.action));
+  document.querySelector("#tabs").innerHTML = SCENARIOS.map((scenario,index)=>`<button data-tab="${index}" aria-selected="${index===scenarioIndex}">${scenario.name}</button>`).join("");
+  document.querySelectorAll("[data-tab]").forEach(button=>button.onclick=()=>{ scenarioIndex=Number(button.dataset.tab); scenarioStep=0; state=initialState(); render(); });
+  const scenario = SCENARIOS[scenarioIndex];
+  document.querySelector("#scenario-copy").textContent = scenario.copy;
+  document.querySelector("#steps").innerHTML = scenario.steps.map((id,index)=>{ const label=ACTIONS.find(([key])=>key===id)[1]; const klass=index<scenarioStep?"done":index===scenarioStep?"next":""; return `<button class="${klass}" data-step="${id}" ${index!==scenarioStep?"disabled":""}>${index+1}. ${label}</button>`; }).join("");
+  document.querySelector("[data-step]:not([disabled])")?.addEventListener("click",event=>dispatch(event.currentTarget.dataset.step));
+}
+
+render();
+</script>
+</body>
+</html>
