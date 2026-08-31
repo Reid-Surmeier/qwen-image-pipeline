@@ -1,6 +1,6 @@
 import { constants as fsConstants } from "node:fs"
-import { lstat, open, realpath } from "node:fs/promises"
-import { isAbsolute, relative, resolve, sep } from "node:path"
+import { open, realpath } from "node:fs/promises"
+import { isAbsolute, relative, sep } from "node:path"
 
 import { Effect } from "effect"
 
@@ -39,12 +39,21 @@ export const fileApplicationFiles = (
     if (!isAbsolute(applicationRoot)) {
       throw new ApplicationReadError("APPLICATION_PATH_UNSAFE", applicationRoot)
     }
-    const rootMetadata = await lstat(applicationRoot)
-    if (rootMetadata.isSymbolicLink() || !rootMetadata.isDirectory()) {
-      throw new ApplicationReadError("APPLICATION_PATH_UNSAFE", applicationRoot)
+    const initialRootHandle = await open(
+      applicationRoot,
+      fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW,
+    )
+    let verifiedRoot: string
+    let verifiedRootMetadata: Awaited<ReturnType<typeof initialRootHandle.stat>>
+    try {
+      verifiedRootMetadata = await initialRootHandle.stat()
+      if (!verifiedRootMetadata.isDirectory()) {
+        throw new ApplicationReadError("APPLICATION_PATH_UNSAFE", applicationRoot)
+      }
+      verifiedRoot = await realpath(`/proc/self/fd/${initialRootHandle.fd}`)
+    } finally {
+      await initialRootHandle.close()
     }
-    const verifiedRoot = await realpath(resolve(applicationRoot))
-    const verifiedRootMetadata = await lstat(verifiedRoot)
     return {
       read: (applicationPath) => Effect.tryPromise({
         try: async () => {

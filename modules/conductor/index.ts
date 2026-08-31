@@ -24,7 +24,7 @@ export const advance: (
 ) => Effect.Effect<
   AdvanceDecision,
   ConductorError,
-  ApplicationFilesService | GenerationAdapterService | RunRecordStoreService | RunRecordClockService
+  ApplicationFilesService | PlanningIdentityService | GenerationAdapterService | RunRecordStoreService | RunRecordClockService
 > = advanceRun
 
 export { ConductorError } from "./errors.js"

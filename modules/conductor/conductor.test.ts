@@ -47,6 +47,7 @@ const execute = async (
   const result = await Effect.runPromise(
     plan({ objectivePath: fixture.objectivePath }).pipe(
       Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(PlanningIdentity, fixture.identity),
       Effect.provideService(MediaInspector, byteMediaInspector),
       Effect.provideService(PlanningIdentity, fixture.identity),
     ),
@@ -176,6 +177,7 @@ test("post-plan reference drift returns a Reference Planning outcome before any 
   const planned = await Effect.runPromise(
     plan({ objectivePath: fixture.objectivePath }).pipe(
       Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(PlanningIdentity, fixture.identity),
       Effect.provideService(MediaInspector, byteMediaInspector),
       Effect.provideService(PlanningIdentity, fixture.identity),
     ),
@@ -199,6 +201,7 @@ test("post-plan reference drift returns a Reference Planning outcome before any 
   const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
   const decision = await Effect.runPromise(advance({ run: planned.run }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
     Effect.provideService(GenerationAdapter, adapter),
     Effect.provide(memory.layer),
     Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-30T14:00:00.000Z") }),
@@ -210,6 +213,52 @@ test("post-plan reference drift returns a Reference Planning outcome before any 
   assert.equal(decision.finding.code, "REFERENCE_EVIDENCE_UNAVAILABLE")
   assert.match(decision.normalView.spendRisk, /no provider request.*no attempt.*\$0/i)
   assert.equal("approval" in decision, false)
+  assert.equal(adapterCalls, 0)
+})
+
+test("post-plan Tool Lock drift refuses before any adapter call or reservation", async () => {
+  let applicationFiles: Map<string, Uint8Array> | undefined
+  const fixture = makeFixture("qwen-image", {
+    files: (files) => {
+      applicationFiles = files
+    },
+  })
+  const planned = await Effect.runPromise(
+    plan({ objectivePath: fixture.objectivePath }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+      Effect.provideService(MediaInspector, byteMediaInspector),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+    ),
+  )
+  assert.equal(planned._tag, "Planned")
+  if (planned._tag !== "Planned") return
+
+  const changedLock = JSON.parse(Buffer.from(applicationFiles!.get(TOOL_LOCK_PATH)!).toString("utf8")) as Record<string, unknown>
+  changedLock.commit = "3".repeat(40)
+  applicationFiles!.set(TOOL_LOCK_PATH, Buffer.from(JSON.stringify(changedLock)))
+
+  let adapterCalls = 0
+  const adapter: GenerationAdapterService = {
+    invoke: () => Effect.sync(() => {
+      adapterCalls += 1
+      throw new Error("adapter tripwire")
+    }),
+    recover: () => Effect.die("Tool Lock drift must not recover"),
+  }
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const decision = await Effect.runPromise(advance({ run: planned.run }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+    Effect.provideService(GenerationAdapter, adapter),
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T19:30:00.000Z") }),
+  ))
+  assert.equal(decision._tag, "AdvanceRefused")
+  if (decision._tag !== "AdvanceRefused") return
+  assert.equal(decision.finding.code, "TOOL_LOCK_MISMATCH")
+  assert.equal(decision.finding.correctionOwner, "application decision owner")
+  assert.match(decision.normalView.spendRisk, /no provider request.*no attempt.*\$0/i)
   assert.equal(adapterCalls, 0)
 })
 
@@ -276,6 +325,7 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
   const plannedDecision = await Effect.runPromise(
     plan({ objectivePath: fixture.objectivePath }).pipe(
       Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(PlanningIdentity, fixture.identity),
       Effect.provideService(MediaInspector, normalizedRgbaInspector),
       Effect.provideService(PlanningIdentity, fixture.identity),
     ),
@@ -329,6 +379,7 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
   const executeAdvance = (selectedDonorSha256?: string) => Effect.runPromise(
     advance({ run: plannedRun, ...(selectedDonorSha256 === undefined ? {} : { selectedDonorSha256 }) }).pipe(
       Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(PlanningIdentity, fixture.identity),
       Effect.provideService(GenerationAdapter, adapter),
       Effect.provide(memory.layer),
       Effect.provideService(RunRecordClock, clock),
@@ -466,6 +517,7 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
     }
     const resumed = await Effect.runPromise(advance({ run: plannedRun }).pipe(
       Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(PlanningIdentity, fixture.identity),
       Effect.provideService(GenerationAdapter, recoveryAdapter),
       Effect.provide(recoveryMemory.layer),
       Effect.provideService(RunRecordClock, clock),
@@ -489,6 +541,7 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
     }
     const executeFailedRecovery = () => Effect.runPromise(advance({ run: plannedRun }).pipe(
       Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(PlanningIdentity, fixture.identity),
       Effect.provideService(GenerationAdapter, failedRecoveryAdapter),
       Effect.provide(failedRecoveryMemory.layer),
       Effect.provideService(RunRecordClock, clock),
@@ -519,6 +572,7 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
     }) as GenerationAdapterService
     const resumed = await Effect.runPromise(advance({ run: plannedRun }).pipe(
       Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(PlanningIdentity, fixture.identity),
       Effect.provideService(GenerationAdapter, completeOutputAdapter),
       Effect.provide(completeOutputMemory.layer),
       Effect.provideService(RunRecordClock, clock),
@@ -619,6 +673,7 @@ test("two application repositories keep references, Run Records, outputs, and As
         ...(selectedDonorSha256 === undefined ? {} : { selectedDonorSha256 }),
       }).pipe(
         Effect.provideService(ApplicationFiles, files),
+        Effect.provideService(PlanningIdentity, fixture.identity),
         Effect.provideService(GenerationAdapter, adapter),
         Effect.provide(runRecordLayer),
         Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:00:00.000Z") }),
@@ -674,6 +729,7 @@ test("classifies duplicate Qwen output identities before any output persistence"
   })
   const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
     Effect.provideService(MediaInspector, byteMediaInspector),
     Effect.provideService(PlanningIdentity, fixture.identity),
   ))
@@ -705,6 +761,7 @@ test("classifies duplicate Qwen output identities before any output persistence"
   const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
   const execute = () => Effect.runPromise(advance({ run: planned.run }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
     Effect.provideService(GenerationAdapter, adapter),
     Effect.provide(memory.layer),
     Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:00:00.000Z") }),
@@ -736,6 +793,7 @@ test("returns a classified persistence interruption after a paid result cannot b
   })
   const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
     Effect.provideService(MediaInspector, byteMediaInspector),
     Effect.provideService(PlanningIdentity, fixture.identity),
   ))
@@ -748,6 +806,7 @@ test("returns a classified persistence interruption after a paid result cannot b
   await Effect.runPromise(memory.failNext("write-evidence", 2))
   const decision = await Effect.runPromise(advance({ run: planned.run }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
     Effect.provideService(GenerationAdapter, {
       invoke: (prepared) => Effect.sync(() => {
         submissions += 1
@@ -801,6 +860,7 @@ test("classifies an interrupted unreconciled-submission write after one adapter 
   })
   const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
     Effect.provideService(MediaInspector, byteMediaInspector),
     Effect.provideService(PlanningIdentity, fixture.identity),
   ))
@@ -811,6 +871,7 @@ test("classifies an interrupted unreconciled-submission write after one adapter 
   await Effect.runPromise(memory.failAfter("append-event", 1, 2))
   const decision = await Effect.runPromise(advance({ run: planned.run }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
     Effect.provideService(GenerationAdapter, {
       invoke: () => Effect.sync(() => {
         submissions += 1
@@ -842,6 +903,7 @@ test("classifies interrupted generated-output persistence after the provider rec
   })
   const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
     Effect.provideService(MediaInspector, byteMediaInspector),
     Effect.provideService(PlanningIdentity, fixture.identity),
   ))
@@ -854,6 +916,7 @@ test("classifies interrupted generated-output persistence after the provider rec
   await Effect.runPromise(memory.failAfter("write-evidence", 1, 2))
   const decision = await Effect.runPromise(advance({ run: planned.run }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
     Effect.provideService(GenerationAdapter, {
       invoke: (prepared) => Effect.sync(() => {
         submissions += 1
@@ -898,6 +961,7 @@ test("reconciles partial Qwen recovery by persisted output identity instead of r
   })
   const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
     Effect.provideService(MediaInspector, byteMediaInspector),
     Effect.provideService(PlanningIdentity, fixture.identity),
   ))
@@ -958,6 +1022,7 @@ test("reconciles partial Qwen recovery by persisted output identity instead of r
   const execute = (memory: Awaited<ReturnType<typeof setup>>, recovered: GenerationResult, onRecover: () => void) =>
     Effect.runPromise(advance({ run: planned.run }).pipe(
       Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(PlanningIdentity, fixture.identity),
       Effect.provideService(GenerationAdapter, {
         invoke: () => Effect.die("partial recovery must not resubmit"),
         recover: () => Effect.sync(() => {
@@ -1001,6 +1066,7 @@ test("advances one Seedance Run by submitting once and polling the same job to v
   const plannedDecision = await Effect.runPromise(
     plan({ objectivePath: fixture.objectivePath }).pipe(
       Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(PlanningIdentity, fixture.identity),
       Effect.provideService(MediaInspector, byteMediaInspector),
       Effect.provideService(PlanningIdentity, fixture.identity),
     ),
@@ -1092,6 +1158,7 @@ test("advances one Seedance Run by submitting once and polling the same job to v
   const executeAdvance = () => Effect.runPromise(
     advance({ run: plannedDecision.run }).pipe(
       Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(PlanningIdentity, fixture.identity),
       Effect.provideService(GenerationAdapter, adapter),
       Effect.provide(memory.layer),
       Effect.provideService(RunRecordClock, clock),
@@ -1194,6 +1261,7 @@ test("advances one Seedance Run by submitting once and polling the same job to v
   }
   const executeRecovery = () => Effect.runPromise(advance({ run: plannedDecision.run }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
     Effect.provideService(GenerationAdapter, recoveryAdapter),
     Effect.provide(stranded.layer),
     Effect.provideService(RunRecordClock, clock),
@@ -1225,6 +1293,7 @@ test("persists a real Seedance verification failure with Verification ownership 
   const planned = await Effect.runPromise(
     plan({ objectivePath: fixture.objectivePath }).pipe(
       Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(PlanningIdentity, fixture.identity),
       Effect.provideService(MediaInspector, byteMediaInspector),
       Effect.provideService(PlanningIdentity, fixture.identity),
     ),
@@ -1287,6 +1356,7 @@ test("persists a real Seedance verification failure with Verification ownership 
   const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
   const executeAdvance = () => Effect.runPromise(advance({ run: planned.run }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
     Effect.provideService(GenerationAdapter, adapter),
     Effect.provide(memory.layer),
     Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-30T17:00:00.000Z") }),
@@ -1317,6 +1387,7 @@ test("blocks ambiguous, malformed, count-mismatched, and false pre-submit result
     const fixture = makeFixture("seedance-video")
     const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
       Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(PlanningIdentity, fixture.identity),
       Effect.provideService(MediaInspector, byteMediaInspector),
       Effect.provideService(PlanningIdentity, fixture.identity),
     ))
@@ -1385,6 +1456,7 @@ test("blocks ambiguous, malformed, count-mismatched, and false pre-submit result
     const clock: RunRecordClockService = { now: () => Effect.succeed("2026-08-31T12:00:00.000Z") }
     const executeAdvance = () => Effect.runPromise(advance({ run: planned.run }).pipe(
       Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(PlanningIdentity, fixture.identity),
       Effect.provideService(GenerationAdapter, adapter),
       Effect.provide(memory.layer),
       Effect.provideService(RunRecordClock, clock),
@@ -1414,6 +1486,7 @@ test("a synchronous adapter factory throw is unreconciled because adapter code r
   const fixture = makeFixture("seedance-video")
   const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
     Effect.provideService(MediaInspector, byteMediaInspector),
     Effect.provideService(PlanningIdentity, fixture.identity),
   ))
@@ -1430,6 +1503,7 @@ test("a synchronous adapter factory throw is unreconciled because adapter code r
   const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
   const executeAdvance = () => Effect.runPromise(advance({ run: planned.run }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
     Effect.provideService(GenerationAdapter, adapter),
     Effect.provide(memory.layer),
     Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:30:00.000Z") }),
@@ -1453,6 +1527,7 @@ test("a missing Seedance submission method is unreconciled because shape inspect
   const fixture = makeFixture("seedance-video")
   const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
     Effect.provideService(MediaInspector, byteMediaInspector),
     Effect.provideService(PlanningIdentity, fixture.identity),
   ))
@@ -1464,6 +1539,7 @@ test("a missing Seedance submission method is unreconciled because shape inspect
   const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
   const refused = await Effect.runPromise(advance({ run: planned.run }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
     Effect.provideService(GenerationAdapter, adapter),
     Effect.provide(memory.layer),
     Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:45:00.000Z") }),
@@ -1481,6 +1557,7 @@ test("an adapter method accessor cannot manufacture an unspent Seedance outcome"
   const fixture = makeFixture("seedance-video")
   const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
     Effect.provideService(MediaInspector, byteMediaInspector),
     Effect.provideService(PlanningIdentity, fixture.identity),
   ))
@@ -1497,6 +1574,7 @@ test("an adapter method accessor cannot manufacture an unspent Seedance outcome"
   const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
   const executeAdvance = () => Effect.runPromise(advance({ run: planned.run }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
     Effect.provideService(GenerationAdapter, adapter),
     Effect.provide(memory.layer),
     Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:50:00.000Z") }),

@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
-import { constants as fsConstants, closeSync, lstatSync, openSync, readFileSync, readdirSync, realpathSync } from "node:fs"
-import { isAbsolute, relative, resolve, sep } from "node:path"
+import { constants as fsConstants, closeSync, fstatSync, openSync, readFileSync, readdirSync, realpathSync } from "node:fs"
+import { isAbsolute, relative, sep } from "node:path"
 
 import { Effect } from "effect"
 
@@ -52,7 +52,7 @@ const readAnchoredFile = (rootFd: number, verifiedRoot: string, applicationPath:
     )
     try {
       const actual = realpathSync(`/proc/self/fd/${fileFd}`)
-      if (!inside(verifiedRoot, actual) || !lstatSync(actual).isFile()) {
+      if (!inside(verifiedRoot, actual) || !fstatSync(fileFd).isFile()) {
         throw invalidArtifact("A tool artifact file escapes the installed artifact root.")
       }
       return readFileSync(fileFd)
@@ -67,12 +67,23 @@ const readAnchoredFile = (rootFd: number, verifiedRoot: string, applicationPath:
   }
 }
 
-const collectInventory = (directory: string, prefix = ""): ReadonlyArray<string> => {
+const collectInventory = (directoryFd: number, prefix = ""): ReadonlyArray<string> => {
   const paths: Array<string> = []
+  const directory = `/proc/self/fd/${directoryFd}`
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
     const applicationPath = prefix === "" ? entry.name : `${prefix}/${entry.name}`
     if (entry.isSymbolicLink()) throw invalidArtifact("The installed tool artifact contains a symbolic link.")
-    if (entry.isDirectory()) paths.push(...collectInventory(`${directory}/${entry.name}`, applicationPath))
+    if (entry.isDirectory()) {
+      const childFd = openSync(
+        `${directory}/${entry.name}`,
+        fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW,
+      )
+      try {
+        paths.push(...collectInventory(childFd, applicationPath))
+      } finally {
+        closeSync(childFd)
+      }
+    }
     else if (entry.isFile()) paths.push(applicationPath)
     else throw invalidArtifact("The installed tool artifact contains an unsupported filesystem entry.")
   }
@@ -81,13 +92,12 @@ const collectInventory = (directory: string, prefix = ""): ReadonlyArray<string>
 
 const buildIdentity = (toolRoot: string): PlanningIdentityService => {
   if (!isAbsolute(toolRoot)) throw invalidArtifact("The installed tool artifact root must be absolute.")
-  const rootMetadata = lstatSync(toolRoot)
-  if (rootMetadata.isSymbolicLink() || !rootMetadata.isDirectory()) {
-    throw invalidArtifact("The installed tool artifact root must be a real directory.")
-  }
-  const verifiedRoot = realpathSync(resolve(toolRoot))
-  const rootFd = openSync(verifiedRoot, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW)
+  const rootFd = openSync(toolRoot, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW)
   try {
+    if (!fstatSync(rootFd).isDirectory()) {
+      throw invalidArtifact("The installed tool artifact root must be a real directory.")
+    }
+    const verifiedRoot = realpathSync(`/proc/self/fd/${rootFd}`)
     const manifestBytes = readAnchoredFile(rootFd, verifiedRoot, MANIFEST_PATH)
     let parsed: unknown
     try {
@@ -121,7 +131,7 @@ const buildIdentity = (toolRoot: string): PlanningIdentityService => {
     if (new Set(files.map((file) => file.path)).size !== files.length) {
       throw invalidArtifact("The tool artifact inventory contains duplicate paths.")
     }
-    const actualInventory = collectInventory(`/proc/self/fd/${rootFd}`).filter((path) => path !== MANIFEST_PATH)
+    const actualInventory = collectInventory(rootFd).filter((path) => path !== MANIFEST_PATH)
     if (JSON.stringify(actualInventory) !== JSON.stringify(files.map((file) => file.path))) {
       throw invalidArtifact("The installed tool artifact inventory is incomplete or contains unlisted files.")
     }

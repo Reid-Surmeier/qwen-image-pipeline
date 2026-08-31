@@ -11,7 +11,7 @@ import {
   rm,
   unlink,
 } from "node:fs/promises"
-import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
+import { dirname, isAbsolute, join, relative, sep } from "node:path"
 
 import { Effect, Layer } from "effect"
 
@@ -28,12 +28,10 @@ export type FileRunRecordFault =
 export type FileRunRecordHarness = Readonly<{
   layer: Layer.Layer<RunRecordStoreService, RunRecordError>
   failNext: (fault: FileRunRecordFault) => Effect.Effect<void>
-  beforeNextEvidenceOpen: (action: () => Promise<void>) => Effect.Effect<void>
 }>
 
 type FileFaultController = Readonly<{
   trip: (fault: FileRunRecordFault) => void
-  beforeEvidenceOpen: () => Promise<void>
 }>
 
 const safeRelative = (value: string): boolean =>
@@ -100,22 +98,26 @@ type ApplicationOwnership = Readonly<{
 
 const readApplicationOwnership = async (applicationRoot: string): Promise<Readonly<{
   verifiedApplicationRoot: string
+  verifiedApplicationRootIdentity: Readonly<{ dev: bigint | number; ino: bigint | number }>
   ownership: ApplicationOwnership
 }>> => {
   if (!isAbsolute(applicationRoot)) {
     throw durabilityError("The application repository root must be absolute.")
   }
-  const rootMetadata = await lstat(applicationRoot)
-  if (rootMetadata.isSymbolicLink() || !rootMetadata.isDirectory()) {
-    throw durabilityError("The application repository root must be a real directory.")
-  }
-  const verifiedApplicationRoot = await realpath(resolve(applicationRoot))
   const rootHandle = await open(
-    verifiedApplicationRoot,
+    applicationRoot,
     fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW,
   )
   let contractBytes: Buffer
+  let verifiedApplicationRoot: string
+  let verifiedApplicationRootIdentity: Readonly<{ dev: bigint | number; ino: bigint | number }>
   try {
+    const rootMetadata = await rootHandle.stat()
+    if (!rootMetadata.isDirectory()) {
+      throw durabilityError("The application repository root must be a real directory.")
+    }
+    verifiedApplicationRoot = await realpath(`/proc/self/fd/${rootHandle.fd}`)
+    verifiedApplicationRootIdentity = { dev: rootMetadata.dev, ino: rootMetadata.ino }
     const contractDirectoryHandle = await open(
       `/proc/self/fd/${rootHandle.fd}/.qwen-pipeline`,
       fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW,
@@ -152,6 +154,7 @@ const readApplicationOwnership = async (applicationRoot: string): Promise<Readon
   }
   return {
     verifiedApplicationRoot,
+    verifiedApplicationRootIdentity,
     ownership: {
       applicationId: contract.applicationId,
       artifactRoot: contract.artifactRoot,
@@ -163,6 +166,7 @@ const withDirectoryTree = async <Value>(
   root: string,
   applicationPath: string,
   action: (anchoredDirectory: string) => Promise<Value>,
+  expectedRootIdentity?: Readonly<{ dev: bigint | number; ino: bigint | number }>,
 ): Promise<Value> => {
   const rootHandle = await open(
     root,
@@ -172,6 +176,13 @@ const withDirectoryTree = async <Value>(
   )
   const handles = [rootHandle]
   try {
+    const rootMetadata = await rootHandle.stat()
+    if (
+      expectedRootIdentity !== undefined &&
+      (rootMetadata.dev !== expectedRootIdentity.dev || rootMetadata.ino !== expectedRootIdentity.ino)
+    ) {
+      throw durabilityError("The supplied root no longer names the verified directory.")
+    }
     const verifiedRoot = await realpath(`/proc/self/fd/${rootHandle.fd}`)
     let parentHandle = rootHandle
     for (const part of applicationPath.split("/").filter((value) => value.length > 0 && value !== ".")) {
@@ -266,11 +277,12 @@ const buildFileRunRecordStore = (
 ): Effect.Effect<RunRecordStoreService, RunRecordError> => attempt(
   "The Run Record filesystem could not be initialized.",
   async () => {
-    const { verifiedApplicationRoot, ownership } = await readApplicationOwnership(applicationRoot)
+    const { verifiedApplicationRoot, verifiedApplicationRootIdentity, ownership } = await readApplicationOwnership(applicationRoot)
     const verifiedRunsRoot = await withDirectoryTree(
       verifiedApplicationRoot,
       `${ownership.artifactRoot}/runs`,
       (anchoredRunsRoot) => realpath(anchoredRunsRoot),
+      verifiedApplicationRootIdentity,
     )
     if (!inside(verifiedApplicationRoot, verifiedRunsRoot)) {
       throw durabilityError("The Run Record root escapes the application repository.")
@@ -503,7 +515,6 @@ const buildFileRunRecordStore = (
             return withDirectoryTree(directory, parentPath, async (parent) => {
               const destination = join(parent, applicationPath.split("/").at(-1)!)
               try {
-                await faults?.beforeEvidenceOpen()
                 await writeExclusive(destination, body)
                 await syncDirectory(parent)
                 faults?.trip("after-evidence")
@@ -544,22 +555,15 @@ export const makeFileRunRecordHarness = (
   applicationRoot: string,
 ): Effect.Effect<FileRunRecordHarness> => Effect.sync(() => {
   let failing: FileRunRecordFault | undefined
-  let beforeEvidenceOpen: (() => Promise<void>) | undefined
   const faults: FileFaultController = {
     trip: (fault) => {
       if (failing !== fault) return
       failing = undefined
       throw durabilityError(`${fault} was interrupted.`)
     },
-    beforeEvidenceOpen: async () => {
-      const action = beforeEvidenceOpen
-      beforeEvidenceOpen = undefined
-      await action?.()
-    },
   }
   return {
     layer: Layer.effect(RunRecordStore, buildFileRunRecordStore(applicationRoot, faults)),
     failNext: (fault) => Effect.sync(() => { failing = fault }),
-    beforeNextEvidenceOpen: (action) => Effect.sync(() => { beforeEvidenceOpen = action }),
   }
 })

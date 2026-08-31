@@ -2645,11 +2645,11 @@ test("an evidence parent replacement cannot redirect a write outside the applica
   ]))
   const planned = await plannedRun()
   await writeProjectContract(applicationRoot, planned)
-  const harness = await Effect.runPromise(makeFileRunRecordHarness(applicationRoot))
+  const layer = await Effect.runPromise(fileRunRecordLayer(applicationRoot))
   const provide = <Success, Error>(
     effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
   ): Effect.Effect<Success, Error | RunRecordError> => effect.pipe(
-    Effect.provide(harness.layer),
+    Effect.provide(layer),
     Effect.provideService(RunRecordClock, clock),
   )
   const reserved = await Effect.runPromise(provide(reserve(reservationFor(planned))))
@@ -2670,13 +2670,11 @@ test("an evidence parent replacement cannot redirect a write outside the applica
     },
   })))
   const runDirectory = join(applicationRoot, planned.request.artifactRoot, "runs", reserved.runId)
-  await Effect.runPromise(harness.beforeNextEvidenceOpen(async () => {
-    await rename(join(runDirectory, "outputs"), join(runDirectory, "outputs-held"))
-    await symlink(outsideRoot, join(runDirectory, "outputs"), "dir")
-  }))
+  await rename(join(runDirectory, "outputs"), join(runDirectory, "outputs-held"))
+  await symlink(outsideRoot, join(runDirectory, "outputs"), "dir")
   const body = raster([0, 0, 0, 255, 0, 0, 0, 255])
   const sha256 = createHash("sha256").update(body).digest("hex")
-  await Effect.runPromise(provide(record({
+  const error = await Effect.runPromise(Effect.flip(provide(record({
     _tag: "CommitGeneratedOutput",
     runId: reserved.runId,
     operationId: "evidence-swap-output",
@@ -2686,9 +2684,10 @@ test("an evidence parent replacement cannot redirect a write outside the applica
       body,
       sha256,
     },
-  })))
+  }))))
+  assert.equal(error.code, "DURABILITY_FAILURE")
   assert.deepEqual(await readdir(outsideRoot), [])
-  assert.deepEqual(await readFile(join(runDirectory, "outputs-held", "candidate.rgba.json")), body)
+  assert.deepEqual(await readdir(join(runDirectory, "outputs-held")), [])
 })
 
 test("filesystem adapter use does not retain directory descriptors", async (context) => {

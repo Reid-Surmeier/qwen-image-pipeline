@@ -134,7 +134,7 @@ _Avoid_: Retry token, persisted credential
 - One **Planned Run** may create one **Attempt Reservation** in one **Run Record**.
 - One application **Project Contract** owns one artifact root. The production reader and writer accept only that application root; the tool repository owns no application references, outputs, Assembly evidence, Run Records, approvals, retention, or cleanup.
 - A **Tool Lock** is exact per application. Updating one application's checked release does not update another, and replay interprets old Run Records through their own recorded Procedure, Run schema, and adapter protocol versions.
-- A **Tool Lock** must exactly match one verified **Installed Tool Artifact** before planning; the current Run Request schema is `1/2/1`, while historical `1/1/1` records retain their original shape.
+- A **Tool Lock** must exactly match one verified **Installed Tool Artifact** before planning and must still match that identity and the immutable Planned Run before advancement; the current Run Request schema is `1/2/1`, while historical `1/1/1` records retain their original shape.
 - One durable submission-may-have-started event may issue one in-process **Submission Permit**; replay issues none.
 - One Seedance **Submission Permit** may create one persisted provider job identity; every later advance polls only that identity and cannot submit another job.
 - A definitively failed pre-submit **Run Record** remains immutable and may be named by a distinct **Linked Run** whose relationship is fixed in its Run Request before reservation.

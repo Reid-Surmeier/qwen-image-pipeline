@@ -5,6 +5,7 @@ import { GenerationError, invoke, pollSeedance, prepare, recover, submitSeedance
 import {
   ApplicationFiles,
   compilePlannedRun,
+  verifyPlannedRunIdentity,
   type ApplicationFilesService,
   type MediaInspectorService,
   type PlanningIdentityService,
@@ -65,6 +66,26 @@ const advanceReferenceRefused = (
     nextAction: "Restore or correct the authoritative reference, then plan again.",
     spendRisk: "No provider request was made, no attempt was reserved, and spend is $0.",
     humanDecision: "A human is needed only if the application has no unambiguous authoritative reference.",
+  },
+})
+
+const advanceIdentityRefused = (
+  objective: string,
+  error: unknown,
+): Extract<AdvanceDecision, { _tag: "AdvanceRefused" }> => ({
+  _tag: "AdvanceRefused",
+  outcome: "blocked",
+  finding: {
+    code: namedCause(error) ?? "TOOL_LOCK_MISMATCH",
+    message: "The Planned Run no longer matches the application Tool Lock and verified installed tool identity.",
+    correctionOwner: "application decision owner",
+  },
+  normalView: {
+    objective,
+    evidence: "The current application Tool Lock and installed tool identity did not authenticate this exact Planned Run.",
+    nextAction: "Restore the exact locked tool build or complete a no-cost compatibility check and plan a new Run.",
+    spendRisk: "No provider request was made, no attempt was reserved, and spend is $0.",
+    humanDecision: "No subjective visual approval is being requested.",
   },
 })
 
@@ -774,9 +795,23 @@ const advanceSeedanceRun = (
 
 export const advanceRun = (
   command: AdvanceCommand,
-): Effect.Effect<AdvanceDecision, ConductorError, ApplicationFilesService | import("../generation/index.js").GenerationAdapterService | import("../run-record/index.js").RunRecordStoreService | import("../run-record/index.js").RunRecordClockService> =>
+): Effect.Effect<AdvanceDecision, ConductorError, ApplicationFilesService | PlanningIdentityService | import("../generation/index.js").GenerationAdapterService | import("../run-record/index.js").RunRecordStoreService | import("../run-record/index.js").RunRecordClockService> =>
   Effect.gen(function*() {
     const request = command.run.request
+    const files = yield* ApplicationFiles
+    const identityAttempt = yield* files.read(TOOL_LOCK_PATH).pipe(
+      Effect.flatMap((lock) => verifyPlannedRunIdentity(
+        command.run,
+        Buffer.from(lock.bytes).toString("utf8"),
+      )),
+      Effect.match({
+        onFailure: (error) => ({ _tag: "Failure" as const, error }),
+        onSuccess: () => ({ _tag: "Success" as const }),
+      }),
+    )
+    if (identityAttempt._tag === "Failure") {
+      return advanceIdentityRefused(request.objective, identityAttempt.error)
+    }
     if (request.mode === "seedance-video") {
       return yield* advanceSeedanceRun(command)
     }
@@ -787,7 +822,6 @@ export const advanceRun = (
       ))
     }
 
-    const files = yield* ApplicationFiles
     const referenceAttempt = yield* Effect.forEach(request.references, (reference) =>
       files.read(reference.applicationPath).pipe(
         Effect.map((snapshot) => ({

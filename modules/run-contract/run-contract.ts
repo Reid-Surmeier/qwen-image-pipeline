@@ -372,6 +372,40 @@ const decodeVideoPlan = (
   }
 }
 
+export const verifyPlannedRunIdentity = (
+  plannedRun: PlannedRun,
+  rawToolLock: string,
+): Effect.Effect<void, RunContractError, PlanningIdentityService> => Effect.gen(function*() {
+  if (hasSecretMaterial(rawToolLock)) {
+    return yield* Effect.fail(new RunContractError(
+      "SECRET_MATERIAL_DETECTED",
+      "The application Tool Lock contains credential material.",
+    ))
+  }
+  const identity = yield* PlanningIdentity
+  if (!isVerifiedPlanningIdentity(identity)) {
+    return yield* Effect.fail(new RunContractError(
+      "TOOL_ARTIFACT_INVALID",
+      "Advancement requires identity derived from a verified installed tool artifact.",
+    ))
+  }
+  const lock = yield* Effect.try({
+    try: () => decodeToolIdentity(parseDocument(rawToolLock, "Tool Lock")),
+    catch: (error) => error instanceof RunContractError
+      ? error
+      : new RunContractError("DOCUMENT_INVALID", "Tool Lock is invalid."),
+  })
+  if (
+    !sameTool(lock, identity.installedTool) ||
+    !sameTool(plannedRun.request.tool, identity.installedTool)
+  ) {
+    return yield* Effect.fail(new RunContractError(
+      "TOOL_LOCK_MISMATCH",
+      "The Planned Run, application Tool Lock, and installed tool identity do not match exactly.",
+    ))
+  }
+})
+
 export const compileDocuments = (
   input: RawPlanningDocuments,
 ): Effect.Effect<

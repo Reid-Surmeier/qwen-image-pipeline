@@ -7,7 +7,7 @@ import type {
   MediaInspectionError,
   ReferencePlanningError,
 } from "../reference-planning/index.js"
-import { compileDocuments } from "./run-contract.js"
+import { compileDocuments, verifyPlannedRunIdentity as verifyIdentity } from "./run-contract.js"
 import type { RunContractError } from "./errors.js"
 import type {
   PlannedRun,
@@ -25,6 +25,11 @@ export const compilePlannedRun: (
   | MediaInspectionError,
   PlanningIdentityService | ApplicationFilesService | MediaInspectorService
 > = compileDocuments
+
+export const verifyPlannedRunIdentity: (
+  plannedRun: PlannedRun,
+  rawToolLock: string,
+) => Effect.Effect<void, RunContractError, PlanningIdentityService> = verifyIdentity
 
 export { RunContractError } from "./errors.js"
 export { filePlanningIdentity } from "./file-planning-identity.js"
