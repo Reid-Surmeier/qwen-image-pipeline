@@ -6,9 +6,12 @@ import { Effect } from "effect"
 
 import { verify } from "./index.js"
 
+const sha256 = (value: Uint8Array | string): string =>
+  createHash("sha256").update(value).digest("hex")
+
 const raster = (pixels: ReadonlyArray<number>) => {
   const body = Buffer.from(JSON.stringify({ height: 2, pixels, width: 2 }), "utf8")
-  return { body, sha256: createHash("sha256").update(body).digest("hex") }
+  return { body, sha256: sha256(body) }
 }
 
 const baseline = raster([
@@ -20,10 +23,12 @@ const donor = raster([
   70, 70, 70, 255, 60, 60, 60, 255,
 ])
 const assembled = raster([
-  10, 10, 10, 255, 80, 80, 80, 255,
+  10, 10, 10, 255, 5, 6, 7, 255,
   30, 30, 30, 255, 60, 60, 60, 255,
 ])
 const ownedRegion = { x: 1, y: 0, width: 1, height: 2 }
+const exactCopyCore = { x: 1, y: 0, rgba: [5, 6, 7, 255] as const }
+const exactCopy = [{ ...exactCopyCore, sha256: sha256(JSON.stringify(exactCopyCore)) }]
 
 test("rejects a raw generated donor when Assembly is required", async () => {
   const error = await Effect.runPromise(Effect.flip(verify({
@@ -31,6 +36,7 @@ test("rejects a raw generated donor when Assembly is required", async () => {
     donor,
     candidate: donor,
     ownedRegion,
+    exactCopy,
     assemblyRequired: true,
     candidateKind: "raw-generation",
   })))
@@ -44,6 +50,7 @@ test("proves independent zero-drift and donor-equality truths in mandatory order
     donor,
     candidate: assembled,
     ownedRegion,
+    exactCopy,
     assemblyRequired: true,
     candidateKind: "assembled",
   }))
@@ -54,4 +61,20 @@ test("proves independent zero-drift and donor-equality truths in mandatory order
     ["outside-region-preservation", 0],
     ["donor-equality-inside-region", 0],
   ])
+})
+
+test("rejects a candidate that restores donor pixels over Exact Copy", async () => {
+  const error = await Effect.runPromise(Effect.flip(verify({
+    baseline,
+    donor,
+    candidate: raster([
+      10, 10, 10, 255, 80, 80, 80, 255,
+      30, 30, 30, 255, 60, 60, 60, 255,
+    ]),
+    ownedRegion,
+    exactCopy,
+    assemblyRequired: true,
+    candidateKind: "assembled",
+  })))
+  assert.equal(error.code, "FIDELITY_CHECK_FAILED")
 })

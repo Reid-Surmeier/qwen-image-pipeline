@@ -27,7 +27,13 @@ export const verifyRaster = (input: VerificationInput): Effect.Effect<Verificati
   Effect.try({
     try: () => {
       const evidence = [input.baseline, input.donor, input.candidate]
-      if (evidence.some((item) => createHash("sha256").update(item.body).digest("hex") !== item.sha256)) {
+      if (
+        evidence.some((item) => createHash("sha256").update(item.body).digest("hex") !== item.sha256) ||
+        input.exactCopy.some((copy) => {
+          const core = { x: copy.x, y: copy.y, rgba: copy.rgba }
+          return createHash("sha256").update(JSON.stringify(core)).digest("hex") !== copy.sha256
+        })
+      ) {
         throw new VerificationError("INTEGRITY_CHECK_FAILED", "A verification input changed after selection.", [])
       }
       const completed = ["integrity"]
@@ -52,14 +58,26 @@ export const verifyRaster = (input: VerificationInput): Effect.Effect<Verificati
       ) {
         throw new VerificationError("MEDIA_CHECK_FAILED", "The owned region is outside the raster.", completed)
       }
+      const exactCopyByPosition = new Map<string, typeof input.exactCopy[number]>()
+      for (const copy of input.exactCopy) {
+        if (
+          copy.x < region.x || copy.y < region.y ||
+          copy.x >= region.x + region.width || copy.y >= region.y + region.height ||
+          copy.rgba.some((channel) => !Number.isInteger(channel) || channel < 0 || channel > 255)
+        ) {
+          throw new VerificationError("MEDIA_CHECK_FAILED", "Exact Copy evidence must remain inside the owned region.", completed)
+        }
+        exactCopyByPosition.set(`${copy.x}:${copy.y}`, copy)
+      }
       let outsideChanged = 0
       let donorMismatch = 0
       for (let y = 0; y < baseline.height; y += 1) {
         for (let x = 0; x < baseline.width; x += 1) {
           const offset = (y * baseline.width + x) * 4
           const inside = x >= region.x && y >= region.y && x < region.x + region.width && y < region.y + region.height
-          const expected = inside ? donor.pixels : baseline.pixels
-          if (candidate.pixels.slice(offset, offset + 4).some((channel, index) => channel !== expected[offset + index])) {
+          const exactCopy = exactCopyByPosition.get(`${x}:${y}`)
+          const expected = exactCopy?.rgba ?? (inside ? donor.pixels.slice(offset, offset + 4) : baseline.pixels.slice(offset, offset + 4))
+          if (candidate.pixels.slice(offset, offset + 4).some((channel, index) => channel !== expected[index])) {
             if (inside) donorMismatch += 1
             else outsideChanged += 1
           }

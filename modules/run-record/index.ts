@@ -1,7 +1,7 @@
 import type { Effect } from "effect"
 
 import type { RunRecordError } from "./errors.js"
-import { loadRun, readRunEvidence, recordOperation, reserveRun } from "./run-record.js"
+import { loadRun, readRunDiagnostics, readRunEvidence, recordOperation, reserveRun } from "./run-record.js"
 import type {
   RecordOperation,
   RecordResult,
@@ -28,6 +28,8 @@ export const readEvidence: (
   applicationPath: string,
 ) => Effect.Effect<Uint8Array, RunRecordError, RunRecordStoreService> = readRunEvidence
 
+export const readDiagnostics = readRunDiagnostics
+
 export { RunRecordError } from "./errors.js"
 export { fileRunRecordLayer, makeFileRunRecordHarness } from "./file-store.js"
 export type { FileRunRecordFault, FileRunRecordHarness } from "./file-store.js"
@@ -37,6 +39,7 @@ export type { RunRecordErrorCode } from "./errors.js"
 export { RunRecordClock } from "./types.js"
 export type {
   ProviderEvidenceInput,
+  BaselineEvidenceInput,
   GeneratedOutputEvidenceInput,
   AssemblyReportInput,
   FidelityCheckInput,
@@ -48,5 +51,6 @@ export type {
   RunRecordPhase,
   RunRecordStoreService,
   RunRecordView,
+  RunRecordDiagnostics,
   SubmissionPermit,
 } from "./types.js"

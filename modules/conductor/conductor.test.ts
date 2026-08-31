@@ -154,7 +154,7 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
     90, 90, 90, 255, 80, 80, 80, 255,
     70, 70, 70, 255, 60, 60, 60, 255,
   ])
-  const exactCopyCore = { x: 1, y: 0, rgba: [80, 80, 80, 255] as const }
+  const exactCopyCore = { x: 1, y: 0, rgba: [5, 6, 7, 255] as const }
   const fixture = makeFixture("qwen-image")
   const plannedDecision = await Effect.runPromise(
     plan({ objectivePath: fixture.objectivePath }).pipe(
@@ -203,11 +203,12 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
       adapterCalls += 1
       const destination = (
         prepared.payload.input_references as ReadonlyArray<{
-          image_url: { url: { applicationPath: string; bytesBase64: string; sha256: string } }
+          image_url: { url: { applicationPath: string; bytesBase64: string; mediaType: string; sha256: string } }
         }>
       )[0]!.image_url.url
       assert.equal(destination.applicationPath, "references/neutral.png")
       assert.equal(destination.sha256, hash(baseline))
+      assert.equal(destination.mediaType, "application/vnd.qwen.rgba+json")
       assert.deepEqual(Buffer.from(destination.bytesBase64, "base64"), Buffer.from(baseline))
       return {
         provider: "openrouter" as const,
@@ -239,13 +240,16 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
     ),
   )
 
-  const checkpoint = await executeAdvance()
+  const checkpoint = await executeAdvance(hash(donor))
   assert.equal(checkpoint._tag, "HumanDecisionRequired")
   if (checkpoint._tag !== "HumanDecisionRequired") return
   assert.equal(adapterCalls, 1)
-  assert.equal(checkpoint.diagnostics.phase, "awaiting_donor_choice")
-  assert.equal(checkpoint.diagnostics.classification, undefined)
+  assert.equal(checkpoint.diagnostics.view.phase, "awaiting_donor_choice")
+  assert.equal(checkpoint.diagnostics.view.classification, undefined)
+  assert.equal(Buffer.from(checkpoint.diagnostics.request).toString("utf8"), canonicalRequest)
+  assert.match(Buffer.from(checkpoint.diagnostics.events).toString("utf8"), /donor_choice_opened/)
   assert.deepEqual(checkpoint.decision.candidateSha256s, [hash(donor)])
+  assert.equal(checkpoint.normalView.objective, request.objective)
   assert.match(checkpoint.normalView.humanDecision, /choose.*donor/i)
 
   const completed = await executeAdvance(hash(donor))
@@ -253,18 +257,20 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
   if (completed._tag !== "VerifiedCandidate") return
   assert.equal(adapterCalls, 1)
   assert.equal(completed.runId, checkpoint.runId)
-  assert.equal(completed.diagnostics.runId, checkpoint.diagnostics.runId)
-  assert.equal(completed.diagnostics.selectedDonorSha256, hash(donor))
-  assert.equal(completed.diagnostics.phase, "verified_candidate")
-  assert.equal(completed.diagnostics.classification, "verified_candidate")
+  assert.equal(completed.diagnostics.view.runId, checkpoint.diagnostics.view.runId)
+  assert.equal(completed.diagnostics.view.selectedDonorSha256, hash(donor))
+  assert.equal(completed.diagnostics.view.phase, "verified_candidate")
+  assert.equal(completed.diagnostics.view.classification, "verified_candidate")
+  assert.equal(completed.normalView.objective, request.objective)
   assert.notEqual(completed.candidate.sha256, hash(donor))
   assert.deepEqual(
-    completed.diagnostics.evidence.map((item) => item.applicationPath),
+    completed.diagnostics.view.evidence.map((item) => item.applicationPath),
     [
       "provider-response.json",
       "outputs/fake-donor.rgba.json",
       "outputs/assembled.rgba.json",
       "assembly-report.json",
+      "inputs/baseline-reference",
       "checks.json",
     ],
   )
@@ -274,7 +280,7 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
   assert.deepEqual(JSON.parse(Buffer.from(assembledBytes).toString("utf8")), {
     height: 2,
     pixels: [
-      10, 10, 10, 255, 80, 80, 80, 255,
+      10, 10, 10, 255, 5, 6, 7, 255,
       30, 30, 30, 255, 60, 60, 60, 255,
     ],
     width: 2,
@@ -283,6 +289,7 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
     readEvidence(completed.runId, "checks.json").pipe(Effect.provide(memory.layer)),
   )
   assert.deepEqual(JSON.parse(Buffer.from(checksBytes).toString("utf8")), {
+    algorithm: "rgba-fidelity-v1",
     candidateSha256: completed.candidate.sha256,
     checks: [
       { measured: 0, name: "integrity", passed: true },
@@ -291,6 +298,13 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
       { measured: 0, name: "donor-equality-inside-region", passed: true },
     ],
     classification: "verified-candidate",
+    inputs: {
+      baselineSha256: hash(baseline),
+      candidateSha256: completed.candidate.sha256,
+      donorSha256: hash(donor),
+      exactCopySha256: hash(JSON.stringify([hash(JSON.stringify(exactCopyCore))])),
+      regionSha256: hash(JSON.stringify({ x: 1, y: 0, width: 1, height: 2 })),
+    },
   })
   assert.match(completed.normalView.evidence, /Assembly.*checks/i)
   assert.match(completed.normalView.humanDecision, /visual approval/i)

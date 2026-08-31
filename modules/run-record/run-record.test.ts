@@ -22,6 +22,7 @@ import {
   load,
   makeFileRunRecordHarness,
   makeMemoryRunRecordHarness,
+  readDiagnostics,
   readEvidence,
   record,
   reserve,
@@ -67,6 +68,36 @@ const plannedRun = async (linkedRun?: RunLink, requestedCount = 1): Promise<Plan
   )
 }
 
+const raster = (pixels: ReadonlyArray<number>): Uint8Array =>
+  Buffer.from(JSON.stringify({ height: 1, pixels, width: 2 }), "utf8")
+
+const plannedAssemblyRun = async (baseline: Uint8Array): Promise<PlannedRun> => {
+  const planned = await plannedRun()
+  const exactCopyCore = { x: 1, y: 0, rgba: [80, 80, 80, 255] as const }
+  const request = {
+    ...planned.request,
+    assemblyPlan: {
+      required: true as const,
+      baselineReferenceSlot: "source",
+      ownedRegion: { x: 1, y: 0, width: 1, height: 1 },
+      exactCopy: [{
+        ...exactCopyCore,
+        sha256: createHash("sha256").update(JSON.stringify(exactCopyCore)).digest("hex"),
+      }],
+    },
+    references: planned.request.references.map((reference) => reference.slot === "source"
+      ? { ...reference, byteLength: baseline.byteLength, sha256: createHash("sha256").update(baseline).digest("hex") }
+      : reference),
+  }
+  const canonicalRequest = canonicalJson(request)
+  return {
+    state: "planned",
+    request,
+    canonicalRequest,
+    requestSha256: createHash("sha256").update(canonicalRequest).digest("hex"),
+  }
+}
+
 test("reserves and reloads the immutable request before any submission", async () => {
   const planned = await plannedRun()
   const memory = await memoryHarness()
@@ -90,6 +121,26 @@ test("reserves and reloads the immutable request before any submission", async (
   assert.equal(reloaded.retryState, "same-run-submission-available")
   assert.match(reloaded.attemptId, /^attempt-[a-f0-9]+-1$/)
   assert.match(reloaded.chainHeadSha256, /^[a-f0-9]{64}$/)
+})
+
+test("returns replay-verified immutable request and journal diagnostics through the public Effect seam", async () => {
+  const planned = await plannedRun()
+  const memory = await memoryHarness()
+  const reserved = await Effect.runPromise(reserve(reservationFor(planned)).pipe(
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, clock),
+  ))
+
+  const diagnostics = await Effect.runPromise(readDiagnostics(reserved.runId).pipe(Effect.provide(memory.layer)))
+  assert.equal(Buffer.from(diagnostics.request).toString("utf8"), planned.canonicalRequest)
+  assert.equal(JSON.parse(Buffer.from(diagnostics.events).toString("utf8").trim()).kind, "attempt_reserved")
+  assert.deepEqual(diagnostics.view, reserved)
+
+  diagnostics.request[0] = 0
+  diagnostics.events[0] = 0
+  const reread = await Effect.runPromise(readDiagnostics(reserved.runId).pipe(Effect.provide(memory.layer)))
+  assert.equal(Buffer.from(reread.request).toString("utf8"), planned.canonicalRequest)
+  assert.equal(JSON.parse(Buffer.from(reread.events).toString("utf8").trim()).kind, "attempt_reserved")
 })
 
 test("persists submission uncertainty before issuing one non-replayable permit", async () => {
@@ -1016,7 +1067,11 @@ test("records a donor-choice checkpoint and selects only a persisted output on t
 })
 
 test("persists separately hashed assembled output and canonical Assembly report", async () => {
-  const planned = await plannedRun()
+  const baseline = raster([
+    10, 10, 10, 255,
+    20, 20, 20, 255,
+  ])
+  const planned = await plannedAssemblyRun(baseline)
   const memory = await memoryHarness()
   const provide = <Success, Error>(
     effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
@@ -1033,7 +1088,10 @@ test("persists separately hashed assembled output and canonical Assembly report"
     operationId: "assembly-provider",
     evidence: { mediaType: "application/json", body: providerBody, sha256: createHash("sha256").update(providerBody).digest("hex") },
   })))
-  const donor = Buffer.from("assembly-donor", "utf8")
+  const donor = raster([
+    90, 90, 90, 255,
+    80, 80, 80, 255,
+  ])
   const donorSha256 = createHash("sha256").update(donor).digest("hex")
   await Effect.runPromise(provide(record({
     _tag: "CommitGeneratedOutput",
@@ -1054,15 +1112,46 @@ test("persists separately hashed assembled output and canonical Assembly report"
     selectedSha256: donorSha256,
   })))
 
-  const assembled = Buffer.from("deterministically-assembled-output", "utf8")
+  const assembled = raster([
+    10, 10, 10, 255,
+    80, 80, 80, 255,
+  ])
   const assembledSha256 = createHash("sha256").update(assembled).digest("hex")
+  const assemblyPlan = planned.request.assemblyPlan!
   const report = {
-    baselineSha256: "1".repeat(64),
+    baselineSha256: createHash("sha256").update(baseline).digest("hex"),
     donorSha256,
-    regionSha256: "2".repeat(64),
-    exactCopySha256: "3".repeat(64),
+    regionSha256: createHash("sha256").update(JSON.stringify(assemblyPlan.ownedRegion)).digest("hex"),
+    exactCopySha256: createHash("sha256").update(JSON.stringify(assemblyPlan.exactCopy.map((copy) => copy.sha256))).digest("hex"),
     outputSha256: assembledSha256,
   }
+  const forgedReport = await Effect.runPromise(Effect.flip(provide(record({
+    _tag: "CommitAssembly",
+    runId: reserved.runId,
+    operationId: "assembly-forged-plan-binding",
+    output: {
+      applicationPath: "outputs/assembled.rgba.json",
+      mediaType: "application/vnd.qwen.rgba+json",
+      body: assembled,
+      sha256: assembledSha256,
+    },
+    report: { ...report, baselineSha256: "1".repeat(64) },
+  }))))
+  assert.equal(forgedReport.code, "EVIDENCE_HASH_MISMATCH")
+
+  const rawDonorRelabel = await Effect.runPromise(Effect.flip(provide(record({
+    _tag: "CommitAssembly",
+    runId: reserved.runId,
+    operationId: "assembly-raw-donor-relabel",
+    output: {
+      applicationPath: "outputs/assembled.rgba.json",
+      mediaType: "application/vnd.qwen.rgba+json",
+      body: donor,
+      sha256: donorSha256,
+    },
+    report: { ...report, outputSha256: donorSha256 },
+  }))))
+  assert.equal(rawDonorRelabel.code, "EVIDENCE_HASH_MISMATCH")
   const committed = await Effect.runPromise(provide(record({
     _tag: "CommitAssembly",
     runId: reserved.runId,
@@ -1091,12 +1180,52 @@ test("persists separately hashed assembled output and canonical Assembly report"
     { name: "outside-region-preservation", passed: true, measured: 0 },
     { name: "donor-equality-inside-region", passed: true, measured: 0 },
   ] as const
+  const arbitraryBaseline = raster([
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+  ])
+  const arbitraryBaselineResult = await Effect.runPromise(Effect.flip(provide(record({
+    _tag: "CommitChecks",
+    runId: reserved.runId,
+    operationId: "checks-arbitrary-baseline",
+    candidateSha256: assembledSha256,
+    classification: "verified-candidate",
+    baseline: {
+      body: arbitraryBaseline,
+      sha256: createHash("sha256").update(arbitraryBaseline).digest("hex"),
+    },
+    checks,
+  }))))
+  assert.equal(arbitraryBaselineResult.code, "EVIDENCE_HASH_MISMATCH")
+
+  await Effect.runPromise(memory.mutate(reserved.runId, (stored) => {
+    const persisted = stored.evidence["outputs/assembled.rgba.json"]
+    if (persisted === undefined || persisted[0] === undefined) throw new Error("assembled fixture missing")
+    persisted[0] ^= 1
+  }))
+  const fabricatedZeros = await Effect.runPromise(Effect.flip(provide(record({
+    _tag: "CommitChecks",
+    runId: reserved.runId,
+    operationId: "checks-fabricated-zeros",
+    candidateSha256: assembledSha256,
+    classification: "verified-candidate",
+    baseline: { body: baseline, sha256: report.baselineSha256 },
+    checks,
+  }))))
+  assert.equal(fabricatedZeros.code, "EVIDENCE_HASH_MISMATCH")
+  await Effect.runPromise(memory.mutate(reserved.runId, (stored) => {
+    const persisted = stored.evidence["outputs/assembled.rgba.json"]
+    if (persisted === undefined || persisted[0] === undefined) throw new Error("assembled fixture missing")
+    persisted[0] ^= 1
+  }))
+
   const failedChecks = await Effect.runPromise(Effect.flip(provide(record({
     _tag: "CommitChecks",
     runId: reserved.runId,
     operationId: "checks-failed",
     candidateSha256: assembledSha256,
     classification: "verified-candidate",
+    baseline: { body: baseline, sha256: report.baselineSha256 },
     checks: checks.map((check, index) => index === 2 ? { ...check, passed: false } : check),
   }))))
   assert.equal(failedChecks.code, "CHECKS_NOT_PASSED")
@@ -1107,6 +1236,7 @@ test("persists separately hashed assembled output and canonical Assembly report"
     operationId: "checks-passed",
     candidateSha256: assembledSha256,
     classification: "verified-candidate",
+    baseline: { body: baseline, sha256: report.baselineSha256 },
     checks,
   })))
   assert.equal(verified.view.phase, "verified_candidate")
@@ -1116,9 +1246,17 @@ test("persists separately hashed assembled output and canonical Assembly report"
     Effect.provide(memory.layer),
   ))
   assert.deepEqual(JSON.parse(Buffer.from(checksBytes).toString("utf8")), {
+    algorithm: "rgba-fidelity-v1",
     candidateSha256: assembledSha256,
     checks,
     classification: "verified-candidate",
+    inputs: {
+      baselineSha256: report.baselineSha256,
+      candidateSha256: assembledSha256,
+      donorSha256,
+      exactCopySha256: report.exactCopySha256,
+      regionSha256: report.regionSha256,
+    },
   })
   const replayedChecks = await Effect.runPromise(provide(record({
     _tag: "CommitChecks",
@@ -1126,6 +1264,7 @@ test("persists separately hashed assembled output and canonical Assembly report"
     operationId: "checks-passed",
     candidateSha256: assembledSha256,
     classification: "verified-candidate",
+    baseline: { body: baseline, sha256: report.baselineSha256 },
     checks,
   })))
   assert.equal(replayedChecks._tag, "ReplayObserved")
@@ -1137,6 +1276,7 @@ test("persists separately hashed assembled output and canonical Assembly report"
     operationId: "checks-passed",
     candidateSha256: assembledSha256,
     classification: "verified-candidate",
+    baseline: { body: baseline, sha256: report.baselineSha256 },
     checks: checks.map((check, index) => index === 3 ? { ...check, measured: 1 } : check),
   }))))
   assert.equal(changedReplay.code, "IDEMPOTENCY_CONFLICT")
@@ -1175,7 +1315,11 @@ test("a fresh filesystem adapter replays the completed Assembly Run and reads ve
     Effect.provide(layer),
     Effect.provideService(RunRecordClock, clock),
   )
-  const planned = await plannedRun()
+  const baseline = raster([
+    10, 10, 10, 255,
+    20, 20, 20, 255,
+  ])
+  const planned = await plannedAssemblyRun(baseline)
   const reserved = await Effect.runPromise(provide(reserve(reservationFor(planned))))
   await Effect.runPromise(provide(record({ _tag: "SubmissionMayHaveStarted", runId: reserved.runId, operationId: "fs-assembly-submit" })))
   const providerBody = Buffer.from('{"request_id":"fs-assembly","status":"succeeded"}', "utf8")
@@ -1185,7 +1329,10 @@ test("a fresh filesystem adapter replays the completed Assembly Run and reads ve
     operationId: "fs-assembly-provider",
     evidence: { mediaType: "application/json", body: providerBody, sha256: createHash("sha256").update(providerBody).digest("hex") },
   })))
-  const donor = Buffer.from("filesystem-donor", "utf8")
+  const donor = raster([
+    90, 90, 90, 255,
+    80, 80, 80, 255,
+  ])
   const donorSha256 = createHash("sha256").update(donor).digest("hex")
   await Effect.runPromise(provide(record({
     _tag: "CommitGeneratedOutput",
@@ -1205,8 +1352,19 @@ test("a fresh filesystem adapter replays the completed Assembly Run and reads ve
     operationId: "fs-donor-selected",
     selectedSha256: donorSha256,
   })))
-  const assembled = Buffer.from("filesystem-assembled", "utf8")
+  const assembled = raster([
+    10, 10, 10, 255,
+    80, 80, 80, 255,
+  ])
   const assembledSha256 = createHash("sha256").update(assembled).digest("hex")
+  const assemblyPlan = planned.request.assemblyPlan!
+  const report = {
+    baselineSha256: createHash("sha256").update(baseline).digest("hex"),
+    donorSha256,
+    regionSha256: createHash("sha256").update(JSON.stringify(assemblyPlan.ownedRegion)).digest("hex"),
+    exactCopySha256: createHash("sha256").update(JSON.stringify(assemblyPlan.exactCopy.map((copy) => copy.sha256))).digest("hex"),
+    outputSha256: assembledSha256,
+  }
   await Effect.runPromise(provide(record({
     _tag: "CommitAssembly",
     runId: reserved.runId,
@@ -1217,13 +1375,7 @@ test("a fresh filesystem adapter replays the completed Assembly Run and reads ve
       body: assembled,
       sha256: assembledSha256,
     },
-    report: {
-      baselineSha256: "1".repeat(64),
-      donorSha256,
-      regionSha256: "2".repeat(64),
-      exactCopySha256: "3".repeat(64),
-      outputSha256: assembledSha256,
-    },
+    report,
   })))
   await Effect.runPromise(provide(record({
     _tag: "CommitChecks",
@@ -1231,6 +1383,7 @@ test("a fresh filesystem adapter replays the completed Assembly Run and reads ve
     operationId: "fs-checks-persisted",
     candidateSha256: assembledSha256,
     classification: "verified-candidate",
+    baseline: { body: baseline, sha256: report.baselineSha256 },
     checks: [
       { name: "integrity", passed: true, measured: 0 },
       { name: "media", passed: true, measured: 0 },
@@ -1255,6 +1408,7 @@ test("a fresh filesystem adapter replays the completed Assembly Run and reads ve
     "assembly-report.json",
     "checks.json",
     "events.jsonl",
+    "inputs",
     "outputs",
     "provider-response.json",
     "request.json",

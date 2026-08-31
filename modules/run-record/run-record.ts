@@ -9,6 +9,7 @@ import type {
   RecordResult,
   ReserveRun,
   RunRecordClockService,
+  RunRecordDiagnostics,
   RunLink,
   RunRecordStoreService,
   RunRecordView,
@@ -79,6 +80,14 @@ const makeEvent = (event: Omit<RunEvent, "eventSha256">): RunEvent => immutable(
 
 const encodeEvent = (event: RunEvent): Uint8Array => bytes(`${canonicalJson(event as unknown as JsonValue)}\n`)
 const encodeView = (view: RunRecordView): Uint8Array => bytes(canonicalJson(view as unknown as JsonValue))
+
+const checksOperationSha256 = (operation: Extract<RecordOperation, { _tag: "CommitChecks" }>): string =>
+  sha256(canonicalJson({
+    baselineSha256: operation.baseline.sha256,
+    candidateSha256: operation.candidateSha256,
+    checks: operation.checks,
+    classification: operation.classification,
+  } as unknown as JsonValue))
 
 const isSha256 = (value: string): boolean => /^[a-f0-9]{64}$/.test(value)
 const isIdentifier = (value: string): boolean => /^[a-z0-9][a-z0-9._-]{0,127}$/.test(value)
@@ -200,20 +209,156 @@ const expectedCheckNames = [
   "donor-equality-inside-region",
 ] as const
 
-const validateChecksDocument = (document: unknown, expectedCandidateSha256: string): void => {
+const verificationAlgorithm = "rgba-fidelity-v1" as const
+
+type AssemblyBindings = Readonly<{
+  baselineSha256: string
+  donorSha256: string
+  regionSha256: string
+  exactCopySha256: string
+  outputSha256: string
+}>
+
+type Raster = Readonly<{ width: number; height: number; pixels: ReadonlyArray<number> }>
+
+const requestAssemblyPlan = (request: CanonicalRunRequest): NonNullable<CanonicalRunRequest["assemblyPlan"]> => {
+  if (request.mode !== "qwen-image" || request.assemblyPlan?.required !== true) {
+    throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Assembly evidence requires an immutable Qwen Assembly plan.", "repair-evidence")
+  }
+  return request.assemblyPlan
+}
+
+const expectedPlanBindings = (
+  request: CanonicalRunRequest,
+  donorSha256: string,
+  outputSha256: string,
+): AssemblyBindings => {
+  const plan = requestAssemblyPlan(request)
+  const baseline = request.references.find((reference) =>
+    reference.slot === plan.baselineReferenceSlot && reference.kind === "image")
+  if (baseline === undefined) {
+    throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "The Assembly baseline is not a hash-locked image reference.", "repair-evidence")
+  }
+  const region = {
+    x: plan.ownedRegion.x,
+    y: plan.ownedRegion.y,
+    width: plan.ownedRegion.width,
+    height: plan.ownedRegion.height,
+  }
+  return {
+    baselineSha256: baseline.sha256,
+    donorSha256,
+    regionSha256: sha256(JSON.stringify(region)),
+    exactCopySha256: sha256(JSON.stringify(plan.exactCopy.map((copy) => copy.sha256))),
+    outputSha256,
+  }
+}
+
+const decodeRaster = (body: Uint8Array): Raster => {
+  let value: unknown
+  try {
+    value = JSON.parse(Buffer.from(body).toString("utf8"))
+  } catch {
+    throw new RunRecordError("CHECKS_NOT_PASSED", "A Fidelity Check input is not valid raster JSON.", "repair-evidence")
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new RunRecordError("CHECKS_NOT_PASSED", "A Fidelity Check input is not a raster object.", "repair-evidence")
+  }
+  const { width, height, pixels } = value as Record<string, unknown>
+  if (
+    typeof width !== "number" || !Number.isSafeInteger(width) || width < 1 ||
+    typeof height !== "number" || !Number.isSafeInteger(height) || height < 1 ||
+    !Array.isArray(pixels) || pixels.length !== width * height * 4 ||
+    pixels.some((channel) => typeof channel !== "number" || !Number.isInteger(channel) || channel < 0 || channel > 255)
+  ) {
+    throw new RunRecordError("CHECKS_NOT_PASSED", "A Fidelity Check raster has invalid dimensions or RGBA channels.", "repair-evidence")
+  }
+  return { width, height, pixels: pixels as ReadonlyArray<number> }
+}
+
+const recomputeChecks = (
+  request: CanonicalRunRequest,
+  baselineBytes: Uint8Array,
+  donorBytes: Uint8Array,
+  candidateBytes: Uint8Array,
+): ReadonlyArray<Readonly<{ name: typeof expectedCheckNames[number]; passed: true; measured: number }>> => {
+  const plan = requestAssemblyPlan(request)
+  const baseline = decodeRaster(baselineBytes)
+  const donor = decodeRaster(donorBytes)
+  const candidate = decodeRaster(candidateBytes)
+  if (
+    baseline.width !== donor.width || baseline.width !== candidate.width ||
+    baseline.height !== donor.height || baseline.height !== candidate.height
+  ) {
+    throw new RunRecordError("CHECKS_NOT_PASSED", "Fidelity Check rasters are dimensionally inconsistent.", "repair-evidence")
+  }
+  const region = plan.ownedRegion
+  if (
+    region.x < 0 || region.y < 0 || region.width < 1 || region.height < 1 ||
+    region.x + region.width > baseline.width || region.y + region.height > baseline.height
+  ) {
+    throw new RunRecordError("CHECKS_NOT_PASSED", "The immutable Assembly region is outside the baseline raster.", "repair-evidence")
+  }
+  const exactCopy = new Map(plan.exactCopy.map((copy) => [`${copy.x}:${copy.y}`, copy.rgba] as const))
+  let outsideChanged = 0
+  let donorMismatch = 0
+  for (let y = 0; y < baseline.height; y += 1) {
+    for (let x = 0; x < baseline.width; x += 1) {
+      const offset = (y * baseline.width + x) * 4
+      const inside = x >= region.x && y >= region.y && x < region.x + region.width && y < region.y + region.height
+      const expected = exactCopy.get(`${x}:${y}`) ?? (inside
+        ? donor.pixels.slice(offset, offset + 4)
+        : baseline.pixels.slice(offset, offset + 4))
+      if (candidate.pixels.slice(offset, offset + 4).some((channel, index) => channel !== expected[index])) {
+        if (inside) donorMismatch += 1
+        else outsideChanged += 1
+      }
+    }
+  }
+  if (outsideChanged !== 0 || donorMismatch !== 0) {
+    throw new RunRecordError(
+      "CHECKS_NOT_PASSED",
+      `Fidelity failed with ${outsideChanged} outside-region changes and ${donorMismatch} owned-region mismatches.`,
+      "repair-evidence",
+    )
+  }
+  return [
+    { name: "integrity", passed: true, measured: 0 },
+    { name: "media", passed: true, measured: 0 },
+    { name: "outside-region-preservation", passed: true, measured: outsideChanged },
+    { name: "donor-equality-inside-region", passed: true, measured: donorMismatch },
+  ]
+}
+
+const validateChecksDocument = (
+  document: unknown,
+  expectedBindings: AssemblyBindings,
+  recomputed: ReadonlyArray<Readonly<{ name: typeof expectedCheckNames[number]; passed: true; measured: number }>>,
+): void => {
   if (document === null || typeof document !== "object" || Array.isArray(document)) {
     throw new RunRecordError("CHECKS_NOT_PASSED", "Checks evidence must be a JSON object.", "repair-evidence")
   }
   const record = document as Readonly<Record<string, unknown>>
   const checks = record.checks
+  const inputs = record.inputs
   if (
-    Object.keys(record).sort().join(",") !== "candidateSha256,checks,classification" ||
-    record.candidateSha256 !== expectedCandidateSha256 ||
+    Object.keys(record).sort().join(",") !== "algorithm,candidateSha256,checks,classification,inputs" ||
+    record.algorithm !== verificationAlgorithm ||
+    record.candidateSha256 !== expectedBindings.outputSha256 ||
     record.classification !== "verified-candidate" ||
+    inputs === null || typeof inputs !== "object" || Array.isArray(inputs) ||
+    Object.keys(inputs).sort().join(",") !== "baselineSha256,candidateSha256,donorSha256,exactCopySha256,regionSha256" ||
+    canonicalJson(inputs as JsonValue) !== canonicalJson({
+      baselineSha256: expectedBindings.baselineSha256,
+      candidateSha256: expectedBindings.outputSha256,
+      donorSha256: expectedBindings.donorSha256,
+      exactCopySha256: expectedBindings.exactCopySha256,
+      regionSha256: expectedBindings.regionSha256,
+    }) ||
     !Array.isArray(checks) ||
-    checks.length !== expectedCheckNames.length
+    canonicalJson(checks as JsonValue) !== canonicalJson(recomputed as unknown as JsonValue)
   ) {
-    throw new RunRecordError("CHECKS_NOT_PASSED", "Checks evidence does not classify the assembled output.", "repair-evidence")
+    throw new RunRecordError("CHECKS_NOT_PASSED", "Checks evidence does not bind the immutable plan, verified inputs, and recomputed result.", "repair-evidence")
   }
   for (const [index, expectedName] of expectedCheckNames.entries()) {
     const check = checks[index]
@@ -263,6 +408,7 @@ const replay = (
     throw new RunRecordError("REQUEST_TAMPERED", "The immutable request is not canonical JSON.", "repair-evidence")
   }
   const requestDocument = canonicalRequest as Readonly<Record<string, JsonValue>>
+  const runRequest = canonicalRequest as unknown as CanonicalRunRequest
   if (stringPayload(genesis.payload, "requestSha256") !== requestSha256) {
     throw new RunRecordError("REQUEST_TAMPERED", "The immutable request bytes changed.", "repair-evidence")
   }
@@ -294,6 +440,7 @@ const replay = (
   const evidence: Array<RunRecordView["evidence"][number]> = []
   let donorCandidateSha256s: ReadonlyArray<string> | undefined
   let selectedDonorSha256: string | undefined
+  let assemblyOutputPath: string | undefined
   let assemblyOutputSha256: string | undefined
   let assemblyReportSha256: string | undefined
   let checksSha256: string | undefined
@@ -419,41 +566,57 @@ const replay = (
       }
       const reportDocument = report as Readonly<Record<string, JsonValue>>
       const reportKeys = Object.keys(reportDocument).sort().join(",")
+      const expectedBindings = expectedPlanBindings(runRequest, selectedDonorSha256, outputSha256)
       if (
         reportKeys !== "baselineSha256,donorSha256,exactCopySha256,outputSha256,regionSha256" ||
         !["baselineSha256", "donorSha256", "regionSha256", "exactCopySha256", "outputSha256"]
           .every((key) => typeof reportDocument[key] === "string" && isSha256(reportDocument[key] as string)) ||
-        reportDocument.donorSha256 !== selectedDonorSha256 ||
-        reportDocument.outputSha256 !== outputSha256
+        evidence.some((item) => item.applicationPath.startsWith("outputs/") && item.sha256 === outputSha256) ||
+        canonicalJson(reportDocument) !== canonicalJson(expectedBindings as unknown as JsonValue)
       ) {
-        throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "The Assembly report does not bind its hash-locked inputs, selected donor, and output.", "repair-evidence")
+        throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "The Assembly report does not bind the immutable plan, selected donor, and distinct assembled output.", "repair-evidence")
       }
       evidence.push(
         { applicationPath: outputPath, sha256: outputSha256, byteLength: outputByteLength, mediaType: outputMediaType },
         { applicationPath: reportPath, sha256: reportSha256, byteLength: reportByteLength, mediaType: "application/json" },
       )
       assemblyOutputSha256 = outputSha256
+      assemblyOutputPath = outputPath
       assemblyReportSha256 = reportSha256
       phase = "assembly_completed"
       continue
     }
     if (event.kind === "checks_persisted") {
-      if (phase !== "assembly_completed" || assemblyOutputSha256 === undefined) {
+      if (
+        phase !== "assembly_completed" || assemblyOutputSha256 === undefined ||
+        assemblyOutputPath === undefined || selectedDonorSha256 === undefined
+      ) {
         throw new RunRecordError("ILLEGAL_TRANSITION", "Checks were recorded before Assembly completed.")
       }
       const applicationPath = stringPayload(event.payload, "applicationPath")
       const evidenceSha256 = stringPayload(event.payload, "sha256")
       const byteLength = numberPayload(event.payload, "byteLength")
       const candidateSha256 = stringPayload(event.payload, "candidateSha256")
+      const baselinePath = stringPayload(event.payload, "baselinePath")
+      const baselineSha256 = stringPayload(event.payload, "baselineSha256")
+      const baselineByteLength = numberPayload(event.payload, "baselineByteLength")
       const storedEvidence = evidenceBytes[applicationPath]
-      if (storedEvidence === undefined) {
-        throw new RunRecordError("EVIDENCE_MISSING", `${applicationPath} is named by the journal but missing.`, "repair-evidence")
+      const baselineBytes = evidenceBytes[baselinePath]
+      const donorEvidence = evidence.find((item) =>
+        item.applicationPath.startsWith("outputs/") && item.sha256 === selectedDonorSha256)
+      const donorBytes = donorEvidence === undefined ? undefined : evidenceBytes[donorEvidence.applicationPath]
+      const candidateBytes = evidenceBytes[assemblyOutputPath]
+      if (storedEvidence === undefined || baselineBytes === undefined || donorBytes === undefined || candidateBytes === undefined) {
+        throw new RunRecordError("EVIDENCE_MISSING", "Checks or one of its verified input receipts is missing.", "repair-evidence")
       }
+      const expectedBindings = expectedPlanBindings(runRequest, selectedDonorSha256, assemblyOutputSha256)
       if (
         storedEvidence.byteLength !== byteLength || sha256(storedEvidence) !== evidenceSha256 ||
+        baselineBytes.byteLength !== baselineByteLength || sha256(baselineBytes) !== baselineSha256 ||
+        baselineSha256 !== expectedBindings.baselineSha256 ||
         candidateSha256 !== assemblyOutputSha256
       ) {
-        throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Checks evidence no longer matches its assembled candidate receipt.", "repair-evidence")
+        throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Checks evidence no longer matches its immutable baseline and assembled candidate receipts.", "repair-evidence")
       }
       let document: unknown
       try {
@@ -464,13 +627,31 @@ const replay = (
       if (canonicalJson(document as JsonValue) !== Buffer.from(storedEvidence).toString("utf8")) {
         throw new RunRecordError("CHECKS_NOT_PASSED", "Checks evidence is not canonical JSON.", "repair-evidence")
       }
-      validateChecksDocument(document, assemblyOutputSha256)
-      evidence.push({
-        applicationPath,
-        sha256: evidenceSha256,
-        byteLength,
-        mediaType: "application/json",
-      })
+      const receipt = document as Readonly<Record<string, JsonValue>>
+      if (stringPayload(event.payload, "operationSha256") !== sha256(canonicalJson({
+        baselineSha256,
+        candidateSha256,
+        checks: receipt.checks,
+        classification: receipt.classification,
+      } as JsonValue))) {
+        throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "The checks operation receipt contradicts its persisted evidence.", "repair-evidence")
+      }
+      const recomputed = recomputeChecks(runRequest, baselineBytes, donorBytes, candidateBytes)
+      validateChecksDocument(document, expectedBindings, recomputed)
+      evidence.push(
+        {
+          applicationPath: baselinePath,
+          sha256: baselineSha256,
+          byteLength: baselineByteLength,
+          mediaType: "application/octet-stream",
+        },
+        {
+          applicationPath,
+          sha256: evidenceSha256,
+          byteLength,
+          mediaType: "application/json",
+        },
+      )
       checksSha256 = evidenceSha256
       classification = "verified_candidate"
       phase = "verified_candidate"
@@ -687,6 +868,7 @@ export const recordOperation = (
       ? error
       : new RunRecordError("DERIVED_VIEW_CONTRADICTION", "The derived state view could not be read.", "repair-evidence"),
   })
+  const runRequest = JSON.parse(Buffer.from(stored.request).toString("utf8")) as CanonicalRunRequest
   const expectedKind = operation._tag === "SubmissionMayHaveStarted"
     ? "submission_may_have_started"
     : operation._tag === "CommitProviderEvidence"
@@ -748,14 +930,10 @@ export const recordOperation = (
       }
     }
     if (operation._tag === "CommitChecks") {
-      const checksBytes = bytes(canonicalJson({
-        candidateSha256: operation.candidateSha256,
-        checks: operation.checks,
-        classification: operation.classification,
-      } as unknown as JsonValue))
       if (
         stringPayload(replayed.payload, "candidateSha256") !== operation.candidateSha256 ||
-        stringPayload(replayed.payload, "sha256") !== sha256(checksBytes)
+        sha256(operation.baseline.body) !== operation.baseline.sha256 ||
+        stringPayload(replayed.payload, "operationSha256") !== checksOperationSha256(operation)
       ) {
         return yield* Effect.fail(new RunRecordError("IDEMPOTENCY_CONFLICT", "The operation identity was replayed with different checks evidence."))
       }
@@ -916,6 +1094,7 @@ export const recordOperation = (
       return yield* Effect.fail(new RunRecordError("ILLEGAL_TRANSITION", "Assembly evidence requires a selected donor."))
     }
     const reportDocument = operation.report as unknown as Readonly<Record<string, unknown>>
+    const expectedBindings = expectedPlanBindings(runRequest, current.selectedDonorSha256, operation.output.sha256)
     if (
       !/^outputs\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(operation.output.applicationPath) ||
       operation.output.applicationPath.includes("..") ||
@@ -924,10 +1103,11 @@ export const recordOperation = (
       sha256(operation.output.body) !== operation.output.sha256 ||
       Object.keys(reportDocument).sort().join(",") !== "baselineSha256,donorSha256,exactCopySha256,outputSha256,regionSha256" ||
       !Object.values(reportDocument).every((value) => typeof value === "string" && isSha256(value)) ||
-      operation.report.donorSha256 !== current.selectedDonorSha256 ||
-      operation.report.outputSha256 !== operation.output.sha256
+      current.evidence.some((item) =>
+        item.applicationPath.startsWith("outputs/") && item.sha256 === operation.output.sha256) ||
+      canonicalJson(operation.report as unknown as JsonValue) !== canonicalJson(expectedBindings as unknown as JsonValue)
     ) {
-      return yield* Effect.fail(new RunRecordError("EVIDENCE_HASH_MISMATCH", "Assembly evidence must bind hash-locked inputs, the selected donor, and its output.", "repair-evidence"))
+      return yield* Effect.fail(new RunRecordError("EVIDENCE_HASH_MISMATCH", "Assembly evidence must bind the immutable plan, selected donor, and distinct assembled output.", "repair-evidence"))
     }
     const reportBytes = bytes(canonicalJson(operation.report as unknown as JsonValue))
     const reportSha256 = sha256(reportBytes)
@@ -964,16 +1144,51 @@ export const recordOperation = (
     return { _tag: "Recorded" as const, view: next }
   }
   if (operation._tag === "CommitChecks") {
-    if (current.phase !== "assembly_completed" || current.assemblyOutputSha256 === undefined) {
+    if (
+      current.phase !== "assembly_completed" || current.assemblyOutputSha256 === undefined ||
+      current.selectedDonorSha256 === undefined
+    ) {
       return yield* Effect.fail(new RunRecordError("ILLEGAL_TRANSITION", "Checks require persisted Assembly evidence."))
     }
+    const expectedBindings = expectedPlanBindings(runRequest, current.selectedDonorSha256, current.assemblyOutputSha256)
+    const donorEvidence = current.evidence.find((item) =>
+      item.applicationPath.startsWith("outputs/") && item.sha256 === current.selectedDonorSha256)
+    const candidateEvidence = current.evidence.find((item) => item.sha256 === current.assemblyOutputSha256)
+    const donorBytes = donorEvidence === undefined ? undefined : stored.evidence[donorEvidence.applicationPath]
+    const candidateBytes = candidateEvidence === undefined ? undefined : stored.evidence[candidateEvidence.applicationPath]
+    if (
+      donorBytes === undefined || candidateBytes === undefined ||
+      !isSha256(operation.baseline.sha256) ||
+      sha256(operation.baseline.body) !== operation.baseline.sha256 ||
+      operation.baseline.sha256 !== expectedBindings.baselineSha256
+    ) {
+      return yield* Effect.fail(new RunRecordError(
+        "EVIDENCE_HASH_MISMATCH",
+        "Checks require the exact immutable baseline and persisted donor and assembled candidate bytes.",
+        "repair-evidence",
+      ))
+    }
+    const recomputed = yield* Effect.try({
+      try: () => recomputeChecks(runRequest, operation.baseline.body, donorBytes, candidateBytes),
+      catch: (error) => error instanceof RunRecordError
+        ? error
+        : new RunRecordError("CHECKS_NOT_PASSED", "Fidelity Checks could not be recomputed.", "repair-evidence"),
+    })
     const document = {
+      algorithm: verificationAlgorithm,
       candidateSha256: operation.candidateSha256,
       checks: operation.checks,
       classification: operation.classification,
+      inputs: {
+        baselineSha256: expectedBindings.baselineSha256,
+        candidateSha256: expectedBindings.outputSha256,
+        donorSha256: expectedBindings.donorSha256,
+        exactCopySha256: expectedBindings.exactCopySha256,
+        regionSha256: expectedBindings.regionSha256,
+      },
     }
     yield* Effect.try({
-      try: () => validateChecksDocument(document, current.assemblyOutputSha256!),
+      try: () => validateChecksDocument(document, expectedBindings, recomputed),
       catch: (error) => error instanceof RunRecordError
         ? error
         : new RunRecordError("CHECKS_NOT_PASSED", "Checks evidence could not be validated.", "repair-evidence"),
@@ -981,6 +1196,8 @@ export const recordOperation = (
     const checksBytes = bytes(canonicalJson(document as unknown as JsonValue))
     const evidenceSha256 = sha256(checksBytes)
     const applicationPath = "checks.json"
+    const baselinePath = "inputs/baseline-reference"
+    yield* store.writeEvidence(operation.runId, baselinePath, operation.baseline.body)
     yield* store.writeEvidence(operation.runId, applicationPath, checksBytes)
     const clock = yield* RunRecordClock
     const timestamp = yield* clock.now()
@@ -997,11 +1214,16 @@ export const recordOperation = (
         sha256: evidenceSha256,
         byteLength: checksBytes.byteLength,
         candidateSha256: operation.candidateSha256,
+        baselinePath,
+        baselineSha256: operation.baseline.sha256,
+        baselineByteLength: operation.baseline.body.byteLength,
+        operationSha256: checksOperationSha256(operation),
       },
     })
     yield* store.appendEvent(operation.runId, current.chainHeadSha256, encodeEvent(event))
     const next = replay(operation.runId, stored.request, [...events, event], {
       ...stored.evidence,
+      [baselinePath]: operation.baseline.body,
       [applicationPath]: checksBytes,
     })
     yield* store.writeState(operation.runId, encodeView(next))
@@ -1133,6 +1355,39 @@ export const loadRun = (
     yield* store.writeState(runId, encodeView(view))
   }
   return view
+})
+
+export const readRunDiagnostics = (
+  runId: string,
+): Effect.Effect<RunRecordDiagnostics, RunRecordError, RunRecordStoreService> => Effect.gen(function*() {
+  if (!/^run-[a-f0-9]{24}$/.test(runId)) {
+    return yield* Effect.fail(new RunRecordError("RUN_NOT_FOUND", "The Run identity is invalid."))
+  }
+  const store = yield* RunRecordStore
+  const stored = yield* store.read(runId)
+  const events = yield* Effect.try({
+    try: () => parseEvents(stored.events),
+    catch: (error) => error instanceof RunRecordError
+      ? error
+      : new RunRecordError("EVENT_CHAIN_BROKEN", "The event journal could not be decoded.", "repair-evidence"),
+  })
+  const view = yield* Effect.try({
+    try: () => replay(runId, stored.request, events, stored.evidence),
+    catch: (error) => error instanceof RunRecordError
+      ? error
+      : new RunRecordError("EVENT_CHAIN_BROKEN", "The event journal could not be replayed.", "repair-evidence"),
+  })
+  yield* Effect.try({
+    try: () => assertDerivedViewConsistent(stored, events, view),
+    catch: (error) => error instanceof RunRecordError
+      ? error
+      : new RunRecordError("DERIVED_VIEW_CONTRADICTION", "The derived state view could not be read.", "repair-evidence"),
+  })
+  return Object.freeze({
+    request: Uint8Array.from(stored.request),
+    events: Uint8Array.from(stored.events),
+    view,
+  })
 })
 
 export const readRunEvidence = (

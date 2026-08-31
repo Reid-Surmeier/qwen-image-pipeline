@@ -37,6 +37,11 @@ export type FidelityCheckInput = Readonly<{
   measured: number
 }>
 
+export type BaselineEvidenceInput = Readonly<{
+  body: Uint8Array
+  sha256: string
+}>
+
 export type RecordOperation =
   | Readonly<{
       _tag: "SubmissionMayHaveStarted"
@@ -80,6 +85,7 @@ export type RecordOperation =
       operationId: string
       candidateSha256: string
       classification: "verified-candidate"
+      baseline: BaselineEvidenceInput
       checks: ReadonlyArray<FidelityCheckInput>
     }>
   | Readonly<{
@@ -148,6 +154,12 @@ export type StoredRunRecord = Readonly<{
   events: Uint8Array
   state?: Uint8Array
   evidence: Readonly<Record<string, Uint8Array>>
+}>
+
+export type RunRecordDiagnostics = Readonly<{
+  request: Uint8Array
+  events: Uint8Array
+  view: RunRecordView
 }>
 
 export type StoreOperation =

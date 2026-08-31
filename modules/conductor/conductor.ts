@@ -11,9 +11,10 @@ import {
 } from "../run-contract/index.js"
 import {
   readEvidence,
+  readDiagnostics,
   record,
   reserve,
-  type RunRecordView,
+  type RunRecordDiagnostics,
 } from "../run-record/index.js"
 import { verify } from "../verification/index.js"
 import type {
@@ -39,6 +40,21 @@ const asConductorError = (
   code: ConductorErrorCode,
   message: string,
 ) => (error: unknown): ConductorError => new ConductorError(code, message, namedCause(error))
+
+const isNormalizedRgba = (bytes: Uint8Array): boolean => {
+  try {
+    const value = JSON.parse(Buffer.from(bytes).toString("utf8")) as Record<string, unknown>
+    const { width, height, pixels } = value
+    return (
+      typeof width === "number" && Number.isSafeInteger(width) && width > 0 &&
+      typeof height === "number" && Number.isSafeInteger(height) && height > 0 &&
+      Array.isArray(pixels) && pixels.length === width * height * 4 &&
+      pixels.every((channel) => typeof channel === "number" && Number.isInteger(channel) && channel >= 0 && channel <= 255)
+    )
+  } catch {
+    return false
+  }
+}
 
 const spendRisk = "Planning made no provider request, created no attempt, and spent $0. A later advance may spend up to the locked ceiling."
 
@@ -208,39 +224,39 @@ export const planObjective = (
   )
 }
 
-const humanDecision = (view: RunRecordView): AdvanceDecision => ({
+const humanDecision = (diagnostics: RunRecordDiagnostics, objective: string): AdvanceDecision => ({
   _tag: "HumanDecisionRequired",
-  runId: view.runId,
+  runId: diagnostics.view.runId,
   decision: {
     kind: "donor-choice",
-    candidateSha256s: view.donorCandidateSha256s ?? [],
+    candidateSha256s: diagnostics.view.donorCandidateSha256s ?? [],
   },
   normalView: {
-    objective: "Choose which generated donor should supply pixels inside the declared Assembly region.",
+    objective,
     evidence: "Generation evidence is durable, but the raw output is only a donor and cannot be the final candidate.",
     nextAction: "Inspect the persisted donor candidates and advance this same Run with one selected SHA-256.",
     spendRisk: "The one planned provider request may already be spent; this Run will never submit it again.",
     humanDecision: "A human must choose one persisted donor before deterministic Assembly can continue.",
   },
-  diagnostics: view,
+  diagnostics,
 })
 
-const verifiedDecision = (view: RunRecordView): AdvanceDecision => {
+const verifiedDecision = (diagnostics: RunRecordDiagnostics, objective: string): AdvanceDecision => {
   return {
     _tag: "VerifiedCandidate",
-    runId: view.runId,
+    runId: diagnostics.view.runId,
     candidate: {
       applicationPath: "outputs/assembled.rgba.json",
-      sha256: view.assemblyOutputSha256!,
+      sha256: diagnostics.view.assemblyOutputSha256!,
     },
     normalView: {
-      objective: "Produce one reference-preserving Qwen edit through deterministic Assembly.",
+      objective,
       evidence: "Assembly and all ordered Fidelity Checks passed against the hash-locked baseline and selected donor.",
       nextAction: "Review the assembled candidate visually; do not substitute the raw generated donor.",
       spendRisk: "No further provider request is allowed on this Run.",
       humanDecision: "Subjective final visual approval remains with the human owner.",
     },
-    diagnostics: view,
+    diagnostics,
   }
 }
 
@@ -264,7 +280,11 @@ export const advanceRun = (
           applicationPath: reference.applicationPath,
           sha256: reference.sha256,
           payloadDestination: reference.payloadDestination,
-          mediaType: reference.kind === "video" ? "video/mp4" as const : "image/png" as const,
+          mediaType: reference.kind === "video"
+            ? "video/mp4" as const
+            : isNormalizedRgba(snapshot.bytes)
+              ? "application/vnd.qwen.rgba+json" as const
+              : "image/png" as const,
           bytes: snapshot.bytes,
         })),
         Effect.mapError(asConductorError(
@@ -343,11 +363,26 @@ export const advanceRun = (
         "The donor-choice checkpoint could not be persisted.",
       )))
       current = opened.view
+      const diagnostics = yield* readDiagnostics(current.runId).pipe(Effect.mapError(asConductorError(
+        "RUN_RECORD_FAILURE",
+        "The donor-choice diagnostics could not be replayed.",
+      )))
+      return humanDecision(diagnostics, request.objective)
     }
 
-    if (current.phase === "verified_candidate") return verifiedDecision(current)
+    if (current.phase === "verified_candidate") {
+      const diagnostics = yield* readDiagnostics(current.runId).pipe(Effect.mapError(asConductorError(
+        "RUN_RECORD_FAILURE",
+        "The Verified Candidate diagnostics could not be replayed.",
+      )))
+      return verifiedDecision(diagnostics, request.objective)
+    }
     if (current.phase === "awaiting_donor_choice" && command.selectedDonorSha256 === undefined) {
-      return humanDecision(current)
+      const diagnostics = yield* readDiagnostics(current.runId).pipe(Effect.mapError(asConductorError(
+        "RUN_RECORD_FAILURE",
+        "The donor-choice diagnostics could not be replayed.",
+      )))
+      return humanDecision(diagnostics, request.objective)
     }
     if (current.phase === "awaiting_donor_choice") {
       if (!current.donorCandidateSha256s?.includes(command.selectedDonorSha256!)) {
@@ -438,6 +473,7 @@ export const advanceRun = (
       donor: { body: donorBytes, sha256: selectedDonorSha256 },
       candidate: { body: candidateBytes, sha256: current.assemblyOutputSha256! },
       ownedRegion: request.assemblyPlan.ownedRegion,
+      exactCopy: request.assemblyPlan.exactCopy,
       assemblyRequired: true,
       candidateKind: "assembled",
     }).pipe(Effect.mapError(asConductorError(
@@ -450,10 +486,15 @@ export const advanceRun = (
       operationId: "conductor-commit-checks",
       candidateSha256: checked.candidateSha256,
       classification: checked.classification,
+      baseline: { body: baseline.bytes, sha256: baseline.sha256 },
       checks: checked.checks,
     }).pipe(Effect.mapError(asConductorError(
       "RUN_RECORD_FAILURE",
       "The ordered Fidelity Check evidence could not be persisted.",
     )))
-    return verifiedDecision(committed.view)
+    const diagnostics = yield* readDiagnostics(committed.view.runId).pipe(Effect.mapError(asConductorError(
+      "RUN_RECORD_FAILURE",
+      "The Verified Candidate diagnostics could not be replayed.",
+    )))
+    return verifiedDecision(diagnostics, request.objective)
   })

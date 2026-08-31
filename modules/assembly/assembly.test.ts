@@ -23,7 +23,7 @@ test("assembles a donor and hash-locked Exact Copy only inside the owned region"
     90, 90, 90, 255, 80, 80, 80, 255,
     70, 70, 70, 255, 60, 60, 60, 255,
   ])
-  const copyCore = { x: 1, y: 0, rgba: [80, 80, 80, 255] as const }
+  const copyCore = { x: 1, y: 0, rgba: [5, 6, 7, 255] as const }
   const exactCopy: ExactCopyPixel = {
     ...copyCore,
     sha256: sha256(JSON.stringify(copyCore)),
@@ -38,7 +38,7 @@ test("assembles a donor and hash-locked Exact Copy only inside the owned region"
   assert.deepEqual(JSON.parse(Buffer.from(result.output.body).toString("utf8")), {
     height: 2,
     pixels: [
-      10, 10, 10, 255, 80, 80, 80, 255,
+      10, 10, 10, 255, 5, 6, 7, 255,
       30, 30, 30, 255, 60, 60, 60, 255,
     ],
     width: 2,

@@ -1,5 +1,5 @@
 import type { PlannedRun } from "../run-contract/index.js"
-import type { RunRecordView } from "../run-record/index.js"
+import type { RunRecordDiagnostics } from "../run-record/index.js"
 import type { PlanningRefusal } from "./errors.js"
 
 export const PROJECT_CONTRACT_PATH = ".qwen-pipeline/project-contract.json"
@@ -43,7 +43,7 @@ export type AdvanceDecision =
         candidateSha256s: ReadonlyArray<string>
       }>
       normalView: NormalView
-      diagnostics: RunRecordView
+      diagnostics: RunRecordDiagnostics
     }>
   | Readonly<{
       _tag: "VerifiedCandidate"
@@ -53,5 +53,5 @@ export type AdvanceDecision =
         sha256: string
       }>
       normalView: NormalView
-      diagnostics: RunRecordView
+      diagnostics: RunRecordDiagnostics
     }>
