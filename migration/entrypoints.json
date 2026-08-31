@@ -1,0 +1,134 @@
+{
+  "schemaVersion": 1,
+  "entries": [
+    {
+      "surface": "comfyui.QwenImage3Edit",
+      "disposition": "compatibility adapter",
+      "replacement": "Conductor.plan and Conductor.advance",
+      "retirementCondition": "Issue #29 migrates the node and proves saved-workflow compatibility."
+    },
+    {
+      "surface": "comfyui.QwenImage3Render",
+      "disposition": "compatibility adapter",
+      "replacement": "Conductor.plan and Conductor.advance",
+      "retirementCondition": "Issue #29 migrates the node and proves saved-workflow compatibility."
+    },
+    {
+      "surface": "comfyui.QwenImage3TextToImage",
+      "disposition": "compatibility adapter",
+      "replacement": "Conductor.plan and Conductor.advance",
+      "retirementCondition": "Issue #29 migrates the node and proves saved-workflow compatibility."
+    },
+    {
+      "surface": "comfyui.ReferenceRegionComposite",
+      "disposition": "retained implementation",
+      "replacement": "Assembly.assemble",
+      "retirementCondition": "Issue #29 proves saved-workflow compatibility before direct node access is retired."
+    },
+    {
+      "surface": "python-api.qwen_ui_pipeline.comfyui_workflow.build_comfyui_api_workflow",
+      "disposition": "retained implementation",
+      "replacement": "Generation.prepare",
+      "retirementCondition": "Issue #29 places the builder behind the versioned adapter before direct access is retired."
+    },
+    {
+      "surface": "python-api.qwen_ui_pipeline.comfyui_workflow.build_comfyui_assembly_workflow",
+      "disposition": "retained implementation",
+      "replacement": "Assembly.assemble",
+      "retirementCondition": "Issue #29 proves equivalent deterministic Assembly before direct access is retired."
+    },
+    {
+      "surface": "python-api.qwen_ui_pipeline.comfyui_workflow.build_comfyui_component_extraction_workflow",
+      "disposition": "retained implementation",
+      "replacement": "Assembly.assemble",
+      "retirementCondition": "Issue #29 proves equivalent deterministic extraction before direct access is retired."
+    },
+    {
+      "surface": "python-api.qwen_ui_pipeline.comfyui_workflow.build_partner_edit_workflow",
+      "disposition": "retained implementation",
+      "replacement": "Conductor.plan",
+      "retirementCondition": "Issue #29 places saved Partner edit workflows behind Conductor planning."
+    },
+    {
+      "surface": "python-api.qwen_ui_pipeline.comfyui_workflow.build_partner_text_workflow",
+      "disposition": "retained implementation",
+      "replacement": "Conductor.plan",
+      "retirementCondition": "Issue #29 places saved Partner text workflows behind Conductor planning."
+    },
+    {
+      "surface": "python-api.qwen_ui_pipeline.providers.alibaba.AlibabaImageClient.generate",
+      "disposition": "Git-history only",
+      "replacement": "Generation.invoke through OpenRouter",
+      "retirementCondition": "Issue #28 removes direct Alibaba reachability after compatibility evidence is preserved."
+    },
+    {
+      "surface": "python-api.qwen_ui_pipeline.providers.alibaba.build_alibaba_request",
+      "disposition": "neutral fixture",
+      "replacement": "Generation.prepare through the OpenRouter adapter protocol",
+      "retirementCondition": "Issue #28 preserves old request-read fixtures before the direct builder is retired."
+    },
+    {
+      "surface": "python-api.qwen_ui_pipeline.providers.openrouter.OpenRouterImageClient.generate",
+      "disposition": "retained implementation",
+      "replacement": "Generation.invoke",
+      "retirementCondition": "Issue #28 makes Generation the only caller; Issue #30 removes direct public reachability."
+    },
+    {
+      "surface": "python-api.qwen_ui_pipeline.providers.openrouter.build_openrouter_request",
+      "disposition": "retained implementation",
+      "replacement": "Generation.prepare",
+      "retirementCondition": "Issue #28 places request construction behind the versioned adapter and preserves old read fixtures."
+    },
+    {
+      "surface": "python-api.qwen_ui_pipeline.providers.openrouter.write_run_artifacts",
+      "disposition": "compatibility adapter",
+      "replacement": "Run Record.reserve and Run Record.record",
+      "retirementCondition": "Issue #28 migrates Python callers to the sole Run Record writer before removal."
+    },
+    {
+      "surface": "python-api.qwen_ui_pipeline.providers.router.generate_with_provider",
+      "disposition": "compatibility adapter",
+      "replacement": "Conductor.advance",
+      "retirementCondition": "Issues #28 and #29 migrate all Python and ComfyUI callers; Issue #30 removes the bypass."
+    },
+    {
+      "surface": "python-console.qwen-ui-pipeline",
+      "disposition": "compatibility adapter",
+      "replacement": "Conductor.plan and Conductor.advance",
+      "retirementCondition": "Issue #28 migrates normal execution and proves saved-input compatibility."
+    },
+    {
+      "surface": "python-console.qwen-worker-capacity",
+      "disposition": "retained implementation",
+      "replacement": "qwen_ui_pipeline.capacity:main diagnostic interface",
+      "retirementCondition": "Retain while capacity planning remains provider-free and outside normal Run execution."
+    }
+  ],
+  "directProviderBypasses": [
+    {
+      "path": "qwen_ui_pipeline/cli.py:main->generate_with_provider",
+      "replacement": "Conductor.advance",
+      "retirementCondition": "Issue #28 migrates the Python CLI caller."
+    },
+    {
+      "path": "qwen_ui_pipeline/comfyui_node.py:QwenImage3Render.render->generate_with_provider",
+      "replacement": "Conductor.advance",
+      "retirementCondition": "Issue #29 migrates the saved-workflow-compatible node."
+    },
+    {
+      "path": "qwen_ui_pipeline/comfyui_node.py:_partner_render->generate_with_provider",
+      "replacement": "Conductor.advance",
+      "retirementCondition": "Issue #29 migrates both Partner-compatible nodes."
+    },
+    {
+      "path": "qwen_ui_pipeline/providers/router.py:generate_with_provider->alibaba_client.generate",
+      "replacement": "Generation.invoke through OpenRouter",
+      "retirementCondition": "Issue #28 removes the direct Alibaba route."
+    },
+    {
+      "path": "qwen_ui_pipeline/providers/router.py:generate_with_provider->openrouter_client.generate",
+      "replacement": "Generation.invoke",
+      "retirementCondition": "Issue #28 makes Generation the only provider adapter caller."
+    }
+  ]
+}

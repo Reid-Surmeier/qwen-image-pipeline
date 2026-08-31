@@ -24,6 +24,7 @@ SAFE_ENVIRONMENT_NAMES = (
 
 PYTHON_COMMANDS = {
     ("scripts/validate_successor_governance.py",),
+    ("scripts/validate_migration_ledger.py",),
     ("scripts/generate_module_map.py", "--check"),
     ("-m", "unittest", "discover", "-s", "tests"),
     ("-m", "compileall", "-q", "qwen_ui_pipeline", "tests", "scripts"),

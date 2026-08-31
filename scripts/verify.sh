@@ -33,6 +33,7 @@ run_check() {
 
 run_check "module map" "${DETERMINISTIC_RUNNER[@]}" @python scripts/generate_module_map.py --check
 run_check "successor governance" "${DETERMINISTIC_RUNNER[@]}" @python scripts/validate_successor_governance.py
+run_check "migration ledger" "${DETERMINISTIC_RUNNER[@]}" @python scripts/validate_migration_ledger.py
 run_check "python unit tests" "${DETERMINISTIC_RUNNER[@]}" @python -m unittest discover -s tests
 run_check "node tests" "${DETERMINISTIC_RUNNER[@]}" @node --test tests/figma-mcp-client.test.mjs tests/figma-oauth-bootstrap.test.mjs
 run_check "control-plane typecheck" "${DETERMINISTIC_RUNNER[@]}" @node node_modules/typescript/bin/tsc -p tsconfig.json

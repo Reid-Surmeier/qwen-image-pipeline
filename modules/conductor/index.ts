@@ -8,6 +8,12 @@ import type {
 import type { GenerationAdapterService } from "../generation/index.js"
 import type { RunRecordClockService, RunRecordStoreService } from "../run-record/index.js"
 import { advanceRun, planObjective } from "./conductor.js"
+export { compatibilityAdvance, compatibilityPlan } from "./compatibility.js"
+export type {
+  CompatibilityMetadata,
+  CompatibilityResult,
+  CompatibilitySurface,
+} from "./compatibility.js"
 import type { AdvanceCommand, AdvanceDecision, PlanCommand, PlanDecision } from "./types.js"
 import type { ConductorError } from "./errors.js"
 
