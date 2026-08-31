@@ -62,3 +62,23 @@ test("refuses a changed baseline or Exact Copy before composition", async () => 
   })))
   assert.equal(error.code, "ASSEMBLY_INPUT_HASH_MISMATCH")
 })
+
+test("refuses malformed Exact Copy coordinates and channel counts", async () => {
+  const valid = raster(new Array(16).fill(0))
+  const malformedCores: ReadonlyArray<Readonly<{ x: number; y: number; rgba: ReadonlyArray<number> }>> = [
+    { x: 0.5, y: 0, rgba: [1, 2, 3, 4] },
+    { x: 0, y: Number.MAX_SAFE_INTEGER + 1, rgba: [1, 2, 3, 4] },
+    { x: 0, y: 0, rgba: [1, 2, 3] },
+    { x: 0, y: 0, rgba: [1, 2, 3, 4, 5] },
+  ]
+
+  for (const core of malformedCores) {
+    const error = await Effect.runPromise(Effect.flip(assemble({
+      baseline: valid,
+      donor: valid,
+      ownedRegion: { x: 0, y: 0, width: 1, height: 1 },
+      exactCopy: [{ ...core, sha256: sha256(JSON.stringify(core)) } as unknown as ExactCopyPixel],
+    })))
+    assert.equal(error.code, "EXACT_COPY_HASH_MISMATCH")
+  }
+})

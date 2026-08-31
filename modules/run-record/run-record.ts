@@ -27,19 +27,17 @@ type JsonValue = null | boolean | number | string | ReadonlyArray<JsonValue> | {
 }
 
 interface SubmissionPermitConsumer {
-  readonly use: <Success, Error, Requirements>(
+  readonly consume: (
     binding: SubmissionBinding,
-    submission: Effect.Effect<Success, Error, Requirements>,
-  ) => Effect.Effect<Success, Error | RunRecordError, Requirements>
+  ) => Effect.Effect<void, RunRecordError>
 }
 
 const submissionPermitConsumers = new WeakMap<SubmissionPermit, SubmissionPermitConsumer>()
 
-export const consumeSubmissionPermit = <Success, Error, Requirements>(
+export const consumeSubmissionPermit = (
   permit: SubmissionPermit,
   binding: SubmissionBinding,
-  submission: Effect.Effect<Success, Error, Requirements>,
-): Effect.Effect<Success, Error | RunRecordError, Requirements> => Effect.suspend(() => {
+): Effect.Effect<void, RunRecordError> => Effect.suspend(() => {
   if (permit === null || typeof permit !== "object") {
     return Effect.fail(new RunRecordError(
       "SUBMISSION_PERMIT_INVALID",
@@ -54,7 +52,7 @@ export const consumeSubmissionPermit = <Success, Error, Requirements>(
       "The Submission Permit was not issued by this Run Record process.",
       "reconcile",
     ))
-    : consumer.use(binding, submission)
+    : consumer.consume(binding)
 })
 
 type RunEvent = Readonly<{
@@ -1071,7 +1069,10 @@ export const recordOperation = (
       return yield* Effect.fail(new RunRecordError("ILLEGAL_TRANSITION", "A donor choice requires persisted generated output evidence."))
     }
     if (
+      !Array.isArray(operation.candidateSha256s) ||
       operation.candidateSha256s.length === 0 ||
+      Array.from({ length: operation.candidateSha256s.length }, (_, index) => operation.candidateSha256s[index])
+        .some((candidate) => candidate === undefined) ||
       new Set(operation.candidateSha256s).size !== operation.candidateSha256s.length ||
       operation.candidateSha256s.some((candidate) =>
         !isSha256(candidate) || !current.evidence.some((item) =>
@@ -1327,14 +1328,9 @@ export const recordOperation = (
   yield* store.appendEvent(operation.runId, current.chainHeadSha256, encodeEvent(event))
   const next = replay(operation.runId, stored.request, [...events, event])
   let consumed = false
-  const usePermit = <Success, Error, Requirements>(
+  const consumePermit = (
     binding: SubmissionBinding,
-    submission: Effect.Effect<Success, Error, Requirements>,
-  ): Effect.Effect<Success, Error | RunRecordError, Requirements> => Effect.suspend<
-    Success,
-    Error | RunRecordError,
-    Requirements
-  >(() => {
+  ): Effect.Effect<void, RunRecordError> => Effect.suspend(() => {
     if (
       binding.requestSha256 !== next.requestSha256 ||
       binding.payloadSha256 !== next.payloadSha256
@@ -1353,7 +1349,7 @@ export const recordOperation = (
       ))
     }
     consumed = true
-    return submission
+    return Effect.void
   })
   const permit = immutable({
     runId: operation.runId,
@@ -1361,7 +1357,7 @@ export const recordOperation = (
     requestSha256: next.requestSha256,
     payloadSha256: next.payloadSha256,
   })
-  submissionPermitConsumers.set(permit, { use: usePermit })
+  submissionPermitConsumers.set(permit, { consume: consumePermit })
   return {
     _tag: "SubmissionPermitIssued" as const,
     permit,

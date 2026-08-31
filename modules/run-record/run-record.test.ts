@@ -167,19 +167,16 @@ test("persists submission uncertainty before issuing one non-replayable permit",
   assert.equal(marked._tag, "SubmissionPermitIssued")
   if (marked._tag !== "SubmissionPermitIssued") return
 
-  let adapterCalls = 0
-  const fakeAdapter = (permit: typeof marked.permit) => consumeSubmission(permit, {
+  const consume = (permit: typeof marked.permit) => consumeSubmission(permit, {
     requestSha256: permit.requestSha256,
     payloadSha256: permit.payloadSha256,
-  }, Effect.gen(function*() {
-    adapterCalls += 1
-    const visibleBeforeCall = yield* load(reserved.runId)
-    assert.equal(visibleBeforeCall.phase, "submission_may_have_started")
-    assert.equal(visibleBeforeCall.spendState, "possibly_spent")
-    assert.equal(visibleBeforeCall.retryState, "reconcile-only")
-  })).pipe(Effect.provide(memory.layer))
-  await Effect.runPromise(fakeAdapter(marked.permit))
-  const reusedPermit = await Effect.runPromise(Effect.flip(fakeAdapter(marked.permit)))
+  }).pipe(Effect.provide(memory.layer))
+  await Effect.runPromise(consume(marked.permit))
+  const visibleAfterConsumption = await Effect.runPromise(load(reserved.runId).pipe(Effect.provide(memory.layer)))
+  assert.equal(visibleAfterConsumption.phase, "submission_may_have_started")
+  assert.equal(visibleAfterConsumption.spendState, "possibly_spent")
+  assert.equal(visibleAfterConsumption.retryState, "reconcile-only")
+  const reusedPermit = await Effect.runPromise(Effect.flip(consume(marked.permit)))
   assert.equal(reusedPermit.code, "DUPLICATE_SUBMISSION_BLOCKED")
 
   const replay = await Effect.runPromise(
@@ -193,8 +190,6 @@ test("persists submission uncertainty before issuing one non-replayable permit",
     ),
   )
   assert.equal(replay._tag, "ReplayObserved")
-  assert.equal(adapterCalls, 1)
-
   const duplicate = await Effect.runPromise(
     Effect.flip(record({
       _tag: "SubmissionMayHaveStarted",
@@ -532,18 +527,14 @@ test("interruption at every persistence and network seam never creates a second 
     operationId: "network-started",
   }))
   assert.equal(networkPermit._tag, "SubmissionPermitIssued")
-  let submissionCalls = 0
-  const ambiguousFakeAdapter = () => {
+  const consumeNetworkPermit = () => {
     if (networkPermit._tag !== "SubmissionPermitIssued") throw new Error("fixture permit missing")
     return consumeSubmission(networkPermit.permit, {
       requestSha256: networkPermit.permit.requestSha256,
       payloadSha256: networkPermit.permit.payloadSha256,
-    }, Effect.sync(() => {
-      submissionCalls += 1
-      throw new Error("simulated lost response")
-    }))
+    })
   }
-  await assert.rejects(Effect.runPromise(ambiguousFakeAdapter()), /lost response/)
+  await Effect.runPromise(consumeNetworkPermit())
   assert.equal((await execute(afterNetwork, load(reservedAfterNetwork.runId))).phase, "submission_may_have_started")
   const secondPermitError = await Effect.runPromise(Effect.flip(
     record({
@@ -556,7 +547,6 @@ test("interruption at every persistence and network seam never creates a second 
     ),
   ))
   assert.equal(secondPermitError.code, "DUPLICATE_SUBMISSION_BLOCKED")
-  assert.equal(submissionCalls, 1)
 
   const evidenceBody = Buffer.from('{"request_id":"fake-interruption","status":"accepted"}', "utf8")
   const evidenceSha256 = createHash("sha256").update(evidenceBody).digest("hex")
@@ -568,7 +558,6 @@ test("interruption at every persistence and network seam never creates a second 
       runId: reserved.runId,
       operationId: `submit-before-${failedWrite}`,
     }))
-    submissionCalls += 1
     await Effect.runPromise(memory.failNext(failedWrite))
     const persistenceError = await Effect.runPromise(Effect.flip(
       record({
@@ -597,7 +586,6 @@ test("interruption at every persistence and network seam never creates a second 
       assert.equal(recovered.view.phase, "provider_evidence_received")
     }
   }
-  assert.equal(submissionCalls, 4)
 })
 
 test("a fresh process reloads the same hash-chained Run from an application filesystem", async (context) => {
@@ -1057,6 +1045,16 @@ test("records a donor-choice checkpoint and selects only a persisted output on t
     selectedSha256: outputSha256,
   }))))
   assert.equal(prematureSelection.code, "ILLEGAL_TRANSITION")
+
+  const sparseCandidates = new Array<string>(1)
+  const sparseCheckpoint = await Effect.runPromise(Effect.flip(provide(record({
+    _tag: "OpenDonorChoice",
+    runId: reserved.runId,
+    operationId: "sparse-donor-choice",
+    candidateSha256s: sparseCandidates,
+  }))))
+  assert.equal(sparseCheckpoint.code, "DONOR_NOT_PERSISTED")
+  assert.equal((await Effect.runPromise(provide(load(reserved.runId)))).phase, "generated_outputs_received")
 
   const checkpoint = await Effect.runPromise(provide(record({
     _tag: "OpenDonorChoice",

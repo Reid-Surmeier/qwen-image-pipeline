@@ -66,8 +66,10 @@ export const assembleRaster = (input: AssemblyInput): Effect.Effect<AssemblyResu
         const core = { x: copy.x, y: copy.y, rgba: copy.rgba }
         if (
           sha256(JSON.stringify(core)) !== copy.sha256 ||
+          !Number.isSafeInteger(copy.x) || !Number.isSafeInteger(copy.y) ||
           copy.x < region.x || copy.y < region.y ||
           copy.x >= region.x + region.width || copy.y >= region.y + region.height ||
+          !Array.isArray(copy.rgba) || copy.rgba.length !== 4 ||
           copy.rgba.some((channel) => !Number.isInteger(channel) || channel < 0 || channel > 255)
         ) {
           throw new AssemblyError("EXACT_COPY_HASH_MISMATCH", "Exact Copy must be hash-locked inside the owned region.")

@@ -256,10 +256,11 @@ export const invokeGeneration = (
         ))),
       )
     })
-    const untrustedResult: unknown = yield* consumeSubmission(permit, {
+    yield* consumeSubmission(permit, {
       requestSha256: validatedPrepared.requestSha256,
       payloadSha256: validatedPrepared.payloadSha256,
-    }, submission)
+    })
+    const untrustedResult: unknown = yield* submission
     const result = yield* Effect.try({
       try: () => normalizeAdapterResult(untrustedResult),
       catch: () => new GenerationError("ADAPTER_RESULT_INVALID", "The adapter returned a malformed result."),
