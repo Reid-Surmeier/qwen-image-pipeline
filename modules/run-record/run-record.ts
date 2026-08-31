@@ -2871,7 +2871,10 @@ export const recordOperation = (
         ? proof?.module === "Verification" ? current.phase === "assembly_completed" : current.phase === "generated_outputs_received"
         : current.phase === "submission_may_have_started" ||
           current.phase === "provider_evidence_received" ||
-          (runRequest.mode === "qwen-image" && current.phase === "generated_outputs_received")
+          (
+            runRequest.mode === "qwen-image" && current.phase === "generated_outputs_received" &&
+            current.evidence.filter((item) => item.applicationPath.startsWith("outputs/")).length < runRequest.requestedCount
+          )
     if (!phaseAllowed || !assemblyProofAllowed || !rasterVerificationProofAllowed || !videoVerificationProofAllowed) {
       return yield* Effect.fail(new RunRecordError(
         "ILLEGAL_TRANSITION",

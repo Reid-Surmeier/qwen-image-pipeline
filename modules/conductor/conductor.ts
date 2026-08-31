@@ -833,18 +833,54 @@ export const advanceRun = (
             "The persisted provider response could not be verified and read for recovery.",
           )),
         )
-        const recoveryAttempt = yield* recover(prepared, {
+        const providerEvidence = {
           mediaType: "application/json",
           body: providerBody,
           sha256: providerReceipt.sha256,
-        }).pipe(Effect.match({
-          onFailure: (error) => ({ _tag: "Failure" as const, error }),
-          onSuccess: (value) => ({ _tag: "Success" as const, value }),
-        }))
-        if (recoveryAttempt._tag === "Failure") {
-          return yield* classifyGenerationFailure(current.runId, request.objective, recoveryAttempt.error)
+        } as const
+        const persistedOutputs = current.evidence.filter((item) => item.applicationPath.startsWith("outputs/"))
+        if (persistedOutputs.length === request.requestedCount) {
+          const outputs = yield* Effect.forEach(persistedOutputs, (receipt) =>
+            receipt.mediaType !== "application/vnd.qwen.rgba+json"
+              ? Effect.fail(new ConductorError(
+                  "RUN_RECORD_FAILURE",
+                  "A complete persisted Qwen output has the wrong media type.",
+                ))
+              : readEvidence(current.runId, receipt.applicationPath).pipe(
+                  Effect.map((body) => ({
+                    applicationPath: receipt.applicationPath,
+                    mediaType: "application/vnd.qwen.rgba+json" as const,
+                    body,
+                    sha256: receipt.sha256,
+                  })),
+                  Effect.mapError(asConductorError(
+                    "RUN_RECORD_FAILURE",
+                    "A complete persisted Qwen output could not be verified and read.",
+                  )),
+                ),
+          )
+          generated = {
+            provider: "openrouter",
+            model: request.model,
+            providerEvidence,
+            outputs,
+          }
+        } else {
+          const recoveryAttempt = yield* recover(prepared, providerEvidence).pipe(Effect.match({
+            onFailure: (error) => ({ _tag: "Failure" as const, error }),
+            onSuccess: (value) => ({ _tag: "Success" as const, value }),
+          }))
+          if (recoveryAttempt._tag === "Failure") {
+            return yield* classifyGenerationFailure(current.runId, request.objective, recoveryAttempt.error)
+          }
+          generated = recoveryAttempt.value
         }
-        generated = recoveryAttempt.value
+      }
+      if (generated === undefined) {
+        return yield* Effect.fail(new ConductorError(
+          "RUN_STATE_UNSUPPORTED",
+          "Qwen continuation did not produce or reconstruct the reserved output set.",
+        ))
       }
       for (const [index, output] of generated.outputs.entries()) {
         const persisted = yield* record({

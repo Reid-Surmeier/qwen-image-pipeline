@@ -599,12 +599,15 @@ export const pollSeedanceGeneration = (
       ))
     }
     const adapter = yield* GenerationAdapter
-    if (typeof adapter.pollSeedance !== "function") {
-      return yield* Effect.fail(new GenerationError("ADAPTER_RESULT_INVALID", "The adapter cannot poll Seedance."))
-    }
     const adapterSubmissionEvidence = snapshotProviderEvidence(stableSubmissionEvidence)!
     const untrusted = yield* adapterEffect<unknown>(
-      () => adapter.pollSeedance!(validatedPrepared, jobId, adapterSubmissionEvidence),
+      () => {
+        const poll = adapter.pollSeedance
+        if (typeof poll !== "function") {
+          throw new GenerationError("ADAPTER_RESULT_INVALID", "The adapter cannot poll Seedance.")
+        }
+        return poll.call(adapter, validatedPrepared, jobId, adapterSubmissionEvidence)
+      },
       "The Seedance polling adapter",
     )
     const result = yield* Effect.try({

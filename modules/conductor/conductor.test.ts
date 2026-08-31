@@ -466,11 +466,11 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
       Effect.provideService(RunRecordClock, clock),
     ))
     assert.equal(resumed._tag, "HumanDecisionRequired")
-    assert.equal(recoveryCalls, 1)
+    assert.equal(recoveryCalls, persistOutput ? 0 : 1)
   }
 
-  for (const persistOutput of [false, true]) {
-    const { recoveryMemory: failedRecoveryMemory } = await setupRecovery(persistOutput)
+  {
+    const { recoveryMemory: failedRecoveryMemory } = await setupRecovery(false)
     let failedRecoveryCalls = 0
     const failedRecoveryAdapter: GenerationAdapterService = {
       invoke: () => Effect.die("recovery must not resubmit"),
@@ -499,6 +499,27 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
     const replayedRecovery = await executeFailedRecovery()
     assert.equal(replayedRecovery._tag, "Blocked")
     assert.equal(failedRecoveryCalls, 1)
+  }
+
+  {
+    const { recoveryMemory: completeOutputMemory } = await setupRecovery(true)
+    let recoveryReads = 0
+    const completeOutputAdapter = Object.defineProperty({
+      invoke: () => Effect.die("complete persisted output must not resubmit"),
+    }, "recover", {
+      get: () => {
+        recoveryReads += 1
+        throw new Error("complete persisted output must not inspect recovery")
+      },
+    }) as GenerationAdapterService
+    const resumed = await Effect.runPromise(advance({ run: plannedRun }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(GenerationAdapter, completeOutputAdapter),
+      Effect.provide(completeOutputMemory.layer),
+      Effect.provideService(RunRecordClock, clock),
+    ))
+    assert.equal(resumed._tag, "HumanDecisionRequired")
+    assert.equal(recoveryReads, 0)
   }
 })
 

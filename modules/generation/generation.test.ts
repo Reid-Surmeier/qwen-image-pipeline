@@ -327,6 +327,34 @@ test("submits exact Seedance video once and polls only the same sanitized job id
   assert.equal(submitCalls, 1)
   assert.equal(pollCalls, 2)
 
+  let pollPropertyReads = 0
+  const singleReadPollAdapter = Object.defineProperty({
+    invoke: () => Effect.die("Qwen invocation must not run"),
+  }, "pollSeedance", {
+    get: () => {
+      pollPropertyReads += 1
+      if (pollPropertyReads > 1) throw new Error("Seedance poll method was observed twice")
+      return () => Effect.succeed({
+        status: "pending" as const,
+        provider: "openrouter" as const,
+        model: decision.run.request.model,
+        jobId: "seedance-job-1",
+        providerEvidence: {
+          mediaType: "application/json" as const,
+          body: pendingBody,
+          sha256: sha256(pendingBody),
+        },
+      })
+    },
+  }) as GenerationAdapterService
+  const singleReadPoll = await Effect.runPromise(pollSeedance(
+    prepared,
+    submission.jobId,
+    submission.providerEvidence,
+  ).pipe(Effect.provideService(GenerationAdapter, singleReadPollAdapter)))
+  assert.equal(singleReadPoll.status, "pending")
+  assert.equal(pollPropertyReads, 1)
+
   const contradictoryBody = completedPollBody("seedance-job-1", [{
     applicationPath: "outputs/substituted.mp4",
     mediaType: "video/mp4",
