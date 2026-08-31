@@ -9,6 +9,8 @@ If a sanitized Seedance submission response became write-once durable before its
 
 `plan` discovers the fixed Project Contract and Tool Lock, reads one application-relative Objective, delegates evidence and contract proof, and returns either a Planned Run or a refusal. Both results contain the five-question Normal View. Planning has no Generation, credential, network, Run Record writer, attempt reservation, clock, or randomness capability.
 
+The production path has two explicit roots: `fileApplicationFiles(applicationRoot)` supplies application-owned read-only inputs, `filePlanningIdentity(installedToolArtifactRoot)` derives the installed release identity from verified bytes, and `fileRunRecordLayer(applicationRoot)` discovers the application-owned artifact root from the fixed Project Contract. The application Tool Lock must exactly equal that derived identity before a Planned Run exists. Two applications can use different exact Tool Locks and artifact roots without sharing references, provider receipts, outputs, Assembly evidence, checks, or Run Records. Conductor has no tool-repository artifact destination and cleanup remains an application decision.
+
 Planning refusals and execution terminals use exactly four Machine Outcomes: `verified_candidate`, `human_decision_required`, `blocked`, and `failed`. Every finding carries one correction owner from Reference Planning, Generation, Assembly, Verification, or the application decision owner. These machine results never contain or imply owner Approval.
 
 `advance` re-reads every planned reference before reservation. Missing, changed, or unpreparable evidence returns a Blocked result owned by Reference Planning with no attempt, provider call, or spend. It does not escape as an unowned Effect error.

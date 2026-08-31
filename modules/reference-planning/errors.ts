@@ -25,7 +25,7 @@ export class ApplicationReadError extends Error {
   readonly _tag = "ApplicationReadError"
 
   constructor(
-    readonly code: "APPLICATION_PATH_MISSING" | "APPLICATION_READ_FAILED",
+    readonly code: "APPLICATION_PATH_MISSING" | "APPLICATION_PATH_UNSAFE" | "APPLICATION_READ_FAILED",
     readonly applicationPath: string,
   ) {
     super(`${code}: ${applicationPath}`)

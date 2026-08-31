@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto"
 import { createRequire, syncBuiltinESMExports } from "node:module"
+import { join } from "node:path"
 import { gunzipSync } from "node:zlib"
 
 import { Effect } from "effect"
 
 import {
   ApplicationReadError,
+  filePlanningIdentity,
   type ApplicationFilesService,
   type PlanningIdentityService,
   type RawPlanningDocuments,
@@ -247,14 +249,19 @@ export const malformedAudioTrack = (bytes: Uint8Array): Uint8Array => {
   return result
 }
 
-export const FIXTURE_TOOL = {
-  release: "v0.3.0",
-  commit: "1111111111111111111111111111111111111111",
-  artifactSha256: "2".repeat(64),
-  procedureVersion: "1",
-  runSchemaVersion: "1",
-  adapterProtocolVersion: "1",
-} as const
+export const FIXTURE_IDENTITY = Effect.runSync(filePlanningIdentity(join(
+  process.cwd(), "tests/fixtures/tool-artifacts/v0.3.0",
+)))
+
+export const UPGRADED_FIXTURE_IDENTITY = Effect.runSync(filePlanningIdentity(join(
+  process.cwd(), "tests/fixtures/tool-artifacts/v0.3.1",
+)))
+
+export const UNSUPPORTED_FIXTURE_IDENTITY = Effect.runSync(filePlanningIdentity(join(
+  process.cwd(), "tests/fixtures/tool-artifacts/unsupported",
+)))
+
+export const FIXTURE_TOOL = FIXTURE_IDENTITY.installedTool
 
 export type FixtureMutation = Readonly<{
   objective?: (objective: Record<string, unknown>) => void
@@ -285,6 +292,7 @@ export const makeFixture = (
   const projectContract: Record<string, unknown> = {
     schemaVersion: "1",
     applicationId: "neutral-fixture",
+    artifactRoot: "artifacts/qwen-pipeline",
     referenceRoots: ["references"],
     outputRoot: "generated",
     maximumCount: 4,
@@ -293,6 +301,7 @@ export const makeFixture = (
     procedures: [
       {
         id: "qwen-neutral",
+        version: "1",
         mode: "qwen-image",
         provider: "openrouter",
         model: "qwen/qwen-image-edit",
@@ -308,6 +317,7 @@ export const makeFixture = (
       },
       {
         id: "seedance-neutral",
+        version: "1",
         mode: "seedance-video",
         provider: "openrouter",
         model: "bytedance/seedance-1.0-pro",
@@ -393,7 +403,7 @@ export const makeFixture = (
   }
   return {
     files,
-    identity: { installedTool: FIXTURE_TOOL },
+    identity: FIXTURE_IDENTITY,
     objectivePath,
     documents,
     reads,

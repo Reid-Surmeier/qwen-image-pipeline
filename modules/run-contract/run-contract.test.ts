@@ -1,4 +1,7 @@
 import assert from "node:assert/strict"
+import { cp, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import test from "node:test"
 
 import { Effect } from "effect"
@@ -9,15 +12,19 @@ import {
   PlanningIdentity,
   byteMediaInspector,
   compilePlannedRun,
+  filePlanningIdentity,
 } from "./index.js"
-import { makeFixture } from "../../tests/control-plane-fixture.js"
+import { FIXTURE_TOOL, UNSUPPORTED_FIXTURE_IDENTITY, UPGRADED_FIXTURE_IDENTITY, makeFixture } from "../../tests/control-plane-fixture.js"
 
-const compileFixture = (fixture: ReturnType<typeof makeFixture>) =>
+const compileFixture = (
+  fixture: ReturnType<typeof makeFixture>,
+  installedTool = fixture.identity,
+) =>
   Effect.runPromise(
     compilePlannedRun(fixture.documents).pipe(
       Effect.provideService(ApplicationFiles, fixture.files),
       Effect.provideService(MediaInspector, byteMediaInspector),
-      Effect.provideService(PlanningIdentity, fixture.identity),
+      Effect.provideService(PlanningIdentity, installedTool),
     ),
   )
 
@@ -46,7 +53,120 @@ test("compiles canonical, recursively immutable run evidence", async () => {
   assert.equal(Object.isFrozen(run.request.references), true)
   assert.equal(Object.isFrozen(run.request.references[0]), true)
   assert.equal(run.request.maximumCorrectionRuns, 2)
+  assert.equal(run.request.artifactRoot, "artifacts/qwen-pipeline")
   assert.equal("assemblyPlan" in run.request, false)
+})
+
+test("planning refuses a caller-asserted identity that did not verify installed artifact bytes", async () => {
+  const fixture = makeFixture("qwen-image")
+  await assert.rejects(
+    compileFixture(fixture, { installedTool: { ...FIXTURE_TOOL } }),
+    (error: unknown) => error instanceof Error && "code" in error && error.code === "TOOL_ARTIFACT_INVALID",
+  )
+})
+
+test("the installed-tool adapter detects artifact integrity drift before planning", async (context) => {
+  const source = join(process.cwd(), "tests/fixtures/tool-artifacts/v0.3.0")
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "qwen-tool-artifact-"))
+  context.after(async () => rm(temporaryRoot, { recursive: true, force: true }))
+  await cp(source, temporaryRoot, { recursive: true })
+  const verified = await Effect.runPromise(filePlanningIdentity(temporaryRoot))
+  assert.deepEqual(verified.installedTool, FIXTURE_TOOL)
+  await writeFile(join(temporaryRoot, "artifact.txt"), "changed installed bytes\n", "utf8")
+  await assert.rejects(
+    Effect.runPromise(filePlanningIdentity(temporaryRoot)),
+    (error: unknown) => error instanceof Error && "code" in error && error.code === "TOOL_ARTIFACT_INVALID",
+  )
+})
+
+for (const field of [
+  "release",
+  "commit",
+  "artifactSha256",
+  "procedureVersion",
+  "runSchemaVersion",
+  "adapterProtocolVersion",
+] as const) {
+  test(`refuses an exact Tool Lock mismatch in ${field}`, async () => {
+    const fixture = makeFixture("qwen-image", {
+      toolLock: (lock) => {
+        lock[field] = field === "release" ? "v9.9.9" : field === "commit" ? "3".repeat(40) : "9".repeat(64)
+      },
+    })
+    await assert.rejects(
+      compileFixture(fixture),
+      (error: unknown) => error instanceof Error && "code" in error && error.code === "TOOL_LOCK_MISMATCH",
+    )
+  })
+}
+
+test("refuses a Procedure version that disagrees with the exact Tool Lock", async () => {
+  const fixture = makeFixture("qwen-image", {
+    contract: (contract) => {
+      const procedures = contract.procedures as Array<Record<string, unknown>>
+      procedures.find((procedure) => procedure.id === "qwen-neutral")!.version = "2"
+    },
+  })
+  await assert.rejects(
+    compileFixture(fixture),
+    (error: unknown) => error instanceof Error && "code" in error && error.code === "PROCEDURE_NOT_LOCKED",
+  )
+})
+
+test("refuses an exact but unsupported Tool Lock version profile", async () => {
+  const unsupportedTool = UNSUPPORTED_FIXTURE_IDENTITY.installedTool
+  const fixture = makeFixture("qwen-image", {
+    contract: (contract) => {
+      const procedures = contract.procedures as Array<Record<string, unknown>>
+      procedures.find((procedure) => procedure.id === "qwen-neutral")!.version = "9"
+    },
+    toolLock: (lock) => Object.assign(lock, unsupportedTool),
+  })
+  await assert.rejects(
+    compileFixture(fixture, UNSUPPORTED_FIXTURE_IDENTITY),
+    (error: unknown) => error instanceof Error && "code" in error && error.code === "TOOL_VERSION_UNSUPPORTED",
+  )
+})
+
+for (const artifactRoot of [
+  "/tmp/escape",
+  "../escape",
+  "~/escape",
+  "C:/escape",
+  "artifacts\\escape",
+]) {
+  test(`refuses unsafe declared artifact root ${JSON.stringify(artifactRoot)}`, async () => {
+    const fixture = makeFixture("qwen-image", {
+      contract: (contract) => { contract.artifactRoot = artifactRoot },
+    })
+    await assert.rejects(
+      compileFixture(fixture),
+      (error: unknown) => error instanceof Error && "code" in error && error.code === "UNSAFE_APPLICATION_PATH",
+    )
+  })
+}
+
+test("one application can adopt a checked exact tool upgrade while another keeps its prior pin", async () => {
+  const upgradedTool = UPGRADED_FIXTURE_IDENTITY.installedTool
+  const upgradedApplication = makeFixture("qwen-image", {
+    contract: (contract) => { contract.applicationId = "upgraded-application" },
+    toolLock: (lock) => Object.assign(lock, upgradedTool),
+  })
+  const pinnedApplication = makeFixture("qwen-image", {
+    contract: (contract) => { contract.applicationId = "pinned-application" },
+  })
+
+  const [upgraded, pinned] = await Promise.all([
+    compileFixture(upgradedApplication, UPGRADED_FIXTURE_IDENTITY),
+    compileFixture(pinnedApplication),
+  ])
+
+  assert.equal(upgraded.request.applicationId, "upgraded-application")
+  assert.equal(upgraded.request.tool.release, "v0.3.1")
+  assert.equal(pinned.request.applicationId, "pinned-application")
+  assert.equal(pinned.request.tool.release, "v0.3.0")
+  assert.equal(upgraded.request.tool.runSchemaVersion, pinned.request.tool.runSchemaVersion)
+  assert.equal(upgraded.request.tool.adapterProtocolVersion, pinned.request.tool.adapterProtocolVersion)
 })
 
 test("prices the maximum possible paid effect before a Run can be reserved", async () => {

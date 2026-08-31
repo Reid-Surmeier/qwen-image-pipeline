@@ -27,9 +27,11 @@ export const compilePlannedRun: (
 > = compileDocuments
 
 export { RunContractError } from "./errors.js"
+export { filePlanningIdentity } from "./file-planning-identity.js"
 export {
   ApplicationFiles,
   ApplicationReadError,
+  fileApplicationFiles,
   MediaInspector,
   MediaInspectionError,
   ReferencePlanningError,

@@ -187,6 +187,90 @@ const checksOperationSha256 = (operation: Extract<RecordOperation, { _tag: "Comm
 const isSha256 = (value: string): boolean => /^[a-f0-9]{64}$/.test(value)
 const isIdentifier = (value: string): boolean => /^[a-z0-9][a-z0-9._-]{0,127}$/.test(value)
 
+const safeRecordedPath = (value: unknown): value is string =>
+  typeof value === "string" &&
+  value.length > 0 &&
+  !value.startsWith("/") &&
+  !value.startsWith("~") &&
+  !value.includes("\\") &&
+  !value.includes("\0") &&
+  !/^[A-Za-z]:/.test(value) &&
+  value.split("/").every((part) => part !== "" && part !== "." && part !== "..")
+
+const recordedRequest = (
+  value: unknown,
+  recovery: RunRecordError["recovery"] = "reload",
+  allowHistorical = true,
+): CanonicalRunRequest => {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new RunRecordError("UNSUPPORTED_RECORDED_VERSION", "The recorded Run Request has no supported version profile.", recovery)
+  }
+  const request = value as Readonly<Record<string, unknown>>
+  const tool = request.tool
+  if (tool === null || typeof tool !== "object" || Array.isArray(tool)) {
+    throw new RunRecordError("UNSUPPORTED_RECORDED_VERSION", "The recorded Run Request has no tool version identity.", recovery)
+  }
+  const toolIdentity = tool as Readonly<Record<string, unknown>>
+  const allowedKeys = new Set([
+    "adapterProtocolVersion",
+    "applicationId",
+    "artifactRoot",
+    "assemblyPlan",
+    "budgetCeilingUsd",
+    "estimatedMaximumCostUsd",
+    "linkedRun",
+    "maximumCorrectionRuns",
+    "mode",
+    "model",
+    "objective",
+    "objectiveId",
+    "outputRoot",
+    "procedureId",
+    "provider",
+    "references",
+    "requestedCount",
+    "schemaVersion",
+    "tool",
+    "videoPlan",
+  ])
+  if (
+    Object.keys(request).some((key) => !allowedKeys.has(key)) ||
+    Object.keys(toolIdentity).sort().join(",") !==
+      "adapterProtocolVersion,artifactSha256,commit,procedureVersion,release,runSchemaVersion" ||
+    typeof request.applicationId !== "string" || !isIdentifier(request.applicationId) ||
+    typeof request.objectiveId !== "string" || !isIdentifier(request.objectiveId) ||
+    typeof request.objective !== "string" || request.objective.length === 0 ||
+    typeof request.procedureId !== "string" || !isIdentifier(request.procedureId) ||
+    (request.mode !== "qwen-image" && request.mode !== "seedance-video") ||
+    request.provider !== "openrouter" || typeof request.model !== "string" || request.model.length === 0 ||
+    !Number.isSafeInteger(request.requestedCount) || Number(request.requestedCount) < 1 ||
+    typeof request.estimatedMaximumCostUsd !== "string" || typeof request.budgetCeilingUsd !== "string" ||
+    !Number.isSafeInteger(request.maximumCorrectionRuns) || Number(request.maximumCorrectionRuns) < 0 ||
+    !safeRecordedPath(request.outputRoot) || !Array.isArray(request.references) || request.references.length === 0 ||
+    typeof toolIdentity.release !== "string" || typeof toolIdentity.commit !== "string" ||
+    typeof toolIdentity.artifactSha256 !== "string" || typeof toolIdentity.procedureVersion !== "string" ||
+    typeof toolIdentity.runSchemaVersion !== "string" || typeof toolIdentity.adapterProtocolVersion !== "string" ||
+    request.schemaVersion !== toolIdentity.runSchemaVersion ||
+    request.adapterProtocolVersion !== toolIdentity.adapterProtocolVersion ||
+    toolIdentity.procedureVersion !== "1" ||
+    toolIdentity.adapterProtocolVersion !== "1" ||
+    (
+      toolIdentity.runSchemaVersion === "1"
+        ? (!allowHistorical || "artifactRoot" in request)
+        : toolIdentity.runSchemaVersion === "2"
+          ? !safeRecordedPath(request.artifactRoot)
+          : true
+    )
+  ) {
+    throw new RunRecordError(
+      "UNSUPPORTED_RECORDED_VERSION",
+      "No explicit replay implementation exists for the recorded Procedure, Run schema, and adapter protocol versions.",
+      recovery,
+    )
+  }
+  return value as CanonicalRunRequest
+}
+
 const validateReservation = (input: ReserveRun): CanonicalRunRequest => {
   const { plannedRun } = input
   if (plannedRun.state !== "planned") {
@@ -210,7 +294,7 @@ const validateReservation = (input: ReserveRun): CanonicalRunRequest => {
   ) {
     throw new RunRecordError("REQUEST_HASH_MISMATCH", "The Planned Run object disagrees with its authoritative canonical bytes.")
   }
-  const request = canonicalRequest as CanonicalRunRequest
+  const request = recordedRequest(canonicalRequest, "reload", false)
   if (!isSha256(input.payloadSha256)) {
     throw new RunRecordError("RESERVATION_OUTSIDE_PLAN", "The payload digest must be a lowercase SHA-256.")
   }
@@ -1057,7 +1141,7 @@ const replay = (
     throw new RunRecordError("REQUEST_TAMPERED", "The immutable request is not canonical JSON.", "repair-evidence")
   }
   const requestDocument = canonicalRequest as Readonly<Record<string, JsonValue>>
-  const runRequest = canonicalRequest as unknown as CanonicalRunRequest
+  const runRequest = recordedRequest(canonicalRequest, "repair-evidence")
   if (stringPayload(genesis.payload, "requestSha256") !== requestSha256) {
     throw new RunRecordError("REQUEST_TAMPERED", "The immutable request bytes changed.", "repair-evidence")
   }

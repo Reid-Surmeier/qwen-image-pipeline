@@ -53,7 +53,7 @@ A working software view derived from an approved screen composition.
 _Avoid_: Screenshot, mockup
 
 **Project Contract**:
-The application-owned declaration of purpose, allowed operations, evidence sources, output destinations, approval rules, and compatible tool version.
+The application-owned declaration of purpose, allowed operations, evidence sources, output destinations, artifact root, approval rules, and compatible tool version.
 _Avoid_: Repository folklore, setup notes
 
 **Objective**:
@@ -63,6 +63,10 @@ _Avoid_: Issue comment, prompt fragment
 **Tool Lock**:
 The application-owned exact identity of the compatible tool release, commit, artifact, Procedure, Run schema, and adapter protocol.
 _Avoid_: Latest branch, compatible-enough version
+
+**Installed Tool Artifact**:
+The closed, hash-inventoried tool distribution whose release, commit, aggregate artifact digest, and version profile are verified from installed bytes before planning. It is the source of tool identity; an agent or caller cannot assert that identity.
+_Avoid_: Branch name, working-tree claim, caller-provided version
 
 **Reference Plan**:
 The proved mapping from authoritative application media to exact provider-payload destinations, including application-relative paths, hashes, detected kinds, inspected properties, and authority reasons.
@@ -128,6 +132,9 @@ _Avoid_: Retry token, persisted credential
 - **Asset Passes** and **Screen Passes** feed **Assembly**.
 - **Fidelity Checks** gate both **Assembly** and the **Interactive Replica**.
 - One **Planned Run** may create one **Attempt Reservation** in one **Run Record**.
+- One application **Project Contract** owns one artifact root. The production reader and writer accept only that application root; the tool repository owns no application references, outputs, Assembly evidence, Run Records, approvals, retention, or cleanup.
+- A **Tool Lock** is exact per application. Updating one application's checked release does not update another, and replay interprets old Run Records through their own recorded Procedure, Run schema, and adapter protocol versions.
+- A **Tool Lock** must exactly match one verified **Installed Tool Artifact** before planning; the current Run Request schema is `1/2/1`, while historical `1/1/1` records retain their original shape.
 - One durable submission-may-have-started event may issue one in-process **Submission Permit**; replay issues none.
 - One Seedance **Submission Permit** may create one persisted provider job identity; every later advance polls only that identity and cannot submit another job.
 - A definitively failed pre-submit **Run Record** remains immutable and may be named by a distinct **Linked Run** whose relationship is fixed in its Run Request before reservation.

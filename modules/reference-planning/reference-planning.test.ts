@@ -1,4 +1,7 @@
 import assert from "node:assert/strict"
+import { mkdir, mkdtemp, readdir, rename, rm, symlink, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 import test from "node:test"
 
 import { Effect } from "effect"
@@ -8,6 +11,7 @@ import {
   MediaInspector,
   type MediaInspectorService,
   byteMediaInspector,
+  fileApplicationFiles,
   planReferences,
 } from "./index.js"
 import {
@@ -38,6 +42,53 @@ const markerOnlyMp4 = (): Uint8Array => {
   body.writeUInt32BE(48 * 65_536, 72)
   return body
 }
+
+test("the application filesystem adapter reads only real files inside its repository root", async (context) => {
+  const applicationRoot = await mkdtemp(join(tmpdir(), "qwen-application-files-"))
+  const outsideRoot = await mkdtemp(join(tmpdir(), "qwen-application-files-outside-"))
+  context.after(async () => Promise.all([
+    rm(applicationRoot, { recursive: true, force: true }),
+    rm(outsideRoot, { recursive: true, force: true }),
+  ]))
+  await mkdir(join(applicationRoot, "references"))
+  await writeFile(join(applicationRoot, "references", "source.png"), Buffer.from("source"))
+  await writeFile(join(outsideRoot, "secret.png"), Buffer.from("outside"))
+  await symlink(outsideRoot, join(applicationRoot, "escaped"), "dir")
+  await symlink(join(outsideRoot, "secret.png"), join(applicationRoot, "references", "linked.png"), "file")
+
+  const files = await Effect.runPromise(fileApplicationFiles(applicationRoot))
+  const snapshot = await Effect.runPromise(files.read("references/source.png"))
+  assert.equal(Buffer.from(snapshot.bytes).toString("utf8"), "source")
+
+  await rename(join(applicationRoot, "references"), join(applicationRoot, "verified-references-moved"))
+  await symlink(outsideRoot, join(applicationRoot, "references"), "dir")
+  const swapped = await Effect.runPromise(Effect.flip(files.read("references/secret.png")))
+  assert.equal(swapped.code, "APPLICATION_PATH_UNSAFE")
+
+  for (const unsafe of [
+    "/tmp/escape",
+    "../escape",
+    "~/escape",
+    "C:/escape",
+    "references\\source.png",
+    "escaped/secret.png",
+    "references/linked.png",
+  ]) {
+    const error = await Effect.runPromise(Effect.flip(files.read(unsafe)))
+    assert.equal(error.code, "APPLICATION_PATH_UNSAFE")
+  }
+})
+
+test("application filesystem adapter construction does not retain directory descriptors", async (context) => {
+  const applicationRoot = await mkdtemp(join(tmpdir(), "qwen-application-files-fds-"))
+  context.after(async () => rm(applicationRoot, { recursive: true, force: true }))
+  const before = (await readdir("/proc/self/fd")).length
+  for (let index = 0; index < 24; index += 1) {
+    await Effect.runPromise(fileApplicationFiles(applicationRoot))
+  }
+  const after = (await readdir("/proc/self/fd")).length
+  assert.ok(after <= before + 2, `adapter construction retained ${after - before} file descriptors`)
+})
 
 test("refuses a PNG-like prefix without the complete signature and IHDR structure", async () => {
   const forged = Buffer.alloc(24)

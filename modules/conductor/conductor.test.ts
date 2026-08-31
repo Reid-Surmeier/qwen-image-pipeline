@@ -1,4 +1,7 @@
 import assert from "node:assert/strict"
+import { access, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { dirname, join } from "node:path"
 import test from "node:test"
 
 import { Effect } from "effect"
@@ -6,6 +9,7 @@ import { Effect } from "effect"
 import {
   advance,
   ApplicationFiles,
+  fileApplicationFiles,
   MediaInspector,
   PROJECT_CONTRACT_PATH,
   PlanningIdentity,
@@ -25,6 +29,7 @@ import {
 import { MediaInspectionError, type MediaInspectorService } from "../run-contract/index.js"
 import {
   RunRecordClock,
+  fileRunRecordLayer,
   makeMemoryRunRecordHarness,
   readEvidence,
   record,
@@ -521,6 +526,136 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
     assert.equal(resumed._tag, "HumanDecisionRequired")
     assert.equal(recoveryReads, 0)
   }
+})
+
+test("two application repositories keep references, Run Records, outputs, and Assembly evidence under their own roots", async (context) => {
+  const baseline = rgba([
+    10, 10, 10, 255, 20, 20, 20, 255,
+    30, 30, 30, 255, 40, 40, 40, 255,
+  ])
+  const donor = rgba([
+    90, 90, 90, 255, 80, 80, 80, 255,
+    70, 70, 70, 255, 60, 60, 60, 255,
+  ])
+  const inspector: MediaInspectorService = {
+    inspect: () => Effect.succeed({
+      kind: "image",
+      mediaType: "application/vnd.qwen.rgba+json",
+      width: 2,
+      height: 2,
+    }),
+  }
+  let adapterCalls = 0
+  const providerBody = Buffer.from('{"request_id":"application-owned","status":"succeeded"}', "utf8")
+  const adapter: GenerationAdapterService = {
+    invoke: (prepared) => Effect.sync(() => {
+      adapterCalls += 1
+      return {
+        provider: "openrouter" as const,
+        model: prepared.request.model,
+        providerEvidence: {
+          mediaType: "application/json" as const,
+          body: providerBody,
+          sha256: hash(providerBody),
+        },
+        outputs: [{
+          applicationPath: "outputs/application-donor.rgba.json" as const,
+          mediaType: "application/vnd.qwen.rgba+json" as const,
+          body: donor,
+          sha256: hash(donor),
+        }],
+      }
+    }),
+    recover: () => Effect.die("the owned normal path must not recover"),
+  }
+
+  const executeApplication = async (applicationId: string) => {
+    const applicationRoot = await mkdtemp(join(tmpdir(), `${applicationId}-`))
+    context.after(async () => rm(applicationRoot, { recursive: true, force: true }))
+    const artifactRoot = `artifacts/${applicationId}`
+    const referencePath = "references/neutral.rgba.json"
+    const exactCopy = { x: 1, y: 0, rgba: [5, 6, 7, 255] as const }
+    let applicationEntries = new Map<string, Uint8Array>()
+    const fixture = makeFixture("qwen-image", {
+      contract: (contract) => {
+        contract.applicationId = applicationId
+        contract.artifactRoot = artifactRoot
+      },
+      objective: (objective) => {
+        const reference = (objective.references as Array<Record<string, unknown>>)[0]!
+        reference.path = referencePath
+        reference.sha256 = hash(baseline)
+        reference.declaredMedia = { width: 2, height: 2 }
+        objective.assemblyPlan = {
+          required: true,
+          baselineReferenceSlot: "source",
+          ownedRegion: { x: 1, y: 0, width: 1, height: 2 },
+          exactCopy: [{ ...exactCopy, sha256: hash(JSON.stringify(exactCopy)) }],
+        }
+      },
+      files: (files) => {
+        files.delete("references/neutral.png")
+        files.set(referencePath, baseline)
+        applicationEntries = new Map(files)
+      },
+    })
+    for (const [applicationPath, bytes] of applicationEntries) {
+      const destination = join(applicationRoot, applicationPath)
+      await mkdir(dirname(destination), { recursive: true })
+      await writeFile(destination, bytes)
+    }
+    const files = await Effect.runPromise(fileApplicationFiles(applicationRoot))
+    const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
+      Effect.provideService(ApplicationFiles, files),
+      Effect.provideService(MediaInspector, inspector),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+    ))
+    assert.equal(planned._tag, "Planned")
+    if (planned._tag !== "Planned") throw new Error("application planning fixture was refused")
+    const runRecordLayer = await Effect.runPromise(fileRunRecordLayer(applicationRoot))
+    const advanceOnce = (selectedDonorSha256?: string) => Effect.runPromise(
+      advance({
+        run: planned.run,
+        ...(selectedDonorSha256 === undefined ? {} : { selectedDonorSha256 }),
+      }).pipe(
+        Effect.provideService(ApplicationFiles, files),
+        Effect.provideService(GenerationAdapter, adapter),
+        Effect.provide(runRecordLayer),
+        Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:00:00.000Z") }),
+      ),
+    )
+    const checkpoint = await advanceOnce()
+    assert.equal(checkpoint._tag, "HumanDecisionRequired")
+    const completed = await advanceOnce(hash(donor))
+    assert.equal(completed._tag, "VerifiedCandidate")
+    if (completed._tag !== "VerifiedCandidate") throw new Error("application Assembly fixture did not verify")
+    const runDirectory = join(applicationRoot, artifactRoot, "runs", completed.runId)
+    assert.deepEqual(await readdir(join(runDirectory, "outputs")), [
+      "application-donor.rgba.json",
+      "assembled.rgba.json",
+    ])
+    assert.deepEqual((await readdir(runDirectory)).filter((name) => !name.startsWith(".")), [
+      "assembly-report.json",
+      "checks.json",
+      "events.jsonl",
+      "inputs",
+      "outputs",
+      "provider-response.json",
+      "request.json",
+      "state.json",
+    ])
+    await assert.rejects(access(join(process.cwd(), artifactRoot)))
+    await assert.rejects(access(join(process.cwd(), referencePath)))
+    return { applicationRoot, artifactRoot, runId: completed.runId }
+  }
+
+  const [first, second] = await Promise.all([
+    executeApplication("application-one"),
+    executeApplication("application-two"),
+  ])
+  assert.notEqual(first.applicationRoot, second.applicationRoot)
+  assert.notEqual(first.runId, second.runId)
+  assert.equal(adapterCalls, 2)
 })
 
 test("classifies duplicate Qwen output identities before any output persistence", async () => {

@@ -14,6 +14,7 @@ import {
   type VideoPlan,
 } from "./types.js"
 import { RunContractError } from "./errors.js"
+import { isVerifiedPlanningIdentity } from "./file-planning-identity.js"
 import {
   planReferences,
   type ApplicationFilesService,
@@ -151,6 +152,7 @@ const hasSecretMaterial = (raw: string): boolean => {
 const isSafePath = (path: string): boolean =>
   path.length > 0 &&
   !path.startsWith("/") &&
+  !path.startsWith("~") &&
   !path.includes("\\") &&
   !path.includes("\0") &&
   !/^[A-Za-z]:/.test(path) &&
@@ -396,6 +398,12 @@ export const compileDocuments = (
   })
 
   const identity = yield* PlanningIdentity
+  if (!isVerifiedPlanningIdentity(identity)) {
+    return yield* Effect.fail(new RunContractError(
+      "TOOL_ARTIFACT_INVALID",
+      "Planning requires identity derived from a verified installed tool artifact.",
+    ))
+  }
   const lock = yield* Effect.try({
     try: () => decodeToolIdentity(parsed.lock),
     catch: (error) => error instanceof RunContractError
@@ -406,6 +414,16 @@ export const compileDocuments = (
     return yield* Effect.fail(new RunContractError(
       "TOOL_LOCK_MISMATCH",
       "The application Tool Lock does not name this exact installed tool build.",
+    ))
+  }
+  if (
+    lock.procedureVersion !== "1" ||
+    lock.runSchemaVersion !== "2" ||
+    lock.adapterProtocolVersion !== "1"
+  ) {
+    return yield* Effect.fail(new RunContractError(
+      "TOOL_VERSION_UNSUPPORTED",
+      "The locked Procedure, Run schema, and adapter protocol versions are not supported by this tool.",
     ))
   }
 
@@ -425,12 +443,19 @@ export const compileDocuments = (
         throw new RunContractError("PROCEDURE_NOT_LOCKED", "The locked Procedure mode is unsupported.")
       }
       const mode: "qwen-image" | "seedance-video" = modeValue
+      if (stringField(procedure, "version") !== lock.procedureVersion) {
+        throw new RunContractError(
+          "PROCEDURE_NOT_LOCKED",
+          "The selected Procedure version does not match the exact Tool Lock.",
+        )
+      }
       if (stringField(procedure, "provider") !== "openrouter") {
         throw new RunContractError("PROCEDURE_NOT_LOCKED", "The locked Procedure must use OpenRouter.")
       }
       const referenceRoots = stringsField(contract, "referenceRoots")
+      const artifactRoot = stringField(contract, "artifactRoot")
       const outputRoot = stringField(contract, "outputRoot")
-      if (!referenceRoots.every(isSafePath) || !isSafePath(outputRoot)) {
+      if (!referenceRoots.every(isSafePath) || !isSafePath(artifactRoot) || !isSafePath(outputRoot)) {
         throw new RunContractError("UNSAFE_APPLICATION_PATH", "Project Contract paths must be safe application-relative paths.")
       }
       const requestedCount = numberField(objective, "requestedCount")
@@ -463,6 +488,7 @@ export const compileDocuments = (
         mode,
         model: stringField(procedure, "model"),
         referenceRoots,
+        artifactRoot,
         outputRoot,
         requestedCount,
         maximumCorrectionRuns,
@@ -523,6 +549,7 @@ export const compileDocuments = (
     estimatedMaximumCostUsd: formatCents(decoded.estimatedCost),
     budgetCeilingUsd: formatCents(decoded.objectiveBudget),
     maximumCorrectionRuns: decoded.maximumCorrectionRuns,
+    artifactRoot: decoded.artifactRoot,
     outputRoot: decoded.outputRoot,
     ...(decoded.linkedRun === undefined ? {} : { linkedRun: decoded.linkedRun }),
     ...(assemblyPlan === undefined ? {} : { assemblyPlan }),

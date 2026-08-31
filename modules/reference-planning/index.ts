@@ -6,6 +6,7 @@ import type {
   ReferencePlanningError,
 } from "./errors.js"
 import { inspectSnapshot, planReferenceInputs } from "./reference-planning.js"
+export { fileApplicationFiles } from "./file-application-files.js"
 import type {
   ApplicationFilesService,
   MediaInspectorService,

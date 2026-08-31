@@ -31,6 +31,8 @@ export { ConductorError } from "./errors.js"
 export type { ConductorErrorCode, PlanningRefusal, PlanningRefusalCode } from "./errors.js"
 export {
   ApplicationFiles,
+  fileApplicationFiles,
+  filePlanningIdentity,
   MediaInspector,
   PlanningIdentity,
   byteMediaInspector,

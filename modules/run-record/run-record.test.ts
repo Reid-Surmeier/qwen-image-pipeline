@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
-import { mkdir, mkdtemp, readFile, readdir, rm, symlink, unlink, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, unlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import test from "node:test"
@@ -23,6 +23,8 @@ import {
   malformedAudioTrack,
   makeFixture,
   multipleVideoTracksMp4,
+  FIXTURE_TOOL,
+  UPGRADED_FIXTURE_IDENTITY,
   withReportedFfmpegMajor,
 } from "../../tests/control-plane-fixture.js"
 import { verifyVideo } from "../video-verification/index.js"
@@ -65,6 +67,16 @@ const reservationFor = (planned: PlannedRun) => ({
   plannedRun: planned,
   payloadSha256: planned.requestSha256,
 })
+
+const plannedFromRequest = (request: PlannedRun["request"]): PlannedRun => {
+  const canonicalRequest = canonicalJson(request)
+  return {
+    state: "planned",
+    request,
+    canonicalRequest,
+    requestSha256: createHash("sha256").update(canonicalRequest).digest("hex"),
+  }
+}
 
 const completedPollBody = (
   jobId: string,
@@ -133,6 +145,19 @@ const plannedSeedanceRun = async (requestedCount = 1): Promise<Readonly<{
   )
   const body = (await Effect.runPromise(fixture.files.read("references/neutral.mp4"))).bytes
   return { planned, body }
+}
+
+const writeProjectContract = async (
+  applicationRoot: string,
+  planned: PlannedRun,
+  override: Readonly<{ applicationId?: string; artifactRoot?: string }> = {},
+): Promise<void> => {
+  await mkdir(join(applicationRoot, ".qwen-pipeline"), { recursive: true })
+  await writeFile(join(applicationRoot, ".qwen-pipeline", "project-contract.json"), JSON.stringify({
+    schemaVersion: "1",
+    applicationId: override.applicationId ?? planned.request.applicationId,
+    artifactRoot: override.artifactRoot ?? planned.request.artifactRoot,
+  }), "utf8")
 }
 
 const assertRunRecordRejectsMedia = async (
@@ -2337,12 +2362,188 @@ test("interruption at every persistence and network seam never creates a second 
   }
 })
 
+test("reservation refuses a canonical Run Request with an unsupported recorded version profile", async () => {
+  const current = await plannedRun()
+  const unsupported = plannedFromRequest({
+    ...current.request,
+    schemaVersion: "9",
+    adapterProtocolVersion: "9",
+    tool: {
+      ...current.request.tool,
+      procedureVersion: "9",
+      runSchemaVersion: "9",
+      adapterProtocolVersion: "9",
+    },
+  })
+  const memory = await memoryHarness()
+  const error = await Effect.runPromise(Effect.flip(
+    reserve(reservationFor(unsupported)).pipe(
+      Effect.provide(memory.layer),
+      Effect.provideService(RunRecordClock, clock),
+    ),
+  ))
+  assert.equal(error.code, "UNSUPPORTED_RECORDED_VERSION")
+})
+
+const capturedRunLayer = (
+  runId: string,
+  request: Uint8Array,
+  events: Uint8Array,
+): Layer.Layer<RunRecordStoreService> => {
+  let state: Uint8Array | undefined
+  const unavailable = () => Effect.die("captured Run fixtures are read-only")
+  return Layer.succeed(RunRecordStore, {
+    create: unavailable,
+    read: (requestedRunId) => requestedRunId === runId
+      ? Effect.succeed({ request, events, evidence: {}, ...(state === undefined ? {} : { state }) })
+      : Effect.fail(new RunRecordError("RUN_NOT_FOUND", `${requestedRunId} does not exist.`)),
+    appendEvent: unavailable,
+    writeEvidence: unavailable,
+    writeState: (_requestedRunId, body) => Effect.sync(() => { state = Uint8Array.from(body) }),
+  })
+}
+
+test("replay interprets an authentic fixed-point Run through its recorded v1 profile", async () => {
+  const [request, events, source] = await Promise.all([
+    readFile(join(process.cwd(), "tests/fixtures/run-record-v1/request.json")),
+    readFile(join(process.cwd(), "tests/fixtures/run-record-v1/events.jsonl")),
+    readFile(join(process.cwd(), "tests/fixtures/run-record-v1/source.json"), "utf8"),
+  ])
+  const provenance = JSON.parse(source) as { sourceCommit: string; runId: string; runSchemaVersion: string }
+  assert.equal(provenance.sourceCommit, "6f475bedbf51cd3e2a42c21574c4c61234a3a145")
+  assert.equal(provenance.runSchemaVersion, "1")
+  const layer = capturedRunLayer(provenance.runId, request.subarray(0, request.length - 1), events)
+  const view = await Effect.runPromise(load(provenance.runId).pipe(Effect.provide(layer)))
+  const diagnostics = await Effect.runPromise(readDiagnostics(provenance.runId).pipe(Effect.provide(layer)))
+  const recorded = JSON.parse(Buffer.from(diagnostics.request).toString("utf8")) as {
+    schemaVersion: string
+    artifactRoot?: string
+  }
+  assert.equal(view.phase, "reserved")
+  assert.equal(recorded.schemaVersion, "1")
+  assert.equal("artifactRoot" in recorded, false)
+})
+
+test("load refuses a v1 record silently reinterpreted with a v2 ownership field", async () => {
+  const capturedRequest = JSON.parse(await readFile(
+    join(process.cwd(), "tests/fixtures/run-record-v1/request.json"),
+    "utf8",
+  )) as Record<string, unknown>
+  capturedRequest.artifactRoot = "artifacts/qwen-pipeline"
+  const request = canonicalJson(capturedRequest)
+  const requestSha256 = createHash("sha256").update(request).digest("hex")
+  const runId = `run-${requestSha256.slice(0, 24)}`
+  const capturedEvent = JSON.parse((await readFile(
+    join(process.cwd(), "tests/fixtures/run-record-v1/events.jsonl"),
+    "utf8",
+  )).trimEnd()) as Record<string, unknown>
+  const payload = capturedEvent.payload as Record<string, unknown>
+  const eventWithoutDigest: Record<string, unknown> = {
+    ...capturedEvent,
+    runId,
+    operationId: `reserve-${runId}`,
+    payload: {
+      ...payload,
+      attemptId: `attempt-${requestSha256.slice(0, 24)}-1`,
+      payloadSha256: requestSha256,
+      requestSha256,
+    },
+  }
+  delete eventWithoutDigest["eventSha256"]
+  const event = canonicalJson({
+    ...eventWithoutDigest,
+    eventSha256: createHash("sha256").update(canonicalJson(eventWithoutDigest)).digest("hex"),
+  }) + "\n"
+  const layer = capturedRunLayer(runId, Buffer.from(request), Buffer.from(event))
+  const error = await Effect.runPromise(Effect.flip(load(runId).pipe(Effect.provide(layer))))
+  assert.equal(error.code, "UNSUPPORTED_RECORDED_VERSION")
+})
+
+test("the filesystem adapter refuses a Run owned by a different application", async (context) => {
+  const applicationRoot = await mkdtemp(join(tmpdir(), "qwen-run-record-owner-"))
+  context.after(async () => rm(applicationRoot, { recursive: true, force: true }))
+  const planned = await plannedRun()
+  await writeProjectContract(applicationRoot, planned, { applicationId: "different-application" })
+  const layer = await Effect.runPromise(fileRunRecordLayer(applicationRoot))
+  const error = await Effect.runPromise(Effect.flip(
+    reserve(reservationFor(planned)).pipe(
+      Effect.provide(layer),
+      Effect.provideService(RunRecordClock, clock),
+    ),
+  ))
+  assert.equal(error.code, "APPLICATION_OWNERSHIP_MISMATCH")
+  assert.deepEqual(
+    await readdir(join(applicationRoot, planned.request.artifactRoot, "runs")),
+    [],
+  )
+})
+
+for (const artifactRoot of [
+  "/tmp/qwen-escape",
+  "../escape",
+  "~/escape",
+  "C:/escape",
+  "artifacts\\escape",
+]) {
+  test(`the filesystem adapter refuses unsafe Project Contract artifact root ${JSON.stringify(artifactRoot)}`, async (context) => {
+    const applicationRoot = await mkdtemp(join(tmpdir(), "qwen-run-record-unsafe-root-"))
+    context.after(async () => rm(applicationRoot, { recursive: true, force: true }))
+    const planned = await plannedRun()
+    await writeProjectContract(applicationRoot, planned, { artifactRoot })
+    const layer = await Effect.runPromise(fileRunRecordLayer(applicationRoot))
+    const error = await Effect.runPromise(Effect.flip(
+      reserve(reservationFor(planned)).pipe(
+        Effect.provide(layer),
+        Effect.provideService(RunRecordClock, clock),
+      ),
+    ))
+    assert.equal(error.code, "DURABILITY_FAILURE")
+  })
+}
+
+test("a tool upgrade preserves old Run interpretation and leaves retention to the application", async (context) => {
+  const applicationRoot = await mkdtemp(join(tmpdir(), "qwen-run-record-upgrade-"))
+  context.after(async () => rm(applicationRoot, { recursive: true, force: true }))
+  const oldPlanned = await plannedRun(undefined, 1, "Old installed release.")
+  const upgradedPlanned = plannedFromRequest({
+    ...oldPlanned.request,
+    objectiveId: "upgraded-release-objective",
+    objective: "Checked application upgrade to a newer exact tool artifact.",
+    tool: UPGRADED_FIXTURE_IDENTITY.installedTool,
+  })
+  await writeProjectContract(applicationRoot, oldPlanned)
+  const firstLayer = await Effect.runPromise(fileRunRecordLayer(applicationRoot))
+  const reserveWith = (planned: PlannedRun) => Effect.runPromise(
+    reserve(reservationFor(planned)).pipe(
+      Effect.provide(firstLayer),
+      Effect.provideService(RunRecordClock, clock),
+    ),
+  )
+  const oldRun = await reserveWith(oldPlanned)
+  const upgradedRun = await reserveWith(upgradedPlanned)
+
+  const freshLayer = await Effect.runPromise(fileRunRecordLayer(applicationRoot))
+  const oldDiagnostics = await Effect.runPromise(readDiagnostics(oldRun.runId).pipe(Effect.provide(freshLayer)))
+  const oldRequest = JSON.parse(Buffer.from(oldDiagnostics.request).toString("utf8")) as {
+    tool: { release: string; commit: string; artifactSha256: string }
+  }
+  assert.deepEqual(oldRequest.tool, {
+    ...FIXTURE_TOOL,
+  })
+  assert.equal((await Effect.runPromise(load(upgradedRun.runId).pipe(Effect.provide(freshLayer)))).phase, "reserved")
+  assert.deepEqual(
+    (await readdir(join(applicationRoot, oldPlanned.request.artifactRoot, "runs"))).sort(),
+    [oldRun.runId, upgradedRun.runId].sort(),
+  )
+})
+
 test("a fresh process reloads the same hash-chained Run from an application filesystem", async (context) => {
   const applicationRoot = await mkdtemp(join(tmpdir(), "qwen-run-record-"))
   context.after(async () => rm(applicationRoot, { recursive: true, force: true }))
   const artifactRoot = "artifacts/qwen-pipeline"
   const planned = await plannedRun()
-  const firstLayer = await Effect.runPromise(fileRunRecordLayer(applicationRoot, artifactRoot))
+  await writeProjectContract(applicationRoot, planned)
+  const firstLayer = await Effect.runPromise(fileRunRecordLayer(applicationRoot))
   const execute = <Success, Error>(
     effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
   ): Promise<Success> => Effect.runPromise(effect.pipe(
@@ -2370,7 +2571,7 @@ test("a fresh process reloads the same hash-chained Run from an application file
   assert.equal((await readFile(join(runDirectory, "events.jsonl"), "utf8")).trimEnd().split("\n").length, 4)
   assert.deepEqual(await readFile(join(runDirectory, "provider-response.json")), body)
 
-  const freshLayer = await Effect.runPromise(fileRunRecordLayer(applicationRoot, artifactRoot))
+  const freshLayer = await Effect.runPromise(fileRunRecordLayer(applicationRoot))
   const reloaded = await Effect.runPromise(
     load(reserved.runId).pipe(Effect.provide(freshLayer)),
   )
@@ -2394,7 +2595,8 @@ test("the filesystem adapter refuses symlink escapes before writing outside the 
   await mkdir(join(applicationRoot, "artifacts"))
   await symlink(outsideRoot, join(applicationRoot, "artifacts", "qwen-pipeline"), "dir")
   const planned = await plannedRun()
-  const layer = await Effect.runPromise(fileRunRecordLayer(applicationRoot, "artifacts/qwen-pipeline"))
+  await writeProjectContract(applicationRoot, planned)
+  const layer = await Effect.runPromise(fileRunRecordLayer(applicationRoot))
   const error = await Effect.runPromise(Effect.flip(
     reserve(reservationFor(planned)).pipe(
       Effect.provide(layer),
@@ -2405,6 +2607,104 @@ test("the filesystem adapter refuses symlink escapes before writing outside the 
   assert.deepEqual(await readdir(outsideRoot), [])
 })
 
+test("the filesystem adapter refuses replacement of its verified Run root without following the new symlink", async (context) => {
+  const applicationRoot = await mkdtemp(join(tmpdir(), "qwen-run-record-root-swap-"))
+  const outsideRoot = await mkdtemp(join(tmpdir(), "qwen-run-record-root-swap-outside-"))
+  context.after(async () => Promise.all([
+    rm(applicationRoot, { recursive: true, force: true }),
+    rm(outsideRoot, { recursive: true, force: true }),
+  ]))
+  const first = await plannedRun(undefined, 1, "First application-owned Run.")
+  await writeProjectContract(applicationRoot, first)
+  const layer = await Effect.runPromise(fileRunRecordLayer(applicationRoot))
+  await Effect.runPromise(reserve(reservationFor(first)).pipe(
+    Effect.provide(layer),
+    Effect.provideService(RunRecordClock, clock),
+  ))
+  const artifactRoot = join(applicationRoot, first.request.artifactRoot)
+  await rename(join(artifactRoot, "runs"), join(artifactRoot, "verified-runs-moved"))
+  await symlink(outsideRoot, join(artifactRoot, "runs"), "dir")
+
+  const second = await plannedRun(undefined, 1, "Second application-owned Run.")
+  const error = await Effect.runPromise(Effect.flip(
+    reserve(reservationFor(second)).pipe(
+      Effect.provide(layer),
+      Effect.provideService(RunRecordClock, clock),
+    ),
+  ))
+  assert.equal(error.code, "DURABILITY_FAILURE")
+  assert.deepEqual(await readdir(outsideRoot), [])
+})
+
+test("an evidence parent replacement cannot redirect a write outside the application", async (context) => {
+  const applicationRoot = await mkdtemp(join(tmpdir(), "qwen-run-record-evidence-swap-"))
+  const outsideRoot = await mkdtemp(join(tmpdir(), "qwen-run-record-evidence-swap-outside-"))
+  context.after(async () => Promise.all([
+    rm(applicationRoot, { recursive: true, force: true }),
+    rm(outsideRoot, { recursive: true, force: true }),
+  ]))
+  const planned = await plannedRun()
+  await writeProjectContract(applicationRoot, planned)
+  const harness = await Effect.runPromise(makeFileRunRecordHarness(applicationRoot))
+  const provide = <Success, Error>(
+    effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
+  ): Effect.Effect<Success, Error | RunRecordError> => effect.pipe(
+    Effect.provide(harness.layer),
+    Effect.provideService(RunRecordClock, clock),
+  )
+  const reserved = await Effect.runPromise(provide(reserve(reservationFor(planned))))
+  await Effect.runPromise(provide(record({
+    _tag: "SubmissionMayHaveStarted",
+    runId: reserved.runId,
+    operationId: "evidence-swap-submit",
+  })))
+  const providerBody = Buffer.from('{"request_id":"evidence-swap","status":"accepted"}')
+  await Effect.runPromise(provide(record({
+    _tag: "CommitProviderEvidence",
+    runId: reserved.runId,
+    operationId: "evidence-swap-provider",
+    evidence: {
+      mediaType: "application/json",
+      body: providerBody,
+      sha256: createHash("sha256").update(providerBody).digest("hex"),
+    },
+  })))
+  const runDirectory = join(applicationRoot, planned.request.artifactRoot, "runs", reserved.runId)
+  await Effect.runPromise(harness.beforeNextEvidenceOpen(async () => {
+    await rename(join(runDirectory, "outputs"), join(runDirectory, "outputs-held"))
+    await symlink(outsideRoot, join(runDirectory, "outputs"), "dir")
+  }))
+  const body = raster([0, 0, 0, 255, 0, 0, 0, 255])
+  const sha256 = createHash("sha256").update(body).digest("hex")
+  await Effect.runPromise(provide(record({
+    _tag: "CommitGeneratedOutput",
+    runId: reserved.runId,
+    operationId: "evidence-swap-output",
+    output: {
+      applicationPath: "outputs/candidate.rgba.json",
+      mediaType: "application/vnd.qwen.rgba+json",
+      body,
+      sha256,
+    },
+  })))
+  assert.deepEqual(await readdir(outsideRoot), [])
+  assert.deepEqual(await readFile(join(runDirectory, "outputs-held", "candidate.rgba.json")), body)
+})
+
+test("filesystem adapter use does not retain directory descriptors", async (context) => {
+  const applicationRoot = await mkdtemp(join(tmpdir(), "qwen-run-record-fds-"))
+  context.after(async () => rm(applicationRoot, { recursive: true, force: true }))
+  const planned = await plannedRun()
+  await writeProjectContract(applicationRoot, planned)
+  const before = (await readdir("/proc/self/fd")).length
+  for (let index = 0; index < 16; index += 1) {
+    const layer = await Effect.runPromise(fileRunRecordLayer(applicationRoot))
+    await Effect.runPromise(Effect.flip(load("run-000000000000000000000000").pipe(Effect.provide(layer))))
+  }
+  const after = (await readdir("/proc/self/fd")).length
+  assert.ok(after <= before + 2, `filesystem adapter retained ${after - before} file descriptors`)
+})
+
 test("the filesystem adapter refuses symlinked authoritative control files", async (context) => {
   const applicationRoot = await mkdtemp(join(tmpdir(), "qwen-run-record-controls-"))
   const outsideRoot = await mkdtemp(join(tmpdir(), "qwen-run-record-controls-outside-"))
@@ -2412,8 +2712,9 @@ test("the filesystem adapter refuses symlinked authoritative control files", asy
     rm(applicationRoot, { recursive: true, force: true }),
     rm(outsideRoot, { recursive: true, force: true }),
   ]))
-  const layer = await Effect.runPromise(fileRunRecordLayer(applicationRoot, "artifacts/qwen-pipeline"))
   const planned = await plannedRun()
+  await writeProjectContract(applicationRoot, planned)
+  const layer = await Effect.runPromise(fileRunRecordLayer(applicationRoot))
   const reserved = await Effect.runPromise(reserve(reservationFor(planned)).pipe(
     Effect.provide(layer),
     Effect.provideService(RunRecordClock, clock),
@@ -2432,8 +2733,9 @@ test("the filesystem adapter refuses symlinked authoritative control files", asy
 test("filesystem interruption after an immutable event frame reloads without another submission", async (context) => {
   const applicationRoot = await mkdtemp(join(tmpdir(), "qwen-run-record-lock-"))
   context.after(async () => rm(applicationRoot, { recursive: true, force: true }))
-  const harness = await Effect.runPromise(makeFileRunRecordHarness(applicationRoot, "artifacts/qwen-pipeline"))
   const planned = await plannedRun()
+  await writeProjectContract(applicationRoot, planned)
+  const harness = await Effect.runPromise(makeFileRunRecordHarness(applicationRoot))
   const reserved = await Effect.runPromise(reserve(reservationFor(planned)).pipe(
     Effect.provide(harness.layer),
     Effect.provideService(RunRecordClock, clock),
@@ -2449,7 +2751,7 @@ test("filesystem interruption after an immutable event frame reloads without ano
   )))
   assert.equal(interrupted.code, "DURABILITY_FAILURE")
 
-  const freshLayer = await Effect.runPromise(fileRunRecordLayer(applicationRoot, "artifacts/qwen-pipeline"))
+  const freshLayer = await Effect.runPromise(fileRunRecordLayer(applicationRoot))
   const reloaded = await Effect.runPromise(load(reserved.runId).pipe(Effect.provide(freshLayer)))
   assert.equal(reloaded.phase, "submission_may_have_started")
   assert.equal(reloaded.retryState, "reconcile-only")
@@ -2472,8 +2774,9 @@ test("filesystem interruption after an immutable event frame reloads without ano
 test("temporary-filesystem faults recover reservation, evidence, and derived state without a new Run", async (context) => {
   const applicationRoot = await mkdtemp(join(tmpdir(), "qwen-run-record-faults-"))
   context.after(async () => rm(applicationRoot, { recursive: true, force: true }))
-  const harness = await Effect.runPromise(makeFileRunRecordHarness(applicationRoot, "artifacts/qwen-pipeline"))
   const planned = await plannedRun()
+  await writeProjectContract(applicationRoot, planned)
+  const harness = await Effect.runPromise(makeFileRunRecordHarness(applicationRoot))
   const execute = <Success, Error>(
     effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
   ): Promise<Success> => Effect.runPromise(effect.pipe(
@@ -2527,7 +2830,7 @@ test("temporary-filesystem faults recover reservation, evidence, and derived sta
   )))
   assert.equal(interruptedState.code, "DURABILITY_FAILURE")
 
-  const freshLayer = await Effect.runPromise(fileRunRecordLayer(applicationRoot, "artifacts/qwen-pipeline"))
+  const freshLayer = await Effect.runPromise(fileRunRecordLayer(applicationRoot))
   const recovered = await Effect.runPromise(load(reserved.runId).pipe(Effect.provide(freshLayer)))
   assert.equal(recovered.phase, "provider_evidence_received")
   assert.equal(recovered.runId, reserved.runId)
@@ -2536,8 +2839,9 @@ test("temporary-filesystem faults recover reservation, evidence, and derived sta
 test("concurrent filesystem writers preserve one complete append without erasing the winner", async (context) => {
   const applicationRoot = await mkdtemp(join(tmpdir(), "qwen-run-record-concurrent-"))
   context.after(async () => rm(applicationRoot, { recursive: true, force: true }))
-  const layer = await Effect.runPromise(fileRunRecordLayer(applicationRoot, "artifacts/qwen-pipeline"))
   const planned = await plannedRun()
+  await writeProjectContract(applicationRoot, planned)
+  const layer = await Effect.runPromise(fileRunRecordLayer(applicationRoot))
   const reserved = await Effect.runPromise(reserve(reservationFor(planned)).pipe(
     Effect.provide(layer),
     Effect.provideService(RunRecordClock, clock),
@@ -3173,18 +3477,19 @@ test("a fresh filesystem adapter replays the completed Assembly Run and reads ve
   const applicationRoot = await mkdtemp(join(tmpdir(), "qwen-run-record-assembly-"))
   context.after(async () => rm(applicationRoot, { recursive: true, force: true }))
   const artifactRoot = "artifacts/qwen-pipeline"
-  const layer = await Effect.runPromise(fileRunRecordLayer(applicationRoot, artifactRoot))
+  const baseline = raster([
+    10, 10, 10, 255,
+    20, 20, 20, 255,
+  ])
+  const planned = await plannedAssemblyRun(baseline)
+  await writeProjectContract(applicationRoot, planned)
+  const layer = await Effect.runPromise(fileRunRecordLayer(applicationRoot))
   const provide = <Success, Error>(
     effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
   ) => effect.pipe(
     Effect.provide(layer),
     Effect.provideService(RunRecordClock, clock),
   )
-  const baseline = raster([
-    10, 10, 10, 255,
-    20, 20, 20, 255,
-  ])
-  const planned = await plannedAssemblyRun(baseline)
   const reserved = await Effect.runPromise(provide(reserve(reservationFor(planned))))
   await Effect.runPromise(provide(record({ _tag: "SubmissionMayHaveStarted", runId: reserved.runId, operationId: "fs-assembly-submit" })))
   const providerBody = Buffer.from('{"request_id":"fs-assembly","status":"succeeded"}', "utf8")
@@ -3257,7 +3562,7 @@ test("a fresh filesystem adapter replays the completed Assembly Run and reads ve
     ],
   })))
 
-  const freshLayer = await Effect.runPromise(fileRunRecordLayer(applicationRoot, artifactRoot))
+  const freshLayer = await Effect.runPromise(fileRunRecordLayer(applicationRoot))
   const reloaded = await Effect.runPromise(load(reserved.runId).pipe(Effect.provide(freshLayer)))
   assert.equal(reloaded.phase, "verified_candidate")
   assert.equal(reloaded.selectedDonorSha256, donorSha256)

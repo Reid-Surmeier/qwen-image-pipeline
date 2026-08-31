@@ -73,6 +73,7 @@ export type CanonicalRunRequest = Readonly<{
   estimatedMaximumCostUsd: string
   budgetCeilingUsd: string
   maximumCorrectionRuns: number
+  artifactRoot: string
   outputRoot: string
   linkedRun?: LinkedRunRelationship
   assemblyPlan?: AssemblyPlan
