@@ -14,7 +14,7 @@ Keep the three structural inspectors independent, parse every dense sample descr
 
 The decoder receives bytes only through standard input. Its fixed argument vector disables standard input interaction, allows only the `pipe` protocol, maps the required video stream and any declared audio stream, turns decode errors into failure, uses one thread, emits bounded framehash evidence to standard output, and has bounded time and buffers. No shell is involved and the child environment contains only `LANG`, `LC_ALL`, and `PATH`. Absence, timeout, malformed framehash evidence, metadata disagreement, or any decoder error fails closed through the owning module's typed error.
 
-The deterministic baseline pins the supported FFmpeg major and permits only this exact decoder invocation. A changed executable, arguments, or environment remains blocked, and the inherited native seccomp filter continues to deny network syscalls in the decoder process.
+The deterministic baseline pins the supported FFmpeg major and permits only this exact decoder invocation. A changed executable, arguments, or environment remains blocked, and the inherited native seccomp filter continues to deny network syscalls in the decoder process. The Verify workflow pins Ubuntu 24.04 and installs its FFmpeg package before entering the clean baseline; the baseline still refuses the job unless `/usr/bin/ffmpeg` reports major 6.
 
 ## Consequences
 

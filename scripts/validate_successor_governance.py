@@ -109,6 +109,10 @@ def validate_repository(root: Path) -> list[str]:
             problems.append("Verify workflow does not run on build branches")
         if "scripts/verify.sh" not in workflow_text:
             problems.append("Verify workflow does not call the canonical baseline")
+        if "runs-on: ubuntu-24.04" not in workflow_text:
+            problems.append("Verify workflow does not pin the FFmpeg 6 runner image")
+        if "sudo apt-get install --yes --no-install-recommends ffmpeg" not in workflow_text:
+            problems.append("Verify workflow does not install the FFmpeg 6 prerequisite")
 
     verify = root / "scripts" / "verify.sh"
     if not verify.is_file():
