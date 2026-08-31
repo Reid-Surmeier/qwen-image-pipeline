@@ -73,7 +73,7 @@ type RunEvent = Readonly<{
   operationId: string
   runId: string
   timestamp: string
-  kind: "attempt_reserved" | "submission_may_have_started" | "provider_evidence_intent" | "provider_evidence_received" | "generated_output_persisted" | "seedance_poll_persisted" | "donor_choice_opened" | "donor_selected" | "assembly_persisted" | "checks_persisted" | "video_checks_persisted" | "definitive_pre_submit_failure" | "classified_outcome_intent" | "classified_outcome"
+  kind: "attempt_reserved" | "submission_may_have_started" | "provider_evidence_intent" | "provider_evidence_received" | "generated_output_persisted" | "seedance_poll_persisted" | "donor_choice_opened" | "donor_selected" | "assembly_persisted" | "checks_persisted" | "video_checks_persisted" | "definitive_pre_submit_failure" | "correction_run_linked" | "classified_outcome_intent" | "classified_outcome"
   previousEventSha256: string | null
   payload: Readonly<Record<string, JsonValue>>
   eventSha256: string
@@ -128,11 +128,17 @@ const classifiedFailurePolicies = {
     retryState: "reconcile-only",
     correctionOwner: "Generation",
   },
-  budget_exhausted: {
-    outcome: "blocked",
-    spendState: "not_spent",
-    retryState: "never-resubmit",
-    correctionOwner: "application decision owner",
+  assembly_failure: {
+    outcome: "failed",
+    spendState: "unknown",
+    retryState: "reconcile-only",
+    correctionOwner: "Assembly",
+  },
+  verification_failure: {
+    outcome: "failed",
+    spendState: "unknown",
+    retryState: "reconcile-only",
+    correctionOwner: "Verification",
   },
   repeated_bad_output: {
     outcome: "failed",
@@ -1009,8 +1015,11 @@ const replay = (
     sha256: string
     byteLength: number
     failureClass: ClassifiedFailureClass
+    previousEventSha256: string
   }> | undefined
   let finding: RunRecordView["finding"]
+  let linkedCorrectionRunId: string | undefined
+  let linkedCorrectionRequestSha256: string | undefined
   for (const event of events.slice(1)) {
     if (event.kind === "submission_may_have_started") {
       if (phase !== "reserved" || stringPayload(event.payload, "attemptId") !== base.attemptId) {
@@ -1445,6 +1454,7 @@ const replay = (
         sha256: evidenceSha256,
         byteLength,
         failureClass,
+        previousEventSha256: event.previousEventSha256!,
       }
       continue
     }
@@ -1489,8 +1499,16 @@ const replay = (
       }
       const failure = document as Readonly<Record<string, JsonValue>>
       const message = stringPayload(failure, "message")
+      const failureEvidence = failure.evidence
+      const failureEvidenceRecord = failureEvidence as Readonly<Record<string, JsonValue>>
+      const expectedArtifactSha256s = evidence.map((item) => item.sha256)
       if (
-        Object.keys(failure).sort().join(",") !== "class,correctionOwner,message,outcome,retryState,spendState" ||
+        Object.keys(failure).sort().join(",") !== "class,correctionOwner,evidence,message,outcome,retryState,spendState" ||
+        failureEvidence === null || typeof failureEvidence !== "object" || Array.isArray(failureEvidence) ||
+        Object.keys(failureEvidence).sort().join(",") !== "artifactSha256s,requestSha256,stateEventSha256" ||
+        canonicalJson(failureEvidenceRecord.artifactSha256s!) !== canonicalJson(expectedArtifactSha256s) ||
+        failureEvidenceRecord.requestSha256 !== base.requestSha256 ||
+        failureEvidenceRecord.stateEventSha256 !== classifiedOutcomeIntent.previousEventSha256 ||
         stringPayload(failure, "class") !== failureClass ||
         stringPayload(event.payload, "message") !== message ||
         stringPayload(failure, "correctionOwner") !== policy.correctionOwner ||
@@ -1508,6 +1526,20 @@ const replay = (
       retryState = policy.retryState
       finding = { class: failureClass, message, correctionOwner: policy.correctionOwner }
       classifiedOutcomeIntent = undefined
+      continue
+    }
+    if (event.kind === "correction_run_linked") {
+      const correctionRunId = stringPayload(event.payload, "correctionRunId")
+      const correctionRequestSha256 = stringPayload(event.payload, "correctionRequestSha256")
+      if (
+        phase !== "definitive_pre_submit_failure" || linkedCorrectionRunId !== undefined ||
+        !/^run-[a-f0-9]{24}$/.test(correctionRunId) || !isSha256(correctionRequestSha256) ||
+        runIdentity(correctionRequestSha256) !== correctionRunId
+      ) {
+        throw new RunRecordError("ILLEGAL_TRANSITION", "A definitive failure can reserve only one exact correction Run.")
+      }
+      linkedCorrectionRunId = correctionRunId
+      linkedCorrectionRequestSha256 = correctionRequestSha256
       continue
     }
     if (event.kind === "definitive_pre_submit_failure") {
@@ -1542,6 +1574,8 @@ const replay = (
     ...(checksSha256 === undefined ? {} : { checksSha256 }),
     ...(classification === undefined ? {} : { classification }),
     ...(finding === undefined ? {} : { finding }),
+    ...(linkedCorrectionRunId === undefined ? {} : { linkedCorrectionRunId }),
+    ...(linkedCorrectionRequestSha256 === undefined ? {} : { linkedCorrectionRequestSha256 }),
     ...(providerJobId === undefined ? {} : { providerJobId }),
     ...(pollCount === 0 ? {} : { pollCount }),
     ...(completedCount === undefined ? {} : { completedCount }),
@@ -1594,6 +1628,9 @@ export const reserveRun = (
       : new RunRecordError("INVALID_PLANNED_RUN", "The Planned Run could not be validated."),
   })
   const store = yield* RunRecordStore
+  const clock = yield* RunRecordClock
+  const timestamp = yield* clock.now()
+  const runId = runIdentity(input.plannedRun.requestSha256)
   let correctionDepth = 0
   if (request.linkedRun !== undefined) {
     const parent = yield* loadRun(request.linkedRun.parentRunId)
@@ -1604,7 +1641,17 @@ export const reserveRun = (
         "reconcile",
       ))
     }
-    if (parent.chainHeadSha256 !== request.linkedRun.parentFailureEventSha256) {
+    const isReservedSuccessor =
+      parent.linkedCorrectionRunId === runId &&
+      parent.linkedCorrectionRequestSha256 === input.plannedRun.requestSha256
+    if (parent.linkedCorrectionRunId !== undefined && !isReservedSuccessor) {
+      return yield* Effect.fail(new RunRecordError(
+        "LINK_NOT_ALLOWED",
+        "The definitive failure already reserved its one correction Run.",
+        "new-linked-run",
+      ))
+    }
+    if (!isReservedSuccessor && parent.chainHeadSha256 !== request.linkedRun.parentFailureEventSha256) {
       return yield* Effect.fail(new RunRecordError(
         "LINK_FAILURE_MISMATCH",
         "The successor does not name the verified definitive failure event.",
@@ -1646,10 +1693,31 @@ export const reserveRun = (
         "new-linked-run",
       ))
     }
+    if (!isReservedSuccessor) {
+      const parentEvents = yield* Effect.try({
+        try: () => parseEvents(parentStored.events),
+        catch: (error) => error instanceof RunRecordError
+          ? error
+          : new RunRecordError("EVENT_CHAIN_BROKEN", "The correction parent journal could not be decoded.", "repair-evidence"),
+      })
+      const linkEvent = makeEvent({
+        schemaVersion: "1",
+        sequence: parentEvents.length + 1,
+        operationId: `link-${runId}`,
+        runId: parent.runId,
+        timestamp,
+        kind: "correction_run_linked",
+        previousEventSha256: parent.chainHeadSha256,
+        payload: {
+          correctionRunId: runId,
+          correctionRequestSha256: input.plannedRun.requestSha256,
+        },
+      })
+      const nextParent = replay(parent.runId, parentStored.request, [...parentEvents, linkEvent], parentStored.evidence)
+      yield* store.appendEvent(parent.runId, parent.chainHeadSha256, encodeEvent(linkEvent))
+      yield* store.writeState(parent.runId, encodeView(nextParent))
+    }
   }
-  const clock = yield* RunRecordClock
-  const timestamp = yield* clock.now()
-  const runId = runIdentity(input.plannedRun.requestSha256)
   const attemptId = `attempt-${runId.slice(4)}-1`
   const firstEvent = makeEvent({
     schemaVersion: "1",
@@ -2733,20 +2801,31 @@ export const recordOperation = (
   if (operation._tag === "ClassifyFailure") {
     const failure = stableClassifiedFailure!
     const policy = classifiedFailurePolicy(failure.class)
-    const phaseAllowed = failure.class === "budget_exhausted"
-      ? current.phase === "reserved"
-      : failure.class === "repeated_bad_output"
+    const phaseAllowed = failure.class === "assembly_failure"
+      ? current.phase === "donor_selected"
+      : failure.class === "verification_failure" || failure.class === "repeated_bad_output"
         ? current.phase === "generated_outputs_received" || current.phase === "assembly_completed"
         : current.phase === "submission_may_have_started" || current.phase === "provider_evidence_received"
-    if (!phaseAllowed) {
+    const repeatedEvidenceAllowed = failure.class !== "repeated_bad_output" ||
+      current.evidence.filter((item) =>
+        item.applicationPath.startsWith("outputs/") && item.applicationPath !== "outputs/assembled.rgba.json"
+      ).length >= 2
+    if (!phaseAllowed || !repeatedEvidenceAllowed) {
       return yield* Effect.fail(new RunRecordError(
         "ILLEGAL_TRANSITION",
         `The ${failure.class} classification is not valid from ${current.phase}.`,
       ))
     }
+    const intentOperationId = `failure-intent-${sha256(operation.operationId).slice(0, 24)}`
+    const existingIntent = events.find((event) => event.operationId === intentOperationId)
     const document = {
       class: failure.class,
       correctionOwner: policy.correctionOwner,
+      evidence: {
+        artifactSha256s: current.evidence.map((item) => item.sha256),
+        requestSha256: current.requestSha256,
+        stateEventSha256: existingIntent?.previousEventSha256 ?? current.chainHeadSha256,
+      },
       message: failure.message,
       outcome: policy.outcome,
       retryState: policy.retryState,
@@ -2757,8 +2836,6 @@ export const recordOperation = (
     const applicationPath = "failure.json"
     const clock = yield* RunRecordClock
     const timestamp = yield* clock.now()
-    const intentOperationId = `failure-intent-${sha256(operation.operationId).slice(0, 24)}`
-    const existingIntent = events.find((event) => event.operationId === intentOperationId)
     if (existingIntent !== undefined && (
       existingIntent.kind !== "classified_outcome_intent" ||
       existingIntent.eventSha256 !== events.at(-1)?.eventSha256 ||

@@ -1887,12 +1887,17 @@ test("a definitive pre-submit failure remains immutable and only supports a prov
   const falseLink = await Effect.runPromise(Effect.flip(
     provide(reserve(reservationFor(falseLinkPlan))),
   ))
-  assert.equal(falseLink.code, "LINK_FAILURE_MISMATCH")
+  assert.equal(falseLink.code, "LINK_NOT_ALLOWED")
 
   const originalAfter = await Effect.runPromise(
     load(original.runId).pipe(Effect.provide(memory.layer)),
   )
-  assert.deepEqual(originalAfter, failed.view)
+  assert.equal(originalAfter.phase, failed.view.phase)
+  assert.deepEqual(originalAfter.finding, failed.view.finding)
+  assert.equal(originalAfter.spendState, failed.view.spendState)
+  assert.equal(originalAfter.retryState, failed.view.retryState)
+  assert.equal(originalAfter.linkedCorrectionRunId, successor.runId)
+  assert.equal(originalAfter.linkedCorrectionRequestSha256, correctedPlan.requestSha256)
 })
 
 test("definitive unspent failures permit only bounded, material correction Runs", async () => {
@@ -1955,6 +1960,12 @@ test("definitive unspent failures permit only bounded, material correction Runs"
     provide(reserve(reservationFor(exhausted))),
   ))
   assert.equal(exhaustedError.code, "CORRECTION_LIMIT_EXHAUSTED")
+
+  const sibling = await plannedRun(linkOne, 1, "A sibling correction must not bypass the lineage ceiling.")
+  const siblingError = await Effect.runPromise(Effect.flip(
+    provide(reserve(reservationFor(sibling))),
+  ))
+  assert.equal(siblingError.code, "LINK_NOT_ALLOWED")
 })
 
 test("possibly-spent blocked Runs can reconcile only and never create a correction Run", async () => {
@@ -1999,8 +2010,6 @@ test("persists a closed failure record with fixed spend, retry, outcome, and cor
     ["malformed_provider_response", "failed", "possibly_spent", "reconcile-only", "Generation", true],
     ["output_count_mismatch", "failed", "possibly_spent", "reconcile-only", "Generation", true],
     ["post_submit_persistence_failure", "blocked", "possibly_spent", "reconcile-only", "Generation", true],
-    ["budget_exhausted", "blocked", "not_spent", "never-resubmit", "application decision owner", false],
-    ["repeated_bad_output", "failed", "unknown", "reconcile-only", "Verification", true],
   ] as const
 
   for (const [failureClass, outcome, spend, retry, owner, afterSubmission] of cases) {
@@ -2019,32 +2028,8 @@ test("persists a closed failure record with fixed spend, retry, outcome, and cor
         runId: reserved.runId,
         operationId: `${failureClass}-submission`,
       })))
-      if (failureClass === "repeated_bad_output") {
-        const providerBody = Buffer.from('{"request_id":"repeated-output","status":"accepted"}', "utf8")
-        await Effect.runPromise(provide(record({
-          _tag: "CommitProviderEvidence",
-          runId: reserved.runId,
-          operationId: `${failureClass}-provider`,
-          evidence: {
-            mediaType: "application/json",
-            body: providerBody,
-            sha256: createHash("sha256").update(providerBody).digest("hex"),
-          },
-        })))
-        const outputBody = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
-        await Effect.runPromise(provide(record({
-          _tag: "CommitGeneratedOutput",
-          runId: reserved.runId,
-          operationId: `${failureClass}-output`,
-          output: {
-            applicationPath: "outputs/repeated-bad.png",
-            mediaType: "image/png",
-            body: outputBody,
-            sha256: createHash("sha256").update(outputBody).digest("hex"),
-          },
-        })))
-      }
     }
+    const beforeClassification = await Effect.runPromise(provide(load(reserved.runId)))
     const classified = await Effect.runPromise(provide(record({
       _tag: "ClassifyFailure",
       runId: reserved.runId,
@@ -2068,12 +2053,76 @@ test("persists a closed failure record with fixed spend, retry, outcome, and cor
     assert.deepEqual(JSON.parse(Buffer.from(failureBytes).toString("utf8")), {
       class: failureClass,
       correctionOwner: owner,
+      evidence: {
+        artifactSha256s: beforeClassification.evidence.map((item) => item.sha256),
+        requestSha256: classified.view.requestSha256,
+        stateEventSha256: beforeClassification.chainHeadSha256,
+      },
       message: `Safe fixture failure for ${failureClass}.`,
       outcome,
       retryState: retry,
       spendState: spend,
     })
   }
+})
+
+test("repeated bad output requires at least two persisted candidate artifacts", async () => {
+  const planned = await plannedRun(undefined, 2)
+  const memory = await memoryHarness()
+  const provide = <Success, Error>(
+    effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
+  ): Effect.Effect<Success, Error> => effect.pipe(
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, clock),
+  )
+  const reserved = await Effect.runPromise(provide(reserve(reservationFor(planned))))
+  await Effect.runPromise(provide(record({
+    _tag: "SubmissionMayHaveStarted",
+    runId: reserved.runId,
+    operationId: "repeated-evidence-submission",
+  })))
+  const providerBody = Buffer.from('{"request_id":"repeated-evidence","status":"accepted"}', "utf8")
+  await Effect.runPromise(provide(record({
+    _tag: "CommitProviderEvidence",
+    runId: reserved.runId,
+    operationId: "repeated-evidence-provider",
+    evidence: {
+      mediaType: "application/json",
+      body: providerBody,
+      sha256: createHash("sha256").update(providerBody).digest("hex"),
+    },
+  })))
+  const persistOutput = (index: number) => {
+    const body = Buffer.from(`bad candidate ${index}`, "utf8")
+    return record({
+      _tag: "CommitGeneratedOutput" as const,
+      runId: reserved.runId,
+      operationId: `repeated-evidence-output-${index}`,
+      output: {
+        applicationPath: `outputs/repeated-bad-${index}.png` as const,
+        mediaType: "image/png",
+        body,
+        sha256: createHash("sha256").update(body).digest("hex"),
+      },
+    })
+  }
+  await Effect.runPromise(provide(persistOutput(1)))
+  const classification = {
+    _tag: "ClassifyFailure" as const,
+    runId: reserved.runId,
+    operationId: "repeated-evidence-outcome",
+    failure: {
+      class: "repeated_bad_output" as const,
+      message: "Two persisted candidates failed verification.",
+    },
+  }
+  const unsupported = await Effect.runPromise(Effect.flip(provide(record(classification))))
+  assert.equal(unsupported.code, "ILLEGAL_TRANSITION")
+
+  await Effect.runPromise(provide(persistOutput(2)))
+  const classified = await Effect.runPromise(provide(record(classification)))
+  assert.equal(classified.view.finding?.class, "repeated_bad_output")
+  assert.equal(classified.view.finding?.correctionOwner, "Verification")
 })
 
 test("replays an interrupted classified failure to one durable evidence-backed outcome", async () => {

@@ -14,6 +14,7 @@ import {
   readDiagnostics,
   record,
   reserve,
+  type ClassifiedFailureClass,
   type RunRecordDiagnostics,
 } from "../run-record/index.js"
 import { verify } from "../verification/index.js"
@@ -44,6 +45,26 @@ const asConductorError = (
 ) => (error: unknown): ConductorError => new ConductorError(code, message, namedCause(error))
 
 const spendRisk = "Planning made no provider request, created no attempt, and spent $0. A later advance may spend up to the locked ceiling."
+
+const advanceReferenceRefused = (
+  objective: string,
+  error: unknown,
+): Extract<AdvanceDecision, { _tag: "AdvanceRefused" }> => ({
+  _tag: "AdvanceRefused",
+  outcome: "blocked",
+  finding: {
+    code: namedCause(error) ?? "REFERENCE_EVIDENCE_UNAVAILABLE",
+    message: "The planned authoritative reference was unavailable or changed before the Run could be reserved.",
+    correctionOwner: "Reference Planning",
+  },
+  normalView: {
+    objective,
+    evidence: "The planned reference could not be re-read and hash-locked into the exact provider payload.",
+    nextAction: "Restore or correct the authoritative reference, then plan again.",
+    spendRisk: "No provider request was made, no attempt was reserved, and spend is $0.",
+    humanDecision: "A human is needed only if the application has no unambiguous authoritative reference.",
+  },
+})
 
 type RefusalGuidance = Readonly<{
   nextAction: string
@@ -370,6 +391,29 @@ const replayedTerminalDecision = (
   }, diagnostics.view.classification)
 }
 
+const classifyRunFailure = (
+  runId: string,
+  objective: string,
+  failureClass: ClassifiedFailureClass,
+  message: string,
+): Effect.Effect<AdvanceDecision, ConductorError, import("../run-record/index.js").RunRecordStoreService | import("../run-record/index.js").RunRecordClockService> =>
+  Effect.gen(function*() {
+    const result = yield* record({
+      _tag: "ClassifyFailure",
+      runId,
+      operationId: `conductor-${failureClass}`,
+      failure: { class: failureClass, message },
+    }).pipe(Effect.mapError(asConductorError(
+      "RUN_RECORD_FAILURE",
+      "The terminal module failure could not be persisted.",
+    )))
+    const diagnostics = yield* readDiagnostics(result.view.runId).pipe(Effect.mapError(asConductorError(
+      "RUN_RECORD_FAILURE",
+      "The terminal module failure could not be replayed.",
+    )))
+    return replayedTerminalDecision(diagnostics, objective)
+  })
+
 const classifyGenerationFailure = (
   runId: string,
   objective: string,
@@ -394,44 +438,16 @@ const classifyGenerationFailure = (
     : failureClass === "output_count_mismatch"
       ? "The provider returned a completed output count that contradicts the immutable request."
       : "The provider response or normalized adapter evidence is malformed."
-  return Effect.gen(function*() {
-    const result = yield* record({
-      _tag: "ClassifyFailure",
-      runId,
-      operationId: `conductor-${failureClass}`,
-      failure: { class: failureClass, message },
-    }).pipe(Effect.mapError(asConductorError(
-      "RUN_RECORD_FAILURE",
-      "The terminal Generation failure could not be persisted.",
-    )))
-    const diagnostics = yield* readDiagnostics(result.view.runId).pipe(Effect.mapError(asConductorError(
-      "RUN_RECORD_FAILURE",
-      "The terminal Generation failure could not be replayed.",
-    )))
-    return replayedTerminalDecision(diagnostics, objective)
-  })
+  return classifyRunFailure(runId, objective, failureClass, message)
 }
 
-const interruptedPersistenceDecision = (
-  runId: string,
-  objective: string,
-  cause: unknown,
-): Effect.Effect<AdvanceDecision, ConductorError, import("../run-record/index.js").RunRecordStoreService> =>
-  readDiagnostics(runId).pipe(
-    Effect.map((diagnostics) => terminalFailureDecision(
-      diagnostics,
-      objective,
-      {
-        code: "POST_SUBMIT_PERSISTENCE_FAILURE",
-        message: "Provider work may have completed, but its durable receipt is interrupted and must be reconciled.",
-        correctionOwner: "Generation",
-      },
-      "blocked",
-    )),
-    Effect.mapError(() => asConductorError(
-      "RUN_RECORD_FAILURE",
-      "The interrupted post-submit Run could not be replayed safely.",
-    )(cause)),
+const persistWithReconciliation = <Success, Error, Requirements>(
+  operation: Effect.Effect<Success, Error, Requirements>,
+  message: string,
+): Effect.Effect<Success, ConductorError, Requirements> =>
+  operation.pipe(
+    Effect.catchEager(() => operation),
+    Effect.mapError(asConductorError("RUN_RECORD_FAILURE", message)),
   )
 
 const advanceSeedanceRun = (
@@ -451,7 +467,7 @@ const advanceSeedanceRun = (
       ))
     }
     const files = yield* ApplicationFiles
-    const references = yield* Effect.forEach(request.references, (reference) =>
+    const referenceAttempt = yield* Effect.forEach(request.references, (reference) =>
       files.read(reference.applicationPath).pipe(
         Effect.map((snapshot) => ({
           slot: reference.slot,
@@ -466,13 +482,24 @@ const advanceSeedanceRun = (
           `The locked reference ${reference.applicationPath} could not be read.`,
         )),
       ),
-    )
-    const prepared = yield* prepare(request, references).pipe(
+    ).pipe(Effect.match({
+      onFailure: (error) => ({ _tag: "Failure" as const, error }),
+      onSuccess: (value) => ({ _tag: "Success" as const, value }),
+    }))
+    if (referenceAttempt._tag === "Failure") return advanceReferenceRefused(request.objective, referenceAttempt.error)
+    const references = referenceAttempt.value
+    const preparedAttempt = yield* prepare(request, references).pipe(
       Effect.mapError(asConductorError(
         "REFERENCE_EVIDENCE_UNAVAILABLE",
         "The exact Seedance reference payload could not be prepared.",
       )),
+      Effect.match({
+        onFailure: (error) => ({ _tag: "Failure" as const, error }),
+        onSuccess: (value) => ({ _tag: "Success" as const, value }),
+      }),
     )
+    if (preparedAttempt._tag === "Failure") return advanceReferenceRefused(request.objective, preparedAttempt.error)
+    const prepared = preparedAttempt.value
     let current = yield* reserve({
       plannedRun: command.run,
       payloadSha256: prepared.payloadSha256,
@@ -512,19 +539,12 @@ const advanceSeedanceRun = (
         return yield* classifyGenerationFailure(current.runId, request.objective, submissionAttempt.error)
       }
       const submitted = submissionAttempt.value
-      const persistenceAttempt = yield* record({
+      const persisted = yield* persistWithReconciliation(record({
         _tag: "CommitProviderEvidence",
         runId: current.runId,
         operationId: "conductor-seedance-submission-evidence",
         evidence: submitted.providerEvidence,
-      }).pipe(Effect.match({
-        onFailure: (error) => ({ _tag: "Failure" as const, error }),
-        onSuccess: (value) => ({ _tag: "Success" as const, value }),
-      }))
-      if (persistenceAttempt._tag === "Failure") {
-        return yield* interruptedPersistenceDecision(current.runId, request.objective, persistenceAttempt.error)
-      }
-      const persisted = persistenceAttempt.value
+      }), "The submitted Seedance job receipt could not be reconciled after a local persistence interruption.")
       const diagnostics = yield* readDiagnostics(persisted.view.runId).pipe(Effect.mapError(asConductorError(
         "RUN_RECORD_FAILURE",
         "The submitted Seedance job diagnostics could not be replayed.",
@@ -564,7 +584,7 @@ const advanceSeedanceRun = (
         return yield* classifyGenerationFailure(current.runId, request.objective, pollAttempt.error)
       }
       const polled = pollAttempt.value
-      const persistenceAttempt = yield* record(polled.status === "pending"
+      const persisted = yield* persistWithReconciliation(record(polled.status === "pending"
         ? {
             _tag: "CommitSeedancePoll" as const,
             runId: current.runId,
@@ -583,14 +603,7 @@ const advanceSeedanceRun = (
             outputs: polled.outputs,
             completedCount: polled.completedCount,
             cost: polled.cost,
-          }).pipe(Effect.match({
-            onFailure: (error) => ({ _tag: "Failure" as const, error }),
-            onSuccess: (value) => ({ _tag: "Success" as const, value }),
-          }))
-      if (persistenceAttempt._tag === "Failure") {
-        return yield* interruptedPersistenceDecision(current.runId, request.objective, persistenceAttempt.error)
-      }
-      const persisted = persistenceAttempt.value
+          }), "The Seedance poll receipt could not be reconciled after a local persistence interruption.")
       current = persisted.view
       if (polled.status === "pending" || current.phase === "provider_evidence_received") {
         const diagnostics = yield* readDiagnostics(current.runId).pipe(Effect.mapError(asConductorError(
@@ -630,7 +643,7 @@ const advanceSeedanceRun = (
         )),
       ),
     )
-    const checked = yield* verifyVideo({
+    const verificationAttempt = yield* verifyVideo({
       outputs,
       expected: request.videoPlan.expectedMedia,
       requestedCount: request.requestedCount,
@@ -640,10 +653,19 @@ const advanceSeedanceRun = (
         estimatedMaximumCostUsd: request.estimatedMaximumCostUsd,
         ...(current.actualCostUsd === undefined ? {} : { actualCostUsd: current.actualCostUsd }),
       },
-    }).pipe(Effect.mapError(asConductorError(
-      "VERIFICATION_FAILURE",
-      "The completed Seedance output did not pass independent media verification.",
-    )))
+    }).pipe(Effect.match({
+      onFailure: (error) => ({ _tag: "Failure" as const, error }),
+      onSuccess: (value) => ({ _tag: "Success" as const, value }),
+    }))
+    if (verificationAttempt._tag === "Failure") {
+      return yield* classifyRunFailure(
+        current.runId,
+        request.objective,
+        "verification_failure",
+        "The completed Seedance output did not pass independent media verification.",
+      )
+    }
+    const checked = verificationAttempt.value
     const committed = yield* record({
       _tag: "CommitVideoChecks",
       runId: current.runId,
@@ -677,7 +699,7 @@ export const advanceRun = (
     }
 
     const files = yield* ApplicationFiles
-    const references = yield* Effect.forEach(request.references, (reference) =>
+    const referenceAttempt = yield* Effect.forEach(request.references, (reference) =>
       files.read(reference.applicationPath).pipe(
         Effect.map((snapshot) => ({
           slot: reference.slot,
@@ -692,13 +714,24 @@ export const advanceRun = (
           `The locked reference ${reference.applicationPath} could not be read.`,
         )),
       ),
-    )
-    const prepared = yield* prepare(request, references).pipe(
+    ).pipe(Effect.match({
+      onFailure: (error) => ({ _tag: "Failure" as const, error }),
+      onSuccess: (value) => ({ _tag: "Success" as const, value }),
+    }))
+    if (referenceAttempt._tag === "Failure") return advanceReferenceRefused(request.objective, referenceAttempt.error)
+    const references = referenceAttempt.value
+    const preparedAttempt = yield* prepare(request, references).pipe(
       Effect.mapError(asConductorError(
         "REFERENCE_EVIDENCE_UNAVAILABLE",
         "The exact Generation reference payload could not be prepared.",
       )),
+      Effect.match({
+        onFailure: (error) => ({ _tag: "Failure" as const, error }),
+        onSuccess: (value) => ({ _tag: "Success" as const, value }),
+      }),
     )
+    if (preparedAttempt._tag === "Failure") return advanceReferenceRefused(request.objective, preparedAttempt.error)
+    const prepared = preparedAttempt.value
     let current = yield* reserve({
       plannedRun: command.run,
       payloadSha256: prepared.payloadSha256,
@@ -739,19 +772,12 @@ export const advanceRun = (
         return yield* classifyGenerationFailure(current.runId, request.objective, generationAttempt.error)
       }
       generated = generationAttempt.value
-      const persistenceAttempt = yield* record({
+      const provider = yield* persistWithReconciliation(record({
         _tag: "CommitProviderEvidence",
         runId: current.runId,
         operationId: "conductor-provider-evidence",
         evidence: generated.providerEvidence,
-      }).pipe(Effect.match({
-        onFailure: (error) => ({ _tag: "Failure" as const, error }),
-        onSuccess: (value) => ({ _tag: "Success" as const, value }),
-      }))
-      if (persistenceAttempt._tag === "Failure") {
-        return yield* interruptedPersistenceDecision(current.runId, request.objective, persistenceAttempt.error)
-      }
-      const provider = persistenceAttempt.value
+      }), "The Qwen provider receipt could not be reconciled after a local persistence interruption.")
       current = provider.view
     }
 
@@ -881,15 +907,24 @@ export const advanceRun = (
     )
 
     if (current.phase === "donor_selected") {
-      const assembled = yield* assemble({
+      const assemblyAttempt = yield* assemble({
         baseline: { body: baseline.bytes, sha256: baseline.sha256 },
         donor: { body: donorBytes, sha256: selectedDonorSha256 },
         ownedRegion: request.assemblyPlan.ownedRegion,
         exactCopy: request.assemblyPlan.exactCopy,
-      }).pipe(Effect.mapError(asConductorError(
-        "ASSEMBLY_FAILURE",
-        "Hash-locked deterministic Assembly failed.",
-      )))
+      }).pipe(Effect.match({
+        onFailure: (error) => ({ _tag: "Failure" as const, error }),
+        onSuccess: (value) => ({ _tag: "Success" as const, value }),
+      }))
+      if (assemblyAttempt._tag === "Failure") {
+        return yield* classifyRunFailure(
+          current.runId,
+          request.objective,
+          "assembly_failure",
+          "Hash-locked deterministic Assembly failed.",
+        )
+      }
+      const assembled = assemblyAttempt.value
       const persisted = yield* record({
         _tag: "CommitAssembly",
         runId: current.runId,
@@ -909,16 +944,25 @@ export const advanceRun = (
         "The assembled candidate evidence could not be verified and read.",
       )),
     )
-    const checked = yield* verify({
+    const verificationAttempt = yield* verify({
       baseline: { body: baseline.bytes, sha256: baseline.sha256 },
       donor: { body: donorBytes, sha256: selectedDonorSha256 },
       candidate: { body: candidateBytes, sha256: current.assemblyOutputSha256! },
       ownedRegion: request.assemblyPlan.ownedRegion,
       exactCopy: request.assemblyPlan.exactCopy,
-    }).pipe(Effect.mapError(asConductorError(
-      "VERIFICATION_FAILURE",
-      "The assembled candidate did not pass the ordered Fidelity Checks.",
-    )))
+    }).pipe(Effect.match({
+      onFailure: (error) => ({ _tag: "Failure" as const, error }),
+      onSuccess: (value) => ({ _tag: "Success" as const, value }),
+    }))
+    if (verificationAttempt._tag === "Failure") {
+      return yield* classifyRunFailure(
+        current.runId,
+        request.objective,
+        "verification_failure",
+        "The assembled candidate did not pass the ordered Fidelity Checks.",
+      )
+    }
+    const checked = verificationAttempt.value
     const committed = yield* record({
       _tag: "CommitChecks",
       runId: current.runId,

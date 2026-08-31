@@ -57,6 +57,12 @@ export type AdvanceCommand = Readonly<{
 
 export type AdvanceDecision =
   | Readonly<{
+      _tag: "AdvanceRefused"
+      outcome: "blocked" | "failed"
+      finding: OutcomeFinding
+      normalView: NormalView
+    }>
+  | Readonly<{
       _tag: "ProviderPending"
       runId: string
       jobId: string

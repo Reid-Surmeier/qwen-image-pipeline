@@ -161,6 +161,53 @@ test("planning refusals are terminal machine outcomes with one named correction 
   }
 })
 
+test("post-plan reference drift returns a Reference Planning outcome before any adapter call", async () => {
+  let applicationFiles: Map<string, Uint8Array> | undefined
+  const fixture = makeFixture("seedance-video", {
+    files: (files) => {
+      applicationFiles = files
+    },
+  })
+  const planned = await Effect.runPromise(
+    plan({ objectivePath: fixture.objectivePath }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(MediaInspector, byteMediaInspector),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+    ),
+  )
+  assert.equal(planned._tag, "Planned")
+  if (planned._tag !== "Planned") return
+  applicationFiles!.delete("references/neutral.mp4")
+
+  let adapterCalls = 0
+  const adapter: GenerationAdapterService = {
+    invoke: () => Effect.sync(() => {
+      adapterCalls += 1
+      throw new Error("adapter tripwire")
+    }),
+    submitSeedance: () => Effect.sync(() => {
+      adapterCalls += 1
+      throw new Error("adapter tripwire")
+    }),
+    recover: () => Effect.die("reference refusal must not recover"),
+  }
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const decision = await Effect.runPromise(advance({ run: planned.run }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(GenerationAdapter, adapter),
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-30T14:00:00.000Z") }),
+  ))
+  assert.equal(decision._tag, "AdvanceRefused")
+  if (decision._tag !== "AdvanceRefused") return
+  assert.equal(decision.outcome, "blocked")
+  assert.equal(decision.finding.correctionOwner, "Reference Planning")
+  assert.equal(decision.finding.code, "REFERENCE_EVIDENCE_UNAVAILABLE")
+  assert.match(decision.normalView.spendRisk, /no provider request.*no attempt.*\$0/i)
+  assert.equal("approval" in decision, false)
+  assert.equal(adapterCalls, 0)
+})
+
 const hash = (value: Uint8Array | string): string =>
   createHash("sha256").update(value).digest("hex")
 
@@ -530,17 +577,6 @@ test("advances one Seedance Run by submitting once and polling the same job to v
   assert.equal(pollCalls, 0)
 
   await Effect.runPromise(memory.failNext("append-event"))
-  const interrupted = await executeAdvance()
-  assert.equal(interrupted._tag, "Blocked")
-  if (interrupted._tag !== "Blocked") return
-  assert.equal(interrupted.outcome, "blocked")
-  assert.equal(interrupted.finding.code, "POST_SUBMIT_PERSISTENCE_FAILURE")
-  assert.equal(interrupted.finding.correctionOwner, "Generation")
-  assert.equal(interrupted.diagnostics.view.providerJobId, "seedance-job-1")
-  assert.equal("approval" in interrupted, false)
-  assert.equal(submitCalls, 1)
-  assert.equal(pollCalls, 1)
-
   const recoveredPending = await executeAdvance()
   assert.equal(recoveredPending._tag, "ProviderPending")
   if (recoveredPending._tag !== "ProviderPending") return
@@ -548,7 +584,7 @@ test("advances one Seedance Run by submitting once and polling the same job to v
   assert.equal(recoveredPending.jobId, submitted.jobId)
   assert.equal(recoveredPending.pollCount, 1)
   assert.equal(submitCalls, 1)
-  assert.equal(pollCalls, 2)
+  assert.equal(pollCalls, 1)
 
   const completed = await executeAdvance()
   assert.equal(completed._tag, "VerifiedCandidate")
@@ -566,7 +602,7 @@ test("advances one Seedance Run by submitting once and polling the same job to v
   assert.equal(plannedDecision.run.request.videoPlan?.assembly.pixelOwnership, "none-authoritative")
   assert.equal("assemblyPlan" in plannedDecision.run.request, false)
   assert.equal(submitCalls, 1)
-  assert.equal(pollCalls, 3)
+  assert.equal(pollCalls, 2)
   assert.match(completed.normalView.evidence, /video.*checks/i)
 
   const stranded = await Effect.runPromise(makeMemoryRunRecordHarness())
@@ -646,6 +682,104 @@ test("advances one Seedance Run by submitting once and polling the same job to v
   assert.equal(recoveredSubmission._tag, "ProviderPending")
   assert.equal(submitCalls, submitsBeforeRecovery)
   assert.equal(recoveryPollCalls, 1)
+})
+
+test("persists a real Seedance verification failure with Verification ownership and no resubmission", async () => {
+  const fixture = makeFixture("seedance-video", {
+    objective: (objective) => {
+      const videoPlan = objective.videoPlan as Record<string, unknown>
+      const expected = videoPlan.expectedMedia as Record<string, unknown>
+      expected.width = 65
+    },
+  })
+  const planned = await Effect.runPromise(
+    plan({ objectivePath: fixture.objectivePath }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(MediaInspector, byteMediaInspector),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+    ),
+  )
+  assert.equal(planned._tag, "Planned")
+  if (planned._tag !== "Planned") return
+  const videoBody = (await Effect.runPromise(fixture.files.read("references/neutral.mp4"))).bytes
+  const submissionBody = Buffer.from('{"job_id":"verification-job","status":"submitted"}')
+  const completedBody = Buffer.from(JSON.stringify({
+    job_id: "verification-job",
+    status: "completed",
+    outputs: [{
+      application_path: "outputs/verification-result.mp4",
+      media_type: "video/mp4",
+      sha256: hash(videoBody),
+    }],
+    completed_count: 1,
+    cost: { state: "estimated-only" },
+  }))
+  let submitCalls = 0
+  let pollCalls = 0
+  const adapter: GenerationAdapterService = {
+    invoke: () => Effect.die("Qwen Generation must not run for Seedance"),
+    submitSeedance: (prepared) => Effect.sync(() => {
+      submitCalls += 1
+      return {
+        provider: "openrouter" as const,
+        model: prepared.request.model,
+        jobId: "verification-job",
+        providerEvidence: {
+          mediaType: "application/json" as const,
+          body: submissionBody,
+          sha256: hash(submissionBody),
+        },
+      }
+    }),
+    pollSeedance: (prepared) => Effect.sync(() => {
+      pollCalls += 1
+      return {
+        status: "completed" as const,
+        provider: "openrouter" as const,
+        model: prepared.request.model,
+        jobId: "verification-job",
+        providerEvidence: {
+          mediaType: "application/json" as const,
+          body: completedBody,
+          sha256: hash(completedBody),
+        },
+        outputs: [{
+          applicationPath: "outputs/verification-result.mp4" as const,
+          mediaType: "video/mp4" as const,
+          body: videoBody,
+          sha256: hash(videoBody),
+        }],
+        completedCount: 1,
+        cost: { state: "estimated-only" as const },
+      }
+    }),
+  }
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const executeAdvance = () => Effect.runPromise(advance({ run: planned.run }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(GenerationAdapter, adapter),
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-30T17:00:00.000Z") }),
+  ))
+
+  const submitted = await executeAdvance()
+  assert.equal(submitted._tag, "ProviderPending")
+  const failed = await executeAdvance()
+  assert.equal(failed._tag, "Failed")
+  if (failed._tag !== "Failed") return
+  assert.equal(failed.outcome, "failed")
+  assert.equal(failed.finding.code, "verification_failure")
+  assert.equal(failed.finding.correctionOwner, "Verification")
+  assert.equal(failed.diagnostics.view.retryState, "reconcile-only")
+  assert.equal(failed.diagnostics.view.spendState, "unknown")
+  assert.equal("approval" in failed, false)
+  assert.equal(submitCalls, 1)
+  assert.equal(pollCalls, 1)
+
+  const replayed = await executeAdvance()
+  assert.equal(replayed._tag, "Failed")
+  assert.equal(submitCalls, 1)
+  assert.equal(pollCalls, 1)
 })
 
 test("classifies ambiguous, malformed, and count-mismatched provider results without resubmission", async () => {

@@ -17,7 +17,8 @@ export type ClassifiedFailureClass =
   | "malformed_provider_response"
   | "output_count_mismatch"
   | "post_submit_persistence_failure"
-  | "budget_exhausted"
+  | "assembly_failure"
+  | "verification_failure"
   | "repeated_bad_output"
 
 export type RunFinding = Readonly<{
@@ -228,6 +229,8 @@ export type RunRecordView = Readonly<{
   checksSha256?: string
   classification?: "verified_candidate" | "human_decision_required" | "blocked" | "failed"
   finding?: RunFinding
+  linkedCorrectionRunId?: string
+  linkedCorrectionRequestSha256?: string
   providerJobId?: string
   pollCount?: number
   completedCount?: number
