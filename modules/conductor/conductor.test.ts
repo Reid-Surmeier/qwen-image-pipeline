@@ -1,0 +1,1718 @@
+import assert from "node:assert/strict"
+import { access, cp, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { dirname, join } from "node:path"
+import test from "node:test"
+
+import { Effect } from "effect"
+
+import {
+  advance,
+  ApplicationFiles,
+  fileApplicationFiles,
+  MediaInspector,
+  PROJECT_CONTRACT_PATH,
+  PlanningIdentity,
+  TOOL_LOCK_PATH,
+  byteMediaInspector,
+  filePlanningIdentity,
+  plan,
+  type PlanDecision,
+} from "./index.js"
+import {
+  GenerationAdapter,
+  GenerationError,
+  invoke,
+  prepare,
+  type GenerationAdapterService,
+  type GenerationResult,
+} from "../generation/index.js"
+import { MediaInspectionError, type MediaInspectorService } from "../run-contract/index.js"
+import {
+  RunRecordClock,
+  fileRunRecordLayer,
+  makeMemoryRunRecordHarness,
+  readEvidence,
+  record,
+  reserve,
+  type RunRecordClockService,
+} from "../run-record/index.js"
+import { makeFixture } from "../../tests/control-plane-fixture.js"
+import { createHash } from "node:crypto"
+
+const execute = async (
+  mode: "qwen-image" | "seedance-video",
+  mutation: Parameters<typeof makeFixture>[1] = {},
+): Promise<Readonly<{ result: PlanDecision; reads: ReadonlyArray<string> }>> => {
+  const fixture = makeFixture(mode, mutation)
+  const result = await Effect.runPromise(
+    plan({ objectivePath: fixture.objectivePath }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(MediaInspector, byteMediaInspector),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+    ),
+  )
+  return { result, reads: fixture.reads }
+}
+
+test("plans neutral Qwen and Seedance objectives through the same interface", async () => {
+  for (const mode of ["qwen-image", "seedance-video"] as const) {
+    const { result, reads } = await execute(mode)
+    assert.equal(result._tag, "Planned")
+    if (result._tag !== "Planned") continue
+    assert.equal(result.run.request.mode, mode)
+    assert.equal(Object.isFrozen(result.run), true)
+    assert.deepEqual(reads.slice(0, 3), [PROJECT_CONTRACT_PATH, TOOL_LOCK_PATH, `objectives/${mode === "qwen-image" ? "qwen-neutral" : "seedance-neutral"}.json`])
+    const reference = result.run.request.references[0]
+    assert.ok(reference)
+    assert.match(reference.applicationPath, /^references\//)
+    assert.match(reference.sha256, /^[a-f0-9]{64}$/)
+    assert.ok(reference.authorityReason.length > 0)
+    assert.match(reference.payloadDestination, /^\/input_references\/0\/(image_url|video_url)\/url$/)
+    assert.match(result.normalView.objective, /neutral square/i)
+    assert.match(result.normalView.evidence, /authoritative/i)
+    assert.match(result.normalView.nextAction, /advance/i)
+    assert.match(result.normalView.spendRisk, /no provider request.*no attempt.*\$0/i)
+    assert.match(result.normalView.humanDecision, /no human decision/i)
+  }
+})
+
+const refusalCases: ReadonlyArray<
+  readonly [string, "qwen-image" | "seedance-video", Parameters<typeof makeFixture>[1], string]
+> = [
+  ["missing", "qwen-image", { files: (files) => files.delete("references/neutral.png") }, "REFERENCE_MISSING"],
+  ["changed", "qwen-image", { files: (files) => files.set("references/neutral.png", Buffer.from("changed")) }, "REFERENCE_HASH_MISMATCH"],
+  ["wrong kind", "qwen-image", { objective: (o) => ((o.references as Array<Record<string, unknown>>)[0]!.kind = "video") }, "REFERENCE_KIND_MISMATCH"],
+  ["unsafe path", "qwen-image", { objective: (o) => ((o.references as Array<Record<string, unknown>>)[0]!.path = "../secret.png") }, "REFERENCE_PATH_UNSAFE"],
+  ["secret bearing", "qwen-image", { objective: (o) => (o.apiKey = "sk-secret-value") }, "SECRET_MATERIAL_DETECTED"],
+  ["unknown credential field", "qwen-image", { objective: (o) => (o.credential = "actual-private-value") }, "SECRET_MATERIAL_DETECTED"],
+  ["generic secret field", "qwen-image", { objective: (o) => (o.secret = "actual-private-value") }, "SECRET_MATERIAL_DETECTED"],
+  ["over count", "qwen-image", { objective: (o) => (o.requestedCount = 5) }, "COUNT_OUT_OF_RANGE"],
+  ["over budget", "qwen-image", { objective: (o) => (o.budgetCeilingUsd = "0.01") }, "BUDGET_EXCEEDED"],
+  ["mismatched exact Tool Lock", "qwen-image", { toolLock: (lock) => (lock.commit = "3".repeat(40)) }, "TOOL_LOCK_MISMATCH"],
+  ["missing fixed Project Contract", "qwen-image", { files: (files) => files.delete(PROJECT_CONTRACT_PATH) }, "PROJECT_CONTRACT_MISSING"],
+  ["missing fixed Tool Lock", "qwen-image", { files: (files) => files.delete(TOOL_LOCK_PATH) }, "TOOL_LOCK_MISSING"],
+  ["matching but invalid payload destination", "seedance-video", {
+    contract: (contract) => {
+      const procedures = contract.procedures as Array<Record<string, unknown>>
+      const seedance = procedures.find((procedure) => procedure.id === "seedance-neutral")!
+      ;(seedance.referenceRequirements as Array<Record<string, unknown>>)[0]!.payloadDestination = "not-a-json-pointer"
+    },
+    objective: (objective) => {
+      ;(objective.references as Array<Record<string, unknown>>)[0]!.payloadDestination = "not-a-json-pointer"
+    },
+  }, "PAYLOAD_DESTINATION_INVALID"],
+  ["image-only Seedance video", "seedance-video", { objective: (o) => ((o.references as Array<Record<string, unknown>>)[0]!.kind = "image") }, "SEEDANCE_VIDEO_REFERENCE_REQUIRED"],
+]
+
+for (const [name, mode, mutation, expectedCode] of refusalCases) {
+  test(`refuses ${name} before Generation or attempt reservation`, async () => {
+    const { result } = await execute(mode, mutation)
+    assert.equal(result._tag, "Refused")
+    if (result._tag !== "Refused") return
+    assert.equal(result.refusal.code, expectedCode)
+    assert.match(result.normalView.spendRisk, /no provider request.*no attempt.*\$0/i)
+    assert.ok(result.normalView.nextAction.length > 0)
+    assert.ok(result.normalView.evidence.length > 0)
+  })
+}
+
+test("a refusal view names the real objective and missing evidence", async () => {
+  const { result } = await execute("qwen-image", {
+    files: (files) => files.delete("references/neutral.png"),
+  })
+  assert.equal(result._tag, "Refused")
+  if (result._tag !== "Refused") return
+  assert.match(result.normalView.objective, /edit a neutral square/i)
+  assert.match(result.normalView.evidence, /references\/neutral\.png/i)
+  assert.match(result.normalView.evidence, /does not exist/i)
+})
+
+test("a secret-bearing objective is refused without echoing secret material", async () => {
+  for (const secret of [
+    "-----BEGIN PRIVATE KEY----- actual-private-material",
+    "https://operator:actual-password@example.test/reference.png",
+  ]) {
+    const { result } = await execute("qwen-image", {
+      objective: (objective) => (objective.summary = secret),
+    })
+    assert.equal(result._tag, "Refused")
+    if (result._tag !== "Refused") continue
+    assert.equal(result.refusal.code, "SECRET_MATERIAL_DETECTED")
+    assert.doesNotMatch(JSON.stringify(result.normalView), new RegExp(secret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
+    assert.match(result.normalView.objective, /could not be read safely/i)
+  }
+})
+
+test("planning refusals are terminal machine outcomes with one named correction owner", async () => {
+  const missing = await execute("qwen-image", {
+    files: (files) => files.delete("references/neutral.png"),
+  })
+  assert.equal(missing.result._tag, "Refused")
+  if (missing.result._tag === "Refused") {
+    assert.equal(missing.result.outcome, "blocked")
+    assert.equal(missing.result.finding.correctionOwner, "Reference Planning")
+  }
+
+  const exhausted = await execute("qwen-image", {
+    objective: (objective) => {
+      objective.requestedCount = 2
+      objective.budgetCeilingUsd = "0.07"
+    },
+  })
+  assert.equal(exhausted.result._tag, "Refused")
+  if (exhausted.result._tag === "Refused") {
+    assert.equal(exhausted.result.outcome, "blocked")
+    assert.equal(exhausted.result.finding.correctionOwner, "application decision owner")
+  }
+})
+
+test("post-plan reference drift returns a Reference Planning outcome before any adapter call", async () => {
+  let applicationFiles: Map<string, Uint8Array> | undefined
+  const fixture = makeFixture("seedance-video", {
+    files: (files) => {
+      applicationFiles = files
+    },
+  })
+  const planned = await Effect.runPromise(
+    plan({ objectivePath: fixture.objectivePath }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(MediaInspector, byteMediaInspector),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+    ),
+  )
+  assert.equal(planned._tag, "Planned")
+  if (planned._tag !== "Planned") return
+  applicationFiles!.delete("references/neutral.mp4")
+
+  let adapterCalls = 0
+  const adapter: GenerationAdapterService = {
+    invoke: () => Effect.sync(() => {
+      adapterCalls += 1
+      throw new Error("adapter tripwire")
+    }),
+    submitSeedance: () => Effect.sync(() => {
+      adapterCalls += 1
+      throw new Error("adapter tripwire")
+    }),
+    recover: () => Effect.die("reference refusal must not recover"),
+  }
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const decision = await Effect.runPromise(advance({ run: planned.run }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+    Effect.provideService(GenerationAdapter, adapter),
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-30T14:00:00.000Z") }),
+  ))
+  assert.equal(decision._tag, "AdvanceRefused")
+  if (decision._tag !== "AdvanceRefused") return
+  assert.equal(decision.outcome, "blocked")
+  assert.equal(decision.finding.correctionOwner, "Reference Planning")
+  assert.equal(decision.finding.code, "REFERENCE_EVIDENCE_UNAVAILABLE")
+  assert.match(decision.normalView.spendRisk, /no provider request.*no attempt.*\$0/i)
+  assert.equal("approval" in decision, false)
+  assert.equal(adapterCalls, 0)
+})
+
+test("post-plan Tool Lock drift refuses before any adapter call or reservation", async () => {
+  let applicationFiles: Map<string, Uint8Array> | undefined
+  const fixture = makeFixture("qwen-image", {
+    files: (files) => {
+      applicationFiles = files
+    },
+  })
+  const planned = await Effect.runPromise(
+    plan({ objectivePath: fixture.objectivePath }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(MediaInspector, byteMediaInspector),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+    ),
+  )
+  assert.equal(planned._tag, "Planned")
+  if (planned._tag !== "Planned") return
+
+  const changedLock = JSON.parse(Buffer.from(applicationFiles!.get(TOOL_LOCK_PATH)!).toString("utf8")) as Record<string, unknown>
+  changedLock.commit = "3".repeat(40)
+  applicationFiles!.set(TOOL_LOCK_PATH, Buffer.from(JSON.stringify(changedLock)))
+
+  let adapterCalls = 0
+  const adapter: GenerationAdapterService = {
+    invoke: () => Effect.sync(() => {
+      adapterCalls += 1
+      throw new Error("adapter tripwire")
+    }),
+    recover: () => Effect.die("Tool Lock drift must not recover"),
+  }
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const decision = await Effect.runPromise(advance({ run: planned.run }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+    Effect.provideService(GenerationAdapter, adapter),
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T19:30:00.000Z") }),
+  ))
+  assert.equal(decision._tag, "AdvanceRefused")
+  if (decision._tag !== "AdvanceRefused") return
+  assert.equal(decision.finding.code, "TOOL_LOCK_MISMATCH")
+  assert.equal(decision.finding.correctionOwner, "application decision owner")
+  assert.match(decision.normalView.spendRisk, /no provider request.*no attempt.*\$0/i)
+  assert.equal(adapterCalls, 0)
+})
+
+const canonicalJson = (value: unknown): string => {
+  if (value === null || typeof value !== "object") return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`
+  const record = value as Record<string, unknown>
+  return `{${Object.keys(record).sort().map((key) =>
+    `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`
+}
+
+test("a self-consistent forged post-plan Procedure model is refused before spending", async () => {
+  const fixture = makeFixture("seedance-video")
+  const planned = await Effect.runPromise(
+    plan({ objectivePath: fixture.objectivePath }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(MediaInspector, byteMediaInspector),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+    ),
+  )
+  assert.equal(planned._tag, "Planned")
+  if (planned._tag !== "Planned") return
+
+  const forgedRequest = { ...planned.run.request, model: "attacker/unapproved-image-model" }
+  const canonicalRequest = canonicalJson(forgedRequest)
+  const forgedRun = {
+    state: "planned" as const,
+    request: forgedRequest,
+    canonicalRequest,
+    requestSha256: createHash("sha256").update(canonicalRequest).digest("hex"),
+  }
+  let adapterCalls = 0
+  const adapter: GenerationAdapterService = {
+    invoke: () => Effect.die("forged Seedance plan must not use image invocation"),
+    submitSeedance: () => Effect.sync(() => {
+      adapterCalls += 1
+      throw new Error("paid adapter tripwire")
+    }),
+    recover: () => Effect.die("forged Procedure must not recover"),
+  }
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const decision = await Effect.runPromise(advance({ run: forgedRun }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+    Effect.provideService(GenerationAdapter, adapter),
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T20:00:00.000Z") }),
+  ))
+  assert.equal(decision._tag, "AdvanceRefused")
+  if (decision._tag !== "AdvanceRefused") return
+  assert.equal(decision.finding.code, "PROCEDURE_NOT_LOCKED")
+  assert.match(decision.normalView.spendRisk, /no provider request.*no attempt.*\$0/i)
+  assert.equal(adapterCalls, 0)
+})
+
+test("post-plan drift adding any unsafe Project Contract reference root is refused before spending", async () => {
+  let applicationFiles: Map<string, Uint8Array> | undefined
+  const fixture = makeFixture("seedance-video", {
+    files: (files) => {
+      applicationFiles = files
+    },
+  })
+  const planned = await Effect.runPromise(
+    plan({ objectivePath: fixture.objectivePath }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(MediaInspector, byteMediaInspector),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+    ),
+  )
+  assert.equal(planned._tag, "Planned")
+  if (planned._tag !== "Planned") return
+  const changedContract = JSON.parse(Buffer.from(applicationFiles!.get(PROJECT_CONTRACT_PATH)!).toString("utf8")) as Record<string, unknown>
+  changedContract.referenceRoots = ["references", "../escape"]
+  applicationFiles!.set(PROJECT_CONTRACT_PATH, Buffer.from(JSON.stringify(changedContract)))
+
+  let adapterCalls = 0
+  const adapter: GenerationAdapterService = {
+    invoke: () => Effect.die("unsafe Seedance contract must not use image invocation"),
+    submitSeedance: () => Effect.sync(() => {
+      adapterCalls += 1
+      throw new Error("paid adapter tripwire")
+    }),
+    recover: () => Effect.die("unsafe Project Contract must not recover"),
+  }
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const decision = await Effect.runPromise(advance({ run: planned.run }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+    Effect.provideService(GenerationAdapter, adapter),
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T20:03:00.000Z") }),
+  ))
+  assert.equal(decision._tag, "AdvanceRefused")
+  if (decision._tag !== "AdvanceRefused") return
+  assert.equal(decision.finding.code, "PROCEDURE_NOT_LOCKED")
+  assert.match(decision.normalView.spendRisk, /no provider request.*no attempt.*\$0/i)
+  assert.equal(adapterCalls, 0)
+})
+
+test("post-plan installed artifact byte drift is refused before spending", async (context) => {
+  const source = join(process.cwd(), "tests/fixtures/tool-artifacts/v0.3.0")
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "qwen-advance-tool-artifact-"))
+  context.after(async () => rm(temporaryRoot, { recursive: true, force: true }))
+  await cp(source, temporaryRoot, { recursive: true })
+  const identity = await Effect.runPromise(filePlanningIdentity(temporaryRoot))
+  const fixture = makeFixture("seedance-video")
+  const planned = await Effect.runPromise(
+    plan({ objectivePath: fixture.objectivePath }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(MediaInspector, byteMediaInspector),
+      Effect.provideService(PlanningIdentity, identity),
+    ),
+  )
+  assert.equal(planned._tag, "Planned")
+  if (planned._tag !== "Planned") return
+  await writeFile(join(temporaryRoot, "artifact.txt"), "changed after planning\n", "utf8")
+
+  let adapterCalls = 0
+  const adapter: GenerationAdapterService = {
+    invoke: () => Effect.die("drifted Seedance artifact must not use image invocation"),
+    submitSeedance: () => Effect.sync(() => {
+      adapterCalls += 1
+      throw new Error("paid adapter tripwire")
+    }),
+    recover: () => Effect.die("drifted tool artifact must not recover"),
+  }
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const decision = await Effect.runPromise(advance({ run: planned.run }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, identity),
+    Effect.provideService(GenerationAdapter, adapter),
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T20:05:00.000Z") }),
+  ))
+  assert.equal(decision._tag, "AdvanceRefused")
+  if (decision._tag !== "AdvanceRefused") return
+  assert.equal(decision.finding.code, "TOOL_ARTIFACT_INVALID")
+  assert.match(decision.normalView.spendRisk, /no provider request.*no attempt.*\$0/i)
+  assert.equal(adapterCalls, 0)
+})
+
+const hash = (value: Uint8Array | string): string =>
+  createHash("sha256").update(value).digest("hex")
+
+const rgba = (pixels: ReadonlyArray<number>): Uint8Array =>
+  Buffer.from(JSON.stringify({ height: 2, pixels, width: 2 }), "utf8")
+
+test("advances one Qwen Assembly Run through a genuine donor choice to verified evidence", async () => {
+  const baseline = rgba([
+    10, 10, 10, 255, 20, 20, 20, 255,
+    30, 30, 30, 255, 40, 40, 40, 255,
+  ])
+  const donor = rgba([
+    90, 90, 90, 255, 80, 80, 80, 255,
+    70, 70, 70, 255, 60, 60, 60, 255,
+  ])
+  const exactCopyCore = { x: 1, y: 0, rgba: [5, 6, 7, 255] as const }
+  const referencePath = "references/neutral.rgba.json"
+  const fixture = makeFixture("qwen-image", {
+    objective: (objective) => {
+      const reference = (objective.references as Array<Record<string, unknown>>)[0]!
+      reference.path = referencePath
+      reference.sha256 = hash(baseline)
+      reference.declaredMedia = { width: 2, height: 2 }
+      objective.assemblyPlan = {
+        required: true,
+        baselineReferenceSlot: "source",
+        ownedRegion: { x: 1, y: 0, width: 1, height: 2 },
+        exactCopy: [{
+          ...exactCopyCore,
+          sha256: hash(JSON.stringify(exactCopyCore)),
+        }],
+      }
+    },
+    files: (files) => {
+      files.delete("references/neutral.png")
+      files.set(referencePath, baseline)
+    },
+  })
+  const normalizedRgbaInspector: MediaInspectorService = {
+    inspect: (snapshot) => Effect.try({
+      try: () => {
+        const parsed = JSON.parse(Buffer.from(snapshot.bytes).toString("utf8")) as Record<string, unknown>
+        if (
+          !Number.isSafeInteger(parsed.width) || Number(parsed.width) < 1 ||
+          !Number.isSafeInteger(parsed.height) || Number(parsed.height) < 1 ||
+          !Array.isArray(parsed.pixels) ||
+          parsed.pixels.length !== Number(parsed.width) * Number(parsed.height) * 4 ||
+          parsed.pixels.some((channel) =>
+            typeof channel !== "number" || !Number.isInteger(channel) || channel < 0 || channel > 255)
+        ) throw new Error("invalid normalized RGBA")
+        return {
+          kind: "image" as const,
+          mediaType: "application/vnd.qwen.rgba+json" as const,
+          width: Number(parsed.width),
+          height: Number(parsed.height),
+        }
+      },
+      catch: () => new MediaInspectionError("MALFORMED_MEDIA"),
+    }),
+  }
+  const plannedDecision = await Effect.runPromise(
+    plan({ objectivePath: fixture.objectivePath }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(MediaInspector, normalizedRgbaInspector),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+    ),
+  )
+  assert.equal(plannedDecision._tag, "Planned")
+  if (plannedDecision._tag !== "Planned") return
+  const plannedRun = plannedDecision.run
+  const request = plannedRun.request
+  const canonicalRequest = plannedRun.canonicalRequest
+  assert.strictEqual(plannedRun, plannedDecision.run)
+  assert.equal(plannedRun.request.references[0]?.applicationPath, referencePath)
+  assert.equal(plannedRun.request.references[0]?.sha256, hash(baseline))
+
+  const providerBody = Buffer.from('{"request_id":"fake-qwen-1","status":"succeeded"}', "utf8")
+  let adapterCalls = 0
+  const adapter: GenerationAdapterService = {
+    invoke: (prepared) => Effect.sync(() => {
+      adapterCalls += 1
+      assert.strictEqual(prepared.request, plannedRun.request)
+      const destination = (
+        prepared.payload.input_references as ReadonlyArray<{
+          image_url: { url: { applicationPath: string; bytesBase64: string; mediaType: string; sha256: string } }
+        }>
+      )[0]!.image_url.url
+      assert.equal(destination.applicationPath, referencePath)
+      assert.equal(destination.sha256, hash(baseline))
+      assert.equal(destination.mediaType, "application/vnd.qwen.rgba+json")
+      assert.deepEqual(Buffer.from(destination.bytesBase64, "base64"), Buffer.from(baseline))
+      return {
+        provider: "openrouter" as const,
+        model: prepared.request.model,
+        providerEvidence: {
+          mediaType: "application/json" as const,
+          body: providerBody,
+          sha256: hash(providerBody),
+        },
+        outputs: [{
+          applicationPath: "outputs/fake-donor.rgba.json" as const,
+          mediaType: "application/vnd.qwen.rgba+json" as const,
+          body: donor,
+          sha256: hash(donor),
+        }],
+      }
+    }),
+    recover: () => Effect.die("normal path must not recover"),
+  }
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const clock: RunRecordClockService = {
+    now: () => Effect.succeed("2026-08-30T15:00:00.000Z"),
+  }
+  const executeAdvance = (selectedDonorSha256?: string) => Effect.runPromise(
+    advance({ run: plannedRun, ...(selectedDonorSha256 === undefined ? {} : { selectedDonorSha256 }) }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+      Effect.provideService(GenerationAdapter, adapter),
+      Effect.provide(memory.layer),
+      Effect.provideService(RunRecordClock, clock),
+    ),
+  )
+
+  const checkpoint = await executeAdvance(hash(donor))
+  assert.equal(checkpoint._tag, "HumanDecisionRequired")
+  if (checkpoint._tag !== "HumanDecisionRequired") return
+  assert.equal(adapterCalls, 1)
+  assert.equal(checkpoint.diagnostics.view.phase, "awaiting_donor_choice")
+  assert.equal(checkpoint.outcome, "human_decision_required")
+  assert.equal(checkpoint.finding.correctionOwner, "application decision owner")
+  assert.equal(checkpoint.diagnostics.view.classification, "human_decision_required")
+  assert.equal("approval" in checkpoint, false)
+  assert.equal(Buffer.from(checkpoint.diagnostics.request).toString("utf8"), canonicalRequest)
+  assert.match(Buffer.from(checkpoint.diagnostics.events).toString("utf8"), /donor_choice_opened/)
+  assert.deepEqual(checkpoint.decision.candidateSha256s, [hash(donor)])
+  assert.equal(checkpoint.normalView.objective, request.objective)
+  assert.match(checkpoint.normalView.humanDecision, /choose.*donor/i)
+
+  const completed = await executeAdvance(hash(donor))
+  assert.equal(completed._tag, "VerifiedCandidate")
+  if (completed._tag !== "VerifiedCandidate") return
+  assert.equal(adapterCalls, 1)
+  assert.equal(completed.runId, checkpoint.runId)
+  assert.equal(completed.diagnostics.view.runId, checkpoint.diagnostics.view.runId)
+  assert.equal(completed.diagnostics.view.selectedDonorSha256, hash(donor))
+  assert.equal(completed.diagnostics.view.phase, "verified_candidate")
+  assert.equal(completed.outcome, "verified_candidate")
+  assert.equal(completed.diagnostics.view.classification, "verified_candidate")
+  assert.equal("approval" in completed, false)
+  assert.equal(completed.normalView.objective, request.objective)
+  assert.notEqual(completed.candidate.sha256, hash(donor))
+  assert.deepEqual(
+    completed.diagnostics.view.evidence.map((item) => item.applicationPath),
+    [
+      "provider-response.json",
+      "outputs/fake-donor.rgba.json",
+      "outputs/assembled.rgba.json",
+      "assembly-report.json",
+      "inputs/baseline-reference",
+      "checks.json",
+    ],
+  )
+  const assembledBytes = await Effect.runPromise(
+    readEvidence(completed.runId, "outputs/assembled.rgba.json").pipe(Effect.provide(memory.layer)),
+  )
+  assert.deepEqual(JSON.parse(Buffer.from(assembledBytes).toString("utf8")), {
+    height: 2,
+    pixels: [
+      10, 10, 10, 255, 5, 6, 7, 255,
+      30, 30, 30, 255, 60, 60, 60, 255,
+    ],
+    width: 2,
+  })
+  const checksBytes = await Effect.runPromise(
+    readEvidence(completed.runId, "checks.json").pipe(Effect.provide(memory.layer)),
+  )
+  assert.deepEqual(JSON.parse(Buffer.from(checksBytes).toString("utf8")), {
+    algorithm: "rgba-fidelity-v1",
+    candidateSha256: completed.candidate.sha256,
+    checks: [
+      { measured: 0, name: "integrity", passed: true },
+      { measured: 0, name: "media", passed: true },
+      { measured: 0, name: "outside-region-preservation", passed: true },
+      { measured: 0, name: "donor-equality-inside-region", passed: true },
+      { measured: 1, name: "palette-growth", passed: true },
+    ],
+    classification: "verified-candidate",
+    inputs: {
+      baselineSha256: hash(baseline),
+      candidateSha256: completed.candidate.sha256,
+      donorSha256: hash(donor),
+      exactCopySha256: hash(JSON.stringify([hash(JSON.stringify(exactCopyCore))])),
+      regionSha256: hash(JSON.stringify({ x: 1, y: 0, width: 1, height: 2 })),
+    },
+  })
+  assert.match(completed.normalView.evidence, /Assembly.*checks/i)
+  assert.match(completed.normalView.humanDecision, /visual approval/i)
+
+  const locked = request.references[0]!
+  const prepared = await Effect.runPromise(prepare(request, [{
+    slot: locked.slot,
+    applicationPath: locked.applicationPath,
+    sha256: locked.sha256,
+    payloadDestination: locked.payloadDestination,
+    mediaType: locked.mediaType,
+    bytes: baseline,
+  }]))
+  const setupRecovery = async (persistOutput: boolean) => {
+    const recoveryMemory = await Effect.runPromise(makeMemoryRunRecordHarness())
+    const reserved = await Effect.runPromise(reserve({ plannedRun, payloadSha256: prepared.payloadSha256 }).pipe(
+      Effect.provide(recoveryMemory.layer),
+      Effect.provideService(RunRecordClock, clock),
+    ))
+    const marked = await Effect.runPromise(record({
+      _tag: "SubmissionMayHaveStarted",
+      runId: reserved.runId,
+      operationId: "recovery-submit",
+    }).pipe(Effect.provide(recoveryMemory.layer), Effect.provideService(RunRecordClock, clock)))
+    assert.equal(marked._tag, "SubmissionPermitIssued")
+    if (marked._tag !== "SubmissionPermitIssued") throw new Error("Recovery fixture permit missing.")
+    const generated = await Effect.runPromise(invoke(prepared, marked.permit).pipe(
+      Effect.provideService(GenerationAdapter, adapter),
+    ))
+    await Effect.runPromise(record({
+      _tag: "CommitProviderEvidence",
+      runId: reserved.runId,
+      operationId: "conductor-provider-evidence",
+      evidence: generated.providerEvidence,
+    }).pipe(Effect.provide(recoveryMemory.layer), Effect.provideService(RunRecordClock, clock)))
+    if (persistOutput) {
+      await Effect.runPromise(record({
+        _tag: "CommitGeneratedOutput",
+        runId: reserved.runId,
+        operationId: "conductor-generated-output-1",
+        output: {
+          ...generated.outputs[0]!,
+          applicationPath: generated.outputs[0]!.applicationPath as `outputs/${string}`,
+        },
+      }).pipe(Effect.provide(recoveryMemory.layer), Effect.provideService(RunRecordClock, clock)))
+    }
+    return { generated, recoveryMemory }
+  }
+  for (const persistOutput of [false, true]) {
+    const { generated, recoveryMemory } = await setupRecovery(persistOutput)
+    let recoveryCalls = 0
+    const recoveryAdapter: GenerationAdapterService = {
+      invoke: () => Effect.die("recovery must not resubmit"),
+      recover: (_prepared, evidence) => Effect.sync(() => {
+        recoveryCalls += 1
+        assert.equal(evidence.sha256, generated.providerEvidence.sha256)
+        return generated as GenerationResult
+      }),
+    }
+    const resumed = await Effect.runPromise(advance({ run: plannedRun }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+      Effect.provideService(GenerationAdapter, recoveryAdapter),
+      Effect.provide(recoveryMemory.layer),
+      Effect.provideService(RunRecordClock, clock),
+    ))
+    assert.equal(resumed._tag, "HumanDecisionRequired")
+    assert.equal(recoveryCalls, persistOutput ? 0 : 1)
+  }
+
+  {
+    const { recoveryMemory: failedRecoveryMemory } = await setupRecovery(false)
+    let failedRecoveryCalls = 0
+    const failedRecoveryAdapter: GenerationAdapterService = {
+      invoke: () => Effect.die("recovery must not resubmit"),
+      recover: () => {
+        failedRecoveryCalls += 1
+        return Effect.fail(new GenerationError(
+          "ADAPTER_NOT_STARTED",
+          "Recovery cannot claim that the original submission did not start.",
+        ))
+      },
+    }
+    const executeFailedRecovery = () => Effect.runPromise(advance({ run: plannedRun }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+      Effect.provideService(GenerationAdapter, failedRecoveryAdapter),
+      Effect.provide(failedRecoveryMemory.layer),
+      Effect.provideService(RunRecordClock, clock),
+    ))
+    const failedRecovery = await executeFailedRecovery()
+    assert.equal(failedRecovery._tag, "Blocked")
+    if (failedRecovery._tag !== "Blocked") return
+    assert.equal(failedRecovery.finding.code, "submission_unreconciled")
+    assert.equal(failedRecovery.finding.correctionOwner, "Generation")
+    assert.equal(failedRecovery.diagnostics.view.spendState, "possibly_spent")
+    assert.equal(failedRecovery.diagnostics.view.retryState, "reconcile-only")
+    assert.equal(failedRecoveryCalls, 1)
+    const replayedRecovery = await executeFailedRecovery()
+    assert.equal(replayedRecovery._tag, "Blocked")
+    assert.equal(failedRecoveryCalls, 1)
+  }
+
+  {
+    const { recoveryMemory: completeOutputMemory } = await setupRecovery(true)
+    let recoveryReads = 0
+    const completeOutputAdapter = Object.defineProperty({
+      invoke: () => Effect.die("complete persisted output must not resubmit"),
+    }, "recover", {
+      get: () => {
+        recoveryReads += 1
+        throw new Error("complete persisted output must not inspect recovery")
+      },
+    }) as GenerationAdapterService
+    const resumed = await Effect.runPromise(advance({ run: plannedRun }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+      Effect.provideService(GenerationAdapter, completeOutputAdapter),
+      Effect.provide(completeOutputMemory.layer),
+      Effect.provideService(RunRecordClock, clock),
+    ))
+    assert.equal(resumed._tag, "HumanDecisionRequired")
+    assert.equal(recoveryReads, 0)
+  }
+})
+
+test("two application repositories keep references, Run Records, outputs, and Assembly evidence under their own roots", async (context) => {
+  const baseline = rgba([
+    10, 10, 10, 255, 20, 20, 20, 255,
+    30, 30, 30, 255, 40, 40, 40, 255,
+  ])
+  const donor = rgba([
+    90, 90, 90, 255, 80, 80, 80, 255,
+    70, 70, 70, 255, 60, 60, 60, 255,
+  ])
+  const inspector: MediaInspectorService = {
+    inspect: () => Effect.succeed({
+      kind: "image",
+      mediaType: "application/vnd.qwen.rgba+json",
+      width: 2,
+      height: 2,
+    }),
+  }
+  let adapterCalls = 0
+  const providerBody = Buffer.from('{"request_id":"application-owned","status":"succeeded"}', "utf8")
+  const adapter: GenerationAdapterService = {
+    invoke: (prepared) => Effect.sync(() => {
+      adapterCalls += 1
+      return {
+        provider: "openrouter" as const,
+        model: prepared.request.model,
+        providerEvidence: {
+          mediaType: "application/json" as const,
+          body: providerBody,
+          sha256: hash(providerBody),
+        },
+        outputs: [{
+          applicationPath: "outputs/application-donor.rgba.json" as const,
+          mediaType: "application/vnd.qwen.rgba+json" as const,
+          body: donor,
+          sha256: hash(donor),
+        }],
+      }
+    }),
+    recover: () => Effect.die("the owned normal path must not recover"),
+  }
+
+  const executeApplication = async (applicationId: string) => {
+    const applicationRoot = await mkdtemp(join(tmpdir(), `${applicationId}-`))
+    context.after(async () => rm(applicationRoot, { recursive: true, force: true }))
+    const artifactRoot = `artifacts/${applicationId}`
+    const referencePath = "references/neutral.rgba.json"
+    const exactCopy = { x: 1, y: 0, rgba: [5, 6, 7, 255] as const }
+    let applicationEntries = new Map<string, Uint8Array>()
+    const fixture = makeFixture("qwen-image", {
+      contract: (contract) => {
+        contract.applicationId = applicationId
+        contract.artifactRoot = artifactRoot
+      },
+      objective: (objective) => {
+        const reference = (objective.references as Array<Record<string, unknown>>)[0]!
+        reference.path = referencePath
+        reference.sha256 = hash(baseline)
+        reference.declaredMedia = { width: 2, height: 2 }
+        objective.assemblyPlan = {
+          required: true,
+          baselineReferenceSlot: "source",
+          ownedRegion: { x: 1, y: 0, width: 1, height: 2 },
+          exactCopy: [{ ...exactCopy, sha256: hash(JSON.stringify(exactCopy)) }],
+        }
+      },
+      files: (files) => {
+        files.delete("references/neutral.png")
+        files.set(referencePath, baseline)
+        applicationEntries = new Map(files)
+      },
+    })
+    for (const [applicationPath, bytes] of applicationEntries) {
+      const destination = join(applicationRoot, applicationPath)
+      await mkdir(dirname(destination), { recursive: true })
+      await writeFile(destination, bytes)
+    }
+    const files = await Effect.runPromise(fileApplicationFiles(applicationRoot))
+    const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
+      Effect.provideService(ApplicationFiles, files),
+      Effect.provideService(MediaInspector, inspector),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+    ))
+    assert.equal(planned._tag, "Planned")
+    if (planned._tag !== "Planned") throw new Error("application planning fixture was refused")
+    const runRecordLayer = await Effect.runPromise(fileRunRecordLayer(applicationRoot))
+    const advanceOnce = (selectedDonorSha256?: string) => Effect.runPromise(
+      advance({
+        run: planned.run,
+        ...(selectedDonorSha256 === undefined ? {} : { selectedDonorSha256 }),
+      }).pipe(
+        Effect.provideService(ApplicationFiles, files),
+        Effect.provideService(PlanningIdentity, fixture.identity),
+        Effect.provideService(GenerationAdapter, adapter),
+        Effect.provide(runRecordLayer),
+        Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:00:00.000Z") }),
+      ),
+    )
+    const checkpoint = await advanceOnce()
+    assert.equal(checkpoint._tag, "HumanDecisionRequired")
+    const completed = await advanceOnce(hash(donor))
+    assert.equal(completed._tag, "VerifiedCandidate")
+    if (completed._tag !== "VerifiedCandidate") throw new Error("application Assembly fixture did not verify")
+    const runDirectory = join(applicationRoot, artifactRoot, "runs", completed.runId)
+    assert.deepEqual(await readdir(join(runDirectory, "outputs")), [
+      "application-donor.rgba.json",
+      "assembled.rgba.json",
+    ])
+    assert.deepEqual((await readdir(runDirectory)).filter((name) => !name.startsWith(".")), [
+      "assembly-report.json",
+      "checks.json",
+      "events.jsonl",
+      "inputs",
+      "outputs",
+      "provider-response.json",
+      "request.json",
+      "state.json",
+    ])
+    await assert.rejects(access(join(process.cwd(), artifactRoot)))
+    await assert.rejects(access(join(process.cwd(), referencePath)))
+    return { applicationRoot, artifactRoot, runId: completed.runId }
+  }
+
+  const [first, second] = await Promise.all([
+    executeApplication("application-one"),
+    executeApplication("application-two"),
+  ])
+  assert.notEqual(first.applicationRoot, second.applicationRoot)
+  assert.notEqual(first.runId, second.runId)
+  assert.equal(adapterCalls, 2)
+})
+
+test("classifies duplicate Qwen output identities before any output persistence", async () => {
+  const exactCopy = { x: 0, y: 0, rgba: [0, 0, 0, 0] as const }
+  const fixture = makeFixture("qwen-image", {
+    objective: (objective) => {
+      objective.requestedCount = 2
+      objective.budgetCeilingUsd = "0.10"
+      objective.assemblyPlan = {
+        required: true,
+        baselineReferenceSlot: "source",
+        ownedRegion: { x: 0, y: 0, width: 1, height: 1 },
+        exactCopy: [{ ...exactCopy, sha256: hash(JSON.stringify(exactCopy)) }],
+      }
+    },
+  })
+  const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(MediaInspector, byteMediaInspector),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+  ))
+  assert.equal(planned._tag, "Planned")
+  if (planned._tag !== "Planned") return
+  const providerBody = Buffer.from('{"id":"duplicate-qwen","status":"completed"}')
+  const duplicateBody = Buffer.from(JSON.stringify({ height: 1, pixels: [90, 90, 90, 255], width: 1 }))
+  let submissions = 0
+  const adapter: GenerationAdapterService = {
+    invoke: (prepared) => Effect.sync(() => {
+      submissions += 1
+      return {
+        provider: "openrouter" as const,
+        model: prepared.request.model,
+        providerEvidence: {
+          mediaType: "application/json" as const,
+          body: providerBody,
+          sha256: hash(providerBody),
+        },
+        outputs: ["01", "02"].map((suffix) => ({
+          applicationPath: `outputs/duplicate-${suffix}.rgba.json`,
+          mediaType: "application/vnd.qwen.rgba+json" as const,
+          body: duplicateBody,
+          sha256: hash(duplicateBody),
+        })),
+      }
+    }),
+  }
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const execute = () => Effect.runPromise(advance({ run: planned.run }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+    Effect.provideService(GenerationAdapter, adapter),
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:00:00.000Z") }),
+  ))
+  const blocked = await execute()
+  assert.equal(blocked._tag, "Blocked")
+  if (blocked._tag !== "Blocked") return
+  assert.equal(blocked.finding.code, "submission_unreconciled")
+  assert.equal(blocked.finding.correctionOwner, "Generation")
+  assert.equal(blocked.diagnostics.view.evidence.filter((item) => item.applicationPath.startsWith("outputs/")).length, 0)
+  assert.equal(blocked.diagnostics.view.spendState, "possibly_spent")
+  assert.equal(blocked.diagnostics.view.retryState, "reconcile-only")
+  assert.equal(submissions, 1)
+  assert.equal((await execute())._tag, "Blocked")
+  assert.equal(submissions, 1)
+})
+
+test("returns a classified persistence interruption after a paid result cannot become durable", async () => {
+  const exactCopy = { x: 0, y: 0, rgba: [0, 0, 0, 0] as const }
+  const fixture = makeFixture("qwen-image", {
+    objective: (objective) => {
+      objective.assemblyPlan = {
+        required: true,
+        baselineReferenceSlot: "source",
+        ownedRegion: { x: 0, y: 0, width: 1, height: 1 },
+        exactCopy: [{ ...exactCopy, sha256: hash(JSON.stringify(exactCopy)) }],
+      }
+    },
+  })
+  const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(MediaInspector, byteMediaInspector),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+  ))
+  assert.equal(planned._tag, "Planned")
+  if (planned._tag !== "Planned") return
+  const providerBody = Buffer.from('{"id":"persistence-interrupted","status":"completed"}')
+  const outputBody = Buffer.from(JSON.stringify({ height: 1, pixels: [1, 2, 3, 255], width: 1 }))
+  let submissions = 0
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  await Effect.runPromise(memory.failNext("write-evidence", 2))
+  const decision = await Effect.runPromise(advance({ run: planned.run }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+    Effect.provideService(GenerationAdapter, {
+      invoke: (prepared) => Effect.sync(() => {
+        submissions += 1
+        return {
+          provider: "openrouter" as const,
+          model: prepared.request.model,
+          providerEvidence: { mediaType: "application/json" as const, body: providerBody, sha256: hash(providerBody) },
+          outputs: [{
+            applicationPath: "outputs/persistence-interrupted.rgba.json" as const,
+            mediaType: "application/vnd.qwen.rgba+json" as const,
+            body: outputBody,
+            sha256: hash(outputBody),
+          }],
+        }
+      }),
+    }),
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:00:00.000Z") }),
+  )) as unknown as Readonly<{
+    _tag: string
+    outcome: string
+    runId: string
+    finding: { code: string; correctionOwner: string }
+    spendState: string
+    retryState: string
+    recovery: string
+    causeRecovery?: string
+  }>
+  assert.equal(decision._tag, "PersistenceInterrupted")
+  assert.equal(decision.outcome, "blocked")
+  assert.equal(decision.finding.code, "persistence_interrupted")
+  assert.equal(decision.finding.correctionOwner, "Generation")
+  assert.equal(decision.spendState, "possibly_spent")
+  assert.equal(decision.retryState, "reconcile-only")
+  assert.equal(decision.recovery, "reconcile")
+  assert.equal(decision.causeRecovery, "reload")
+  assert.equal(submissions, 1)
+})
+
+test("classifies an interrupted unreconciled-submission write after one adapter call", async () => {
+  const exactCopy = { x: 0, y: 0, rgba: [0, 0, 0, 0] as const }
+  const fixture = makeFixture("qwen-image", {
+    objective: (objective) => {
+      objective.assemblyPlan = {
+        required: true,
+        baselineReferenceSlot: "source",
+        ownedRegion: { x: 0, y: 0, width: 1, height: 1 },
+        exactCopy: [{ ...exactCopy, sha256: hash(JSON.stringify(exactCopy)) }],
+      }
+    },
+  })
+  const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(MediaInspector, byteMediaInspector),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+  ))
+  assert.equal(planned._tag, "Planned")
+  if (planned._tag !== "Planned") return
+  let submissions = 0
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  await Effect.runPromise(memory.failAfter("append-event", 1, 2))
+  const decision = await Effect.runPromise(advance({ run: planned.run }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+    Effect.provideService(GenerationAdapter, {
+      invoke: () => Effect.sync(() => {
+        submissions += 1
+        throw new GenerationError("PROVIDER_AMBIGUOUS", "The provider outcome is unknown.")
+      }),
+    }),
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:00:00.000Z") }),
+  ))
+  assert.equal(decision._tag, "PersistenceInterrupted")
+  if (decision._tag !== "PersistenceInterrupted") return
+  assert.equal(decision.finding.correctionOwner, "Generation")
+  assert.equal(decision.retryState, "reconcile-only")
+  assert.equal(decision.spendState, "possibly_spent")
+  assert.equal(submissions, 1)
+})
+
+test("classifies interrupted generated-output persistence after the provider receipt is durable", async () => {
+  const exactCopy = { x: 0, y: 0, rgba: [0, 0, 0, 0] as const }
+  const fixture = makeFixture("qwen-image", {
+    objective: (objective) => {
+      objective.assemblyPlan = {
+        required: true,
+        baselineReferenceSlot: "source",
+        ownedRegion: { x: 0, y: 0, width: 1, height: 1 },
+        exactCopy: [{ ...exactCopy, sha256: hash(JSON.stringify(exactCopy)) }],
+      }
+    },
+  })
+  const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(MediaInspector, byteMediaInspector),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+  ))
+  assert.equal(planned._tag, "Planned")
+  if (planned._tag !== "Planned") return
+  const providerBody = Buffer.from('{"id":"output-persistence-interrupted","status":"completed"}')
+  const outputBody = Buffer.from(JSON.stringify({ height: 1, pixels: [1, 2, 3, 255], width: 1 }))
+  let submissions = 0
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  await Effect.runPromise(memory.failAfter("write-evidence", 1, 2))
+  const decision = await Effect.runPromise(advance({ run: planned.run }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+    Effect.provideService(GenerationAdapter, {
+      invoke: (prepared) => Effect.sync(() => {
+        submissions += 1
+        return {
+          provider: "openrouter" as const,
+          model: prepared.request.model,
+          providerEvidence: { mediaType: "application/json" as const, body: providerBody, sha256: hash(providerBody) },
+          outputs: [{
+            applicationPath: "outputs/output-persistence-interrupted.rgba.json" as const,
+            mediaType: "application/vnd.qwen.rgba+json" as const,
+            body: outputBody,
+            sha256: hash(outputBody),
+          }],
+        }
+      }),
+    }),
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:00:00.000Z") }),
+  ))
+  assert.equal(decision._tag, "PersistenceInterrupted")
+  if (decision._tag !== "PersistenceInterrupted") return
+  assert.equal(decision.finding.correctionOwner, "Generation")
+  assert.equal(decision.retryState, "reconcile-only")
+  assert.equal(decision.spendState, "unknown")
+  assert.equal(decision.lastDurableView.phase, "provider_evidence_received")
+  assert.equal(submissions, 1)
+})
+
+test("reconciles partial Qwen recovery by persisted output identity instead of recovery order", async () => {
+  const exactCopy = { x: 0, y: 0, rgba: [0, 0, 0, 0] as const }
+  const fixture = makeFixture("qwen-image", {
+    objective: (objective) => {
+      objective.requestedCount = 2
+      objective.budgetCeilingUsd = "0.10"
+      objective.assemblyPlan = {
+        required: true,
+        baselineReferenceSlot: "source",
+        ownedRegion: { x: 0, y: 0, width: 1, height: 1 },
+        exactCopy: [{ ...exactCopy, sha256: hash(JSON.stringify(exactCopy)) }],
+      }
+    },
+  })
+  const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(MediaInspector, byteMediaInspector),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+  ))
+  assert.equal(planned._tag, "Planned")
+  if (planned._tag !== "Planned") return
+  const providerBody = Buffer.from('{"id":"partial-recovery","status":"completed"}')
+  const outputBody = (channel: number) => Buffer.from(JSON.stringify({
+    height: 1,
+    pixels: [channel, channel, channel, 255],
+    width: 1,
+  }))
+  const output = (name: string, channel: number) => {
+    const body = outputBody(channel)
+    return {
+      applicationPath: `outputs/${name}.rgba.json` as const,
+      mediaType: "application/vnd.qwen.rgba+json" as const,
+      body,
+      sha256: hash(body),
+    }
+  }
+  const first = output("partial-first", 41)
+  const second = output("partial-second", 82)
+  const setup = async () => {
+    const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+    const locked = planned.run.request.references[0]!
+    const snapshot = await Effect.runPromise(fixture.files.read(locked.applicationPath))
+    const prepared = await Effect.runPromise(prepare(planned.run.request, [{
+      slot: locked.slot,
+      applicationPath: locked.applicationPath,
+      sha256: locked.sha256,
+      payloadDestination: locked.payloadDestination,
+      mediaType: locked.mediaType,
+      bytes: snapshot.bytes,
+    }]))
+    const reserved = await Effect.runPromise(reserve({ plannedRun: planned.run, payloadSha256: prepared.payloadSha256 }).pipe(
+      Effect.provide(memory.layer),
+      Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:00:00.000Z") }),
+    ))
+    await Effect.runPromise(record({
+      _tag: "SubmissionMayHaveStarted",
+      runId: reserved.runId,
+      operationId: "conductor-submit-once",
+    }).pipe(Effect.provide(memory.layer), Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:00:00.000Z") })))
+    await Effect.runPromise(record({
+      _tag: "CommitProviderEvidence",
+      runId: reserved.runId,
+      operationId: "conductor-provider-evidence",
+      evidence: { mediaType: "application/json", body: providerBody, sha256: hash(providerBody) },
+    }).pipe(Effect.provide(memory.layer), Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:00:00.000Z") })))
+    await Effect.runPromise(record({
+      _tag: "CommitGeneratedOutput",
+      runId: reserved.runId,
+      operationId: "conductor-generated-output-1",
+      output: first,
+    }).pipe(Effect.provide(memory.layer), Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:00:00.000Z") })))
+    return memory
+  }
+  const execute = (memory: Awaited<ReturnType<typeof setup>>, recovered: GenerationResult, onRecover: () => void) =>
+    Effect.runPromise(advance({ run: planned.run }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+      Effect.provideService(GenerationAdapter, {
+        invoke: () => Effect.die("partial recovery must not resubmit"),
+        recover: () => Effect.sync(() => {
+          onRecover()
+          return recovered
+        }),
+      }),
+      Effect.provide(memory.layer),
+      Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:00:00.000Z") }),
+    ))
+  const recovered = (outputs: GenerationResult["outputs"]): GenerationResult => ({
+    provider: "openrouter",
+    model: planned.run.request.model,
+    providerEvidence: { mediaType: "application/json", body: providerBody, sha256: hash(providerBody) },
+    outputs,
+  })
+
+  const matchedMemory = await setup()
+  let matchedCalls = 0
+  const matched = await execute(matchedMemory, recovered([second, first]), () => { matchedCalls += 1 })
+  assert.equal(matched._tag, "HumanDecisionRequired")
+  assert.equal(matchedCalls, 1)
+  assert.equal((await execute(matchedMemory, recovered([second, first]), () => { matchedCalls += 1 }))._tag, "HumanDecisionRequired")
+  assert.equal(matchedCalls, 1)
+
+  const substitutedMemory = await setup()
+  const substituted = output("partial-first", 99)
+  let substitutedCalls = 0
+  const blocked = await execute(substitutedMemory, recovered([second, substituted]), () => { substitutedCalls += 1 })
+  assert.equal(blocked._tag, "Blocked")
+  if (blocked._tag !== "Blocked") return
+  assert.equal(blocked.finding.code, "submission_unreconciled")
+  assert.equal(blocked.finding.correctionOwner, "Generation")
+  assert.equal(blocked.diagnostics.view.evidence.filter((item) => item.applicationPath.startsWith("outputs/")).length, 1)
+  assert.equal((await execute(substitutedMemory, recovered([second, substituted]), () => { substitutedCalls += 1 }))._tag, "Blocked")
+  assert.equal(substitutedCalls, 1)
+})
+
+test("advances one Seedance Run by submitting once and polling the same job to verified video", async () => {
+  const fixture = makeFixture("seedance-video")
+  const plannedDecision = await Effect.runPromise(
+    plan({ objectivePath: fixture.objectivePath }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(MediaInspector, byteMediaInspector),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+    ),
+  )
+  assert.equal(plannedDecision._tag, "Planned")
+  if (plannedDecision._tag !== "Planned") return
+  const videoBody = (await Effect.runPromise(fixture.files.read("references/neutral.mp4"))).bytes
+  const submissionBody = Buffer.from('{"job_id":"seedance-job-1","status":"submitted"}')
+  const pendingBody = Buffer.from('{"job_id":"seedance-job-1","status":"pending"}')
+  const completedBody = Buffer.from(JSON.stringify({
+    job_id: "seedance-job-1",
+    status: "completed",
+    outputs: [{
+      application_path: "outputs/seedance-result.mp4",
+      media_type: "video/mp4",
+      sha256: hash(videoBody),
+    }],
+    completed_count: 1,
+    cost: { state: "estimated-only" },
+  }))
+  let submitCalls = 0
+  let pollCalls = 0
+  const adapter: GenerationAdapterService = {
+    invoke: () => Effect.die("Qwen Generation must not run for Seedance"),
+    submitSeedance: (prepared) => Effect.sync(() => {
+      submitCalls += 1
+      const destination = (
+        prepared.payload.input_references as ReadonlyArray<{
+          video_url: { url: { applicationPath: string; bytesBase64: string; mediaType: string; sha256: string } }
+        }>
+      )[0]!.video_url.url
+      assert.equal(destination.applicationPath, "references/neutral.mp4")
+      assert.equal(destination.sha256, hash(videoBody))
+      assert.equal(destination.mediaType, "video/mp4")
+      assert.deepEqual(Buffer.from(destination.bytesBase64, "base64"), Buffer.from(videoBody))
+      return {
+        provider: "openrouter" as const,
+        model: prepared.request.model,
+        jobId: "seedance-job-1",
+        providerEvidence: {
+          mediaType: "application/json" as const,
+          body: submissionBody,
+          sha256: hash(submissionBody),
+        },
+      }
+    }),
+    pollSeedance: (prepared, jobId, evidence) => Effect.sync(() => {
+      pollCalls += 1
+      assert.equal(jobId, "seedance-job-1")
+      assert.equal(evidence.sha256, hash(submissionBody))
+      if (pollCalls === 1) {
+        return {
+          status: "pending" as const,
+          provider: "openrouter" as const,
+          model: prepared.request.model,
+          jobId,
+          providerEvidence: {
+            mediaType: "application/json" as const,
+            body: pendingBody,
+            sha256: hash(pendingBody),
+          },
+        }
+      }
+      return {
+        status: "completed" as const,
+        provider: "openrouter" as const,
+        model: prepared.request.model,
+        jobId,
+        providerEvidence: {
+          mediaType: "application/json" as const,
+          body: completedBody,
+          sha256: hash(completedBody),
+        },
+        outputs: [{
+          applicationPath: "outputs/seedance-result.mp4" as const,
+          mediaType: "video/mp4" as const,
+          body: videoBody,
+          sha256: hash(videoBody),
+        }],
+        completedCount: 1,
+        cost: { state: "estimated-only" as const },
+      }
+    }),
+  }
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const clock: RunRecordClockService = {
+    now: () => Effect.succeed("2026-08-30T16:00:00.000Z"),
+  }
+  const executeAdvance = () => Effect.runPromise(
+    advance({ run: plannedDecision.run }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+      Effect.provideService(GenerationAdapter, adapter),
+      Effect.provide(memory.layer),
+      Effect.provideService(RunRecordClock, clock),
+    ),
+  )
+
+  const submitted = await executeAdvance()
+  assert.equal(submitted._tag, "ProviderPending")
+  if (submitted._tag !== "ProviderPending") return
+  assert.equal(submitted.jobId, "seedance-job-1")
+  assert.equal(submitted.pollCount, 0)
+  assert.equal(submitCalls, 1)
+  assert.equal(pollCalls, 0)
+
+  await Effect.runPromise(memory.failNext("append-event"))
+  const recoveredPending = await executeAdvance()
+  assert.equal(recoveredPending._tag, "ProviderPending")
+  if (recoveredPending._tag !== "ProviderPending") return
+  assert.equal(recoveredPending.runId, submitted.runId)
+  assert.equal(recoveredPending.jobId, submitted.jobId)
+  assert.equal(recoveredPending.pollCount, 1)
+  assert.equal(submitCalls, 1)
+  assert.equal(pollCalls, 1)
+
+  const completed = await executeAdvance()
+  assert.equal(completed._tag, "VerifiedCandidate")
+  if (completed._tag !== "VerifiedCandidate") return
+  assert.equal(completed.runId, submitted.runId)
+  assert.equal(completed.candidate.applicationPath, "outputs/seedance-result.mp4")
+  assert.equal(completed.candidate.mediaType, "video/mp4")
+  assert.equal(completed.candidate.sha256, hash(videoBody))
+  assert.equal(completed.diagnostics.view.providerJobId, "seedance-job-1")
+  assert.equal(completed.diagnostics.view.pollCount, 2)
+  assert.equal(completed.diagnostics.view.completedCount, 1)
+  assert.equal(completed.diagnostics.view.costState, "estimated-only")
+  assert.equal(completed.outcome, "verified_candidate")
+  assert.equal("approval" in completed, false)
+  assert.equal(plannedDecision.run.request.videoPlan?.assembly.pixelOwnership, "none-authoritative")
+  assert.equal("assemblyPlan" in plannedDecision.run.request, false)
+  assert.equal(submitCalls, 1)
+  assert.equal(pollCalls, 2)
+  assert.match(completed.normalView.evidence, /video.*checks/i)
+
+  const stranded = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const locked = plannedDecision.run.request.references[0]!
+  const prepared = await Effect.runPromise(prepare(plannedDecision.run.request, [{
+    slot: locked.slot,
+    applicationPath: locked.applicationPath,
+    sha256: locked.sha256,
+    payloadDestination: locked.payloadDestination,
+    mediaType: locked.mediaType,
+    bytes: videoBody,
+  }]))
+  const reservation = await Effect.runPromise(reserve({
+    plannedRun: plannedDecision.run,
+    payloadSha256: prepared.payloadSha256,
+  }).pipe(Effect.provide(stranded.layer), Effect.provideService(RunRecordClock, clock)))
+  await Effect.runPromise(record({
+    _tag: "SubmissionMayHaveStarted",
+    runId: reservation.runId,
+    operationId: "stranded-seedance-submission",
+  }).pipe(Effect.provide(stranded.layer), Effect.provideService(RunRecordClock, clock)))
+  await Effect.runPromise(record({
+    _tag: "CommitProviderEvidence",
+    runId: reservation.runId,
+    operationId: "stranded-seedance-provider-evidence",
+    evidence: {
+      mediaType: "application/json",
+      body: submissionBody,
+      sha256: hash(submissionBody),
+    },
+  }).pipe(Effect.provide(stranded.layer), Effect.provideService(RunRecordClock, clock)))
+  await Effect.runPromise(stranded.mutate(reservation.runId, (stored) => {
+    const frames = Buffer.from(stored.events).toString("utf8").trimEnd().split("\n")
+    assert.equal(frames.length, 4)
+    stored.events = Buffer.from(`${frames.slice(0, -1).join("\n")}\n`)
+    delete stored.state
+  }))
+  const submitsBeforeRecovery = submitCalls
+  let recoveryPollCalls = 0
+  const recoveryAdapter: GenerationAdapterService = {
+    invoke: () => Effect.die("orphan recovery must not resubmit"),
+    submitSeedance: () => Effect.die("orphan recovery must not resubmit"),
+    pollSeedance: (_prepared, jobId, evidence) => Effect.sync(() => {
+      recoveryPollCalls += 1
+      assert.equal(jobId, "seedance-job-1")
+      assert.equal(evidence.sha256, hash(submissionBody))
+      return {
+        status: "pending" as const,
+        provider: "openrouter" as const,
+        model: plannedDecision.run.request.model,
+        jobId,
+        providerEvidence: {
+          mediaType: "application/json" as const,
+          body: pendingBody,
+          sha256: hash(pendingBody),
+        },
+      }
+    }),
+  }
+  const executeRecovery = () => Effect.runPromise(advance({ run: plannedDecision.run }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+    Effect.provideService(GenerationAdapter, recoveryAdapter),
+    Effect.provide(stranded.layer),
+    Effect.provideService(RunRecordClock, clock),
+  ))
+  const substitutedBody = Buffer.from('{"job_id":"different-provider-job","status":"submitted"}')
+  await Effect.runPromise(stranded.mutate(reservation.runId, (stored) => {
+    stored.evidence["provider-response.json"] = substitutedBody
+  }))
+  await assert.rejects(executeRecovery(), (error: unknown) =>
+    typeof error === "object" && error !== null && "code" in error && error.code === "RUN_RECORD_FAILURE")
+  assert.equal(recoveryPollCalls, 0)
+  await Effect.runPromise(stranded.mutate(reservation.runId, (stored) => {
+    stored.evidence["provider-response.json"] = submissionBody
+  }))
+  const recoveredSubmission = await executeRecovery()
+  assert.equal(recoveredSubmission._tag, "ProviderPending")
+  assert.equal(submitCalls, submitsBeforeRecovery)
+  assert.equal(recoveryPollCalls, 1)
+})
+
+test("persists a real Seedance verification failure with Verification ownership and no resubmission", async () => {
+  const fixture = makeFixture("seedance-video", {
+    objective: (objective) => {
+      const videoPlan = objective.videoPlan as Record<string, unknown>
+      const expected = videoPlan.expectedMedia as Record<string, unknown>
+      expected.width = 65
+    },
+  })
+  const planned = await Effect.runPromise(
+    plan({ objectivePath: fixture.objectivePath }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(MediaInspector, byteMediaInspector),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+    ),
+  )
+  assert.equal(planned._tag, "Planned")
+  if (planned._tag !== "Planned") return
+  const videoBody = (await Effect.runPromise(fixture.files.read("references/neutral.mp4"))).bytes
+  const submissionBody = Buffer.from('{"job_id":"verification-job","status":"submitted"}')
+  const completedBody = Buffer.from(JSON.stringify({
+    job_id: "verification-job",
+    status: "completed",
+    outputs: [{
+      application_path: "outputs/verification-result.mp4",
+      media_type: "video/mp4",
+      sha256: hash(videoBody),
+    }],
+    completed_count: 1,
+    cost: { state: "estimated-only" },
+  }))
+  let submitCalls = 0
+  let pollCalls = 0
+  const adapter: GenerationAdapterService = {
+    invoke: () => Effect.die("Qwen Generation must not run for Seedance"),
+    submitSeedance: (prepared) => Effect.sync(() => {
+      submitCalls += 1
+      return {
+        provider: "openrouter" as const,
+        model: prepared.request.model,
+        jobId: "verification-job",
+        providerEvidence: {
+          mediaType: "application/json" as const,
+          body: submissionBody,
+          sha256: hash(submissionBody),
+        },
+      }
+    }),
+    pollSeedance: (prepared) => Effect.sync(() => {
+      pollCalls += 1
+      return {
+        status: "completed" as const,
+        provider: "openrouter" as const,
+        model: prepared.request.model,
+        jobId: "verification-job",
+        providerEvidence: {
+          mediaType: "application/json" as const,
+          body: completedBody,
+          sha256: hash(completedBody),
+        },
+        outputs: [{
+          applicationPath: "outputs/verification-result.mp4" as const,
+          mediaType: "video/mp4" as const,
+          body: videoBody,
+          sha256: hash(videoBody),
+        }],
+        completedCount: 1,
+        cost: { state: "estimated-only" as const },
+      }
+    }),
+  }
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const executeAdvance = () => Effect.runPromise(advance({ run: planned.run }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+    Effect.provideService(GenerationAdapter, adapter),
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-30T17:00:00.000Z") }),
+  ))
+
+  const submitted = await executeAdvance()
+  assert.equal(submitted._tag, "ProviderPending")
+  const failed = await executeAdvance()
+  assert.equal(failed._tag, "Failed")
+  if (failed._tag !== "Failed") return
+  assert.equal(failed.outcome, "failed")
+  assert.equal(failed.finding.code, "verification_failure")
+  assert.equal(failed.finding.correctionOwner, "Verification")
+  assert.equal(failed.diagnostics.view.retryState, "reconcile-only")
+  assert.equal(failed.diagnostics.view.spendState, "unknown")
+  assert.equal("approval" in failed, false)
+  assert.equal(submitCalls, 1)
+  assert.equal(pollCalls, 1)
+
+  const replayed = await executeAdvance()
+  assert.equal(replayed._tag, "Failed")
+  assert.equal(submitCalls, 1)
+  assert.equal(pollCalls, 1)
+})
+
+test("blocks ambiguous, malformed, count-mismatched, and false pre-submit results as unreconciled", async () => {
+  for (const variant of ["ambiguous", "malformed", "count", "false-pre-submit"] as const) {
+    const fixture = makeFixture("seedance-video")
+    const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(MediaInspector, byteMediaInspector),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+    ))
+    assert.equal(planned._tag, "Planned")
+    if (planned._tag !== "Planned") continue
+    const submissionBody = Buffer.from(`{"job_id":"${variant}-job","status":"submitted"}`)
+    const completedBody = Buffer.from(JSON.stringify({
+      job_id: `${variant}-job`,
+      status: "completed",
+      outputs: [],
+      completed_count: 0,
+      cost: { state: "estimated-only" },
+    }))
+    let submitCalls = 0
+    let pollCalls = 0
+    const adapter: GenerationAdapterService = {
+      invoke: () => Effect.die("Qwen must not run"),
+      submitSeedance: (prepared) => {
+        submitCalls += 1
+        if (variant === "ambiguous") {
+          return Effect.fail(new GenerationError("PROVIDER_AMBIGUOUS", "Fake timeout after dispatch."))
+        }
+        if (variant === "malformed") return Effect.succeed({ malformed: true } as never)
+        return Effect.succeed({
+          provider: "openrouter" as const,
+          model: prepared.request.model,
+          jobId: `${variant}-job`,
+          providerEvidence: {
+            mediaType: "application/json" as const,
+            body: submissionBody,
+            sha256: hash(submissionBody),
+          },
+        })
+      },
+      pollSeedance: (prepared, jobId) => {
+        pollCalls += 1
+        if (variant === "count") {
+          return Effect.fail(new GenerationError(
+            "OUTPUT_COUNT_MISMATCH",
+            "Fake provider completed with zero outputs for a one-output Run.",
+          ))
+        }
+        if (variant === "false-pre-submit") {
+          return Effect.fail(new GenerationError(
+            "ADAPTER_NOT_STARTED",
+            "Fake adapter claim after its polling Effect began.",
+          ))
+        }
+        return Effect.succeed({
+          status: "completed" as const,
+          provider: "openrouter" as const,
+          model: prepared.request.model,
+          jobId,
+          providerEvidence: {
+            mediaType: "application/json" as const,
+            body: completedBody,
+            sha256: hash(completedBody),
+          },
+          outputs: [],
+          completedCount: 0,
+          cost: { state: "estimated-only" as const },
+        })
+      },
+    }
+    const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+    const clock: RunRecordClockService = { now: () => Effect.succeed("2026-08-31T12:00:00.000Z") }
+    const executeAdvance = () => Effect.runPromise(advance({ run: planned.run }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+      Effect.provideService(GenerationAdapter, adapter),
+      Effect.provide(memory.layer),
+      Effect.provideService(RunRecordClock, clock),
+    ))
+
+    if (variant === "count" || variant === "false-pre-submit") {
+      const pending = await executeAdvance()
+      assert.equal(pending._tag, "ProviderPending")
+    }
+    const terminal = await executeAdvance()
+    const expectedTag = "Blocked"
+    assert.equal(terminal._tag, expectedTag)
+    if (terminal._tag !== "Blocked") continue
+    assert.equal(terminal.finding.code, "submission_unreconciled")
+    assert.equal(terminal.finding.correctionOwner, "Generation")
+    assert.equal(terminal.diagnostics.view.spendState, "possibly_spent")
+    assert.equal(terminal.diagnostics.view.retryState, "reconcile-only")
+    assert.equal("approval" in terminal, false)
+    const callsBeforeReplay = { submitCalls, pollCalls }
+    const replayed = await executeAdvance()
+    assert.equal(replayed._tag, expectedTag)
+    assert.deepEqual({ submitCalls, pollCalls }, callsBeforeReplay)
+  }
+})
+
+test("a synchronous adapter factory throw is unreconciled because adapter code ran", async () => {
+  const fixture = makeFixture("seedance-video")
+  const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(MediaInspector, byteMediaInspector),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+  ))
+  assert.equal(planned._tag, "Planned")
+  if (planned._tag !== "Planned") return
+  let adapterCalls = 0
+  const adapter: GenerationAdapterService = {
+    invoke: () => Effect.die("Qwen must not run"),
+    submitSeedance: () => {
+      adapterCalls += 1
+      throw new Error("factory refused before returning an Effect")
+    },
+  }
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const executeAdvance = () => Effect.runPromise(advance({ run: planned.run }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+    Effect.provideService(GenerationAdapter, adapter),
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:30:00.000Z") }),
+  ))
+
+  const refused = await executeAdvance()
+  assert.equal(refused._tag, "Blocked")
+  if (refused._tag !== "Blocked") return
+  assert.equal(refused.finding.code, "submission_unreconciled")
+  assert.equal(refused.finding.correctionOwner, "Generation")
+  assert.equal(refused.diagnostics.view.spendState, "possibly_spent")
+  assert.equal(refused.diagnostics.view.retryState, "reconcile-only")
+  assert.equal(adapterCalls, 1)
+
+  const replayed = await executeAdvance()
+  assert.equal(replayed._tag, "Blocked")
+  assert.equal(adapterCalls, 1)
+})
+
+test("a missing Seedance submission method is unreconciled because shape inspection is not proof", async () => {
+  const fixture = makeFixture("seedance-video")
+  const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(MediaInspector, byteMediaInspector),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+  ))
+  assert.equal(planned._tag, "Planned")
+  if (planned._tag !== "Planned") return
+  const adapter: GenerationAdapterService = {
+    invoke: () => Effect.die("Qwen must not run"),
+  }
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const refused = await Effect.runPromise(advance({ run: planned.run }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+    Effect.provideService(GenerationAdapter, adapter),
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:45:00.000Z") }),
+  ))
+
+  assert.equal(refused._tag, "Blocked")
+  if (refused._tag !== "Blocked") return
+  assert.equal(refused.finding.code, "submission_unreconciled")
+  assert.equal(refused.finding.correctionOwner, "Generation")
+  assert.equal(refused.diagnostics.view.spendState, "possibly_spent")
+  assert.equal(refused.diagnostics.view.retryState, "reconcile-only")
+})
+
+test("an adapter method accessor cannot manufacture an unspent Seedance outcome", async () => {
+  const fixture = makeFixture("seedance-video")
+  const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(MediaInspector, byteMediaInspector),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+  ))
+  assert.equal(planned._tag, "Planned")
+  if (planned._tag !== "Planned") return
+  let accessorCalls = 0
+  const adapter = { invoke: () => Effect.die("Qwen must not run") } as GenerationAdapterService
+  Object.defineProperty(adapter, "submitSeedance", {
+    get: () => {
+      accessorCalls += 1
+      throw new Error("accessor may already have dispatched externally")
+    },
+  })
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const executeAdvance = () => Effect.runPromise(advance({ run: planned.run }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+    Effect.provideService(GenerationAdapter, adapter),
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:50:00.000Z") }),
+  ))
+
+  const refused = await executeAdvance()
+  assert.equal(refused._tag, "Blocked")
+  if (refused._tag !== "Blocked") return
+  assert.equal(refused.finding.code, "submission_unreconciled")
+  assert.equal(refused.diagnostics.view.spendState, "possibly_spent")
+  assert.equal(refused.diagnostics.view.retryState, "reconcile-only")
+  assert.equal(accessorCalls, 1)
+  const replayed = await executeAdvance()
+  assert.equal(replayed._tag, "Blocked")
+  assert.equal(accessorCalls, 1)
+})

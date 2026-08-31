@@ -1,12 +1,50 @@
 import json
+import io
+import os
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 from qwen_ui_pipeline.cli import main
 
 
 class RecordComfyRunTests(unittest.TestCase):
+    def test_generate_is_a_no_submission_conductor_migration_surface(self):
+        brief = {"objective": "Legacy saved input remains readable."}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "brief.json"
+            path.write_text(json.dumps(brief), encoding="utf-8")
+            output = io.StringIO()
+            original_openrouter = os.environ.get("OPENROUTER_API_KEY")
+            original_alibaba = os.environ.get("DASHSCOPE_API_KEY")
+            os.environ["OPENROUTER_API_KEY"] = "must-not-be-read"
+            os.environ["DASHSCOPE_API_KEY"] = "must-not-be-read"
+            try:
+                with mock.patch(
+                    "urllib.request.OpenerDirector.open",
+                    side_effect=AssertionError("deprecated generate must not reach the network"),
+                ), redirect_stdout(output):
+                    status = main(["generate", str(path)])
+            finally:
+                if original_openrouter is None:
+                    os.environ.pop("OPENROUTER_API_KEY", None)
+                else:
+                    os.environ["OPENROUTER_API_KEY"] = original_openrouter
+                if original_alibaba is None:
+                    os.environ.pop("DASHSCOPE_API_KEY", None)
+                else:
+                    os.environ["DASHSCOPE_API_KEY"] = original_alibaba
+
+        migration = json.loads(output.getvalue())
+        self.assertEqual(status, 2)
+        self.assertEqual(migration["surface"], "python-cli.generate")
+        self.assertEqual(migration["status"], "deprecated")
+        self.assertEqual(migration["adapter_protocol_version"], "1")
+        self.assertEqual(migration["replacement"], ["Conductor.plan", "Conductor.advance"])
+        self.assertEqual(migration["saved_input"]["objective"], brief["objective"])
+
     def test_records_existing_comfy_outputs_with_provider_provenance(self):
         brief = {
             "objective": "Replace the flower with a golf club.",

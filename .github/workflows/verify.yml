@@ -1,10 +1,12 @@
 name: Verify
 
 on:
+  workflow_call:
   pull_request:
   push:
     branches:
       - main
+      - "build/**"
   workflow_dispatch:
 
 permissions:
@@ -17,7 +19,7 @@ concurrency:
 jobs:
   verify:
     name: Python and Node checks
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
 
     steps:
@@ -25,6 +27,11 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
+
+      - name: Install the FFmpeg 6 prerequisite
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ffmpeg
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -39,7 +46,8 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Install the pinned Node dependencies without scripts
+        run: npm ci --ignore-scripts
+
       - name: Run the canonical repository baseline
-        run: bash scripts/verify.sh
-        env:
-          VERIFY_PYTHON: python
+        run: /usr/bin/env -i /bin/bash --noprofile --norc scripts/verify.sh

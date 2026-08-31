@@ -1,0 +1,17 @@
+{
+  "DIRTY_TREE": "The release checkout contains uncommitted work.",
+  "GATE_FAILED": "A deterministic release gate failed.",
+  "HOLD_VERDICT": "The current review explicitly refuses shipment.",
+  "INVALID_VERSION": "The requested release is not an exact semantic version.",
+  "INVALID_VERDICT": "The review verdict is neither ship nor hold.",
+  "INVALID_REVIEW": "The review receipt is malformed, incomplete, duplicated, or contradictory.",
+  "MISSING_RELEASE_PAGE": "The version has no plain-language release page.",
+  "MISSING_REVIEW": "The version has no exact-SHA review evidence.",
+  "STALE_REVIEW": "The review does not name the candidate's exact SHA.",
+  "TAG_CONFLICT": "The requested tag already names another commit.",
+  "TAG_RECEIPT_MISMATCH": "An existing annotated tag does not carry the supplied exact review receipt.",
+  "UNPUSHED_TIP": "The local candidate is not the pushed build-line tip.",
+  "UNANNOTATED_TAG": "The release ref is a lightweight tag rather than an annotated tag.",
+  "UNAUTHENTICATED_REVIEW": "Both review axes were not authenticated from their hash-locked owner Issue comments.",
+  "WRONG_BUILD_BRANCH": "The version does not match the active build branch."
+}

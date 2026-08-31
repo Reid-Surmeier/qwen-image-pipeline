@@ -1,18 +1,21 @@
-#!/usr/bin/env bash
-# Canonical deterministic repository baseline (Issue #19).
+#!/bin/bash
+# Canonical deterministic repository baseline (Issue #18).
 #
 # Humans, agents, and GitHub Actions all run this same entry point. It must
 # stay free of provider credentials, model APIs, ComfyUI generation, and any
 # paid or external effect.
 
 set -uo pipefail
-
-PYTHON_BIN="${VERIFY_PYTHON:-python3.12}"
-if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
-  PYTHON_BIN=python3
+if [ "${QWEN_BASELINE_CLEAN_BOOTSTRAP:-}" != "1" ]; then
+  exec /usr/bin/env -i QWEN_BASELINE_CLEAN_BOOTSTRAP=1 /bin/bash --noprofile --norc "$0"
 fi
+export PATH=/usr/bin:/bin
 
-cd "$(dirname "$0")/.."
+PYTHON_BIN=/usr/bin/python3.12
+
+cd "${0%/*}/.."
+
+DETERMINISTIC_RUNNER=("$PYTHON_BIN" scripts/run_deterministic_command.py --)
 
 failures=0
 
@@ -28,10 +31,17 @@ run_check() {
   fi
 }
 
-run_check "python unit tests" "$PYTHON_BIN" -m unittest discover -s tests
-run_check "node tests" node --test tests/figma-mcp-client.test.mjs tests/figma-oauth-bootstrap.test.mjs
-run_check "python compilation" "$PYTHON_BIN" -m compileall -q qwen_ui_pipeline tests scripts
-run_check "git diff --check" git diff --check
+run_check "module map" "${DETERMINISTIC_RUNNER[@]}" @python scripts/generate_module_map.py --check
+run_check "successor governance" "${DETERMINISTIC_RUNNER[@]}" @python scripts/validate_successor_governance.py
+run_check "migration ledger" "${DETERMINISTIC_RUNNER[@]}" @python scripts/validate_migration_ledger.py
+run_check "python unit tests" "${DETERMINISTIC_RUNNER[@]}" @python -m unittest discover -s tests
+run_check "node tests" "${DETERMINISTIC_RUNNER[@]}" @node --test tests/figma-mcp-client.test.mjs tests/figma-oauth-bootstrap.test.mjs
+run_check "control-plane typecheck" "${DETERMINISTIC_RUNNER[@]}" @node node_modules/typescript/bin/tsc -p tsconfig.json
+run_check "module seam lint" "${DETERMINISTIC_RUNNER[@]}" @node node_modules/dependency-cruiser/bin/dependency-cruise.mjs --config .dependency-cruiser.cjs modules
+run_check "control-plane acceptance" "${DETERMINISTIC_RUNNER[@]}" @node scripts/run-control-tests.mjs
+run_check "vendored source pins" "${DETERMINISTIC_RUNNER[@]}" @node scripts/vendored-check.mjs
+run_check "python compilation" "${DETERMINISTIC_RUNNER[@]}" @python -m compileall -q qwen_ui_pipeline tests scripts
+run_check "git diff --check" "${DETERMINISTIC_RUNNER[@]}" @git diff --check
 
 if [ "$failures" -ne 0 ]; then
   echo "verification failed: ${failures} check(s) reported errors" >&2

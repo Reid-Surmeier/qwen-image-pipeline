@@ -1,0 +1,43 @@
+name: Release train
+
+# The required `release-train` status exists only after a reviewed v* tag is
+# pushed. An ordinary build PR therefore cannot satisfy main protection.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+  issues: read
+  pull-requests: read
+
+jobs:
+  release-train:
+    name: release-train
+    runs-on: ubuntu-latest
+    environment: release-train
+    timeout-minutes: 5
+    steps:
+      - name: Check out the immutable tag
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Require current exact-SHA ship evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release_steward.py verify-tag "$GITHUB_REF_NAME" --repo .
+      - name: Bind the tag to its exact open build PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          head="build/$GITHUB_REF_NAME"
+          tag_sha="$(git rev-parse "$GITHUB_REF_NAME^{commit}")"
+          prs="$(gh pr list --state open --base main --head "$head" --json headRefOid)"
+          test "$(jq length <<<"$prs")" = "1" || { echo "$GITHUB_REF_NAME must have exactly one open $head PR" >&2; exit 1; }
+          test "$(jq -r '.[0].headRefOid' <<<"$prs")" = "$tag_sha" || { echo "$head does not name $tag_sha" >&2; exit 1; }
