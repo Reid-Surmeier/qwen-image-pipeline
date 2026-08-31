@@ -441,7 +441,13 @@ export const verifyVideoArtifact = (
     ? error
     : new VideoVerificationError("VIDEO_MEDIA_INVALID", "Video verification could not inspect the output."),
 }).pipe(Effect.mapError((error) => issueVideoVerificationFailure(error, {
-  outputSha256s: input.outputs.map((output) => output.sha256),
+  outputs: input.outputs.map((output) => ({
+    applicationPath: output.applicationPath,
+    mediaType: output.mediaType,
+    sha256: output.sha256,
+  })),
   requestedCount: input.requestedCount,
   completedCount: input.completedCount,
+  expected: input.expected,
+  cost: input.cost,
 })))

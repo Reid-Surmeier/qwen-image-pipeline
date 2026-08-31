@@ -2848,13 +2848,25 @@ export const recordOperation = (
       proof.donorSha256 === current.selectedDonorSha256 && proof.candidateSha256 === current.assemblyOutputSha256 &&
       proof.regionSha256 === regionSha256 && proof.exactCopySha256 === exactCopySha256
     )
-    const videoOutputSha256s = current.evidence
+    const videoOutputs = current.evidence
       .filter((item) => item.applicationPath.startsWith("outputs/") && item.mediaType === "video/mp4")
-      .map((item) => item.sha256)
+      .map((item) => ({
+        applicationPath: item.applicationPath,
+        mediaType: item.mediaType,
+        sha256: item.sha256,
+      }))
+    const videoExpected = runRequest.videoPlan?.expectedMedia
+    const videoCost = {
+      state: current.costState ?? "unknown",
+      estimatedMaximumCostUsd: runRequest.estimatedMaximumCostUsd,
+      ...(current.actualCostUsd === undefined ? {} : { actualCostUsd: current.actualCostUsd }),
+    }
     const videoVerificationProofAllowed = failure.class !== "verification_failure" || proof?.module !== "Video Verification" || (
       current.phase === "generated_outputs_received" && runRequest.mode === "seedance-video" &&
       proof.requestedCount === runRequest.requestedCount && proof.completedCount === current.completedCount &&
-      canonicalJson(proof.outputSha256s!) === canonicalJson(videoOutputSha256s)
+      canonicalJson(proof.outputs!) === canonicalJson(videoOutputs) &&
+      canonicalJson(proof.expected!) === canonicalJson(videoExpected as unknown as JsonValue) &&
+      canonicalJson(proof.cost!) === canonicalJson(videoCost)
     )
     const phaseAllowed = failure.class === "assembly_failure"
       ? current.phase === "donor_selected"

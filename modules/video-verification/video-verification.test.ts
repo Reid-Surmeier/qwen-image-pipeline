@@ -16,7 +16,7 @@ import {
   zeroVideoTimingSampleCount,
   withReportedFfmpegMajor,
 } from "../../tests/control-plane-fixture.js"
-import { verifyVideo, type VerifyVideoInput } from "./index.js"
+import { inspectVideoVerificationFailure, verifyVideo, type VerifyVideoInput } from "./index.js"
 
 const hash = (bytes: Uint8Array): string =>
   createHash("sha256").update(bytes).digest("hex")
@@ -82,6 +82,47 @@ test("verifies exact Seedance MP4 properties, counts, audio expectation, hash, a
     "duration",
     "audio-expectation",
   ])
+})
+
+test("binds a failure proof to the complete immutable Video Plan input", async () => {
+  const body = await fixtureVideo()
+  const input = {
+    outputs: [{
+      applicationPath: "outputs/seedance-result.mp4" as const,
+      mediaType: "video/mp4" as const,
+      body,
+      sha256: hash(body),
+    }],
+    expected: {
+      width: 65,
+      height: 48,
+      durationSeconds: 0.2,
+      audioExpected: false,
+    },
+    requestedCount: 1,
+    completedCount: 1,
+    cost: {
+      state: "estimated-only" as const,
+      estimatedMaximumCostUsd: "0.99",
+    },
+  }
+  const failure = await Effect.runPromise(Effect.flip(verifyVideo(input)))
+  const proof = inspectVideoVerificationFailure(failure)
+
+  assert.equal(failure.code, "VIDEO_CHECK_FAILED")
+  assert.deepEqual(proof, {
+    module: "Video Verification",
+    errorCode: "VIDEO_CHECK_FAILED",
+    outputs: [{
+      applicationPath: "outputs/seedance-result.mp4",
+      mediaType: "video/mp4",
+      sha256: hash(body),
+    }],
+    requestedCount: 1,
+    completedCount: 1,
+    expected: input.expected,
+    cost: input.cost,
+  })
 })
 
 test("catches an independently mutated bad-media fixture", async () => {

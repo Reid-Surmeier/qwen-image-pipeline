@@ -7,9 +7,24 @@ export type VideoVerificationErrorCode =
 export type VideoVerificationFailureEvidence = Readonly<{
   module: "Video Verification"
   errorCode: VideoVerificationErrorCode
-  outputSha256s: ReadonlyArray<string>
+  outputs: ReadonlyArray<Readonly<{
+    applicationPath: string
+    mediaType: string
+    sha256: string
+  }>>
   requestedCount: number
   completedCount: number
+  expected: Readonly<{
+    width: number
+    height: number
+    durationSeconds: number
+    audioExpected: boolean
+  }>
+  cost: Readonly<{
+    state: string
+    estimatedMaximumCostUsd: string
+    actualCostUsd?: string
+  }>
 }>
 
 const issuedFailures = new WeakMap<VideoVerificationError, VideoVerificationFailureEvidence>()
@@ -31,9 +46,11 @@ export const issueVideoVerificationFailure = (
   issuedFailures.set(error, Object.freeze({
     module: "Video Verification",
     errorCode: error.code,
-    outputSha256s: Object.freeze([...evidence.outputSha256s]),
+    outputs: Object.freeze(evidence.outputs.map((output) => Object.freeze({ ...output }))),
     requestedCount: evidence.requestedCount,
     completedCount: evidence.completedCount,
+    expected: Object.freeze({ ...evidence.expected }),
+    cost: Object.freeze({ ...evidence.cost }),
   }))
   return error
 }
