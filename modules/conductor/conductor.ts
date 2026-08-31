@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 
 import { assemble } from "../assembly/index.js"
-import { invoke, pollSeedance, prepare, recover, submitSeedance, type GenerationResult } from "../generation/index.js"
+import { invoke, pollSeedance, prepare, recover, submitSeedance, validatePersisted, type GenerationResult } from "../generation/index.js"
 import {
   ApplicationFiles,
   compilePlannedRun,
@@ -859,12 +859,15 @@ export const advanceRun = (
                   )),
                 ),
           )
-          generated = {
+          generated = yield* validatePersisted(prepared, {
             provider: "openrouter",
             model: request.model,
             providerEvidence,
             outputs,
-          }
+          }).pipe(Effect.mapError(asConductorError(
+            "RUN_RECORD_FAILURE",
+            "Complete persisted Qwen evidence failed Generation validation.",
+          )))
         } else {
           const recoveryAttempt = yield* recover(prepared, providerEvidence).pipe(Effect.match({
             onFailure: (error) => ({ _tag: "Failure" as const, error }),

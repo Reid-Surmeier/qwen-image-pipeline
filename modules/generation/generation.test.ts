@@ -849,6 +849,74 @@ test("rejects unknown, null, malformed, and sparse adapter results as typed fail
   }
 })
 
+test("rejects duplicate Qwen output paths and content identities before persistence", async () => {
+  const fixture = makeFixture("qwen-image", {
+    objective: (objective) => {
+      objective.requestedCount = 2
+      objective.budgetCeilingUsd = "0.10"
+    },
+  })
+  const decision = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(MediaInspector, byteMediaInspector),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+  ))
+  assert.equal(decision._tag, "Planned")
+  if (decision._tag !== "Planned") return
+  const locked = decision.run.request.references[0]!
+  const snapshot = await Effect.runPromise(fixture.files.read(locked.applicationPath))
+  const prepared = await Effect.runPromise(prepare(decision.run.request, [{
+    slot: locked.slot,
+    applicationPath: locked.applicationPath,
+    sha256: locked.sha256,
+    payloadDestination: locked.payloadDestination,
+    mediaType: locked.mediaType,
+    bytes: snapshot.bytes,
+  }]))
+  const providerBody = Buffer.from('{"id":"duplicate-qwen","status":"completed"}')
+  const firstBody = Buffer.from(JSON.stringify({ height: 1, pixels: [90, 90, 90, 255], width: 1 }))
+  const secondBody = Buffer.from(JSON.stringify({ height: 1, pixels: [91, 91, 91, 255], width: 1 }))
+  const output = (applicationPath: string, body: Uint8Array) => ({
+    applicationPath,
+    mediaType: "application/vnd.qwen.rgba+json" as const,
+    body,
+    sha256: sha256(body),
+  })
+  const duplicateResults: ReadonlyArray<readonly [string, GenerationResult]> = [
+    ["path", {
+      provider: "openrouter",
+      model: decision.run.request.model,
+      providerEvidence: { mediaType: "application/json", body: providerBody, sha256: sha256(providerBody) },
+      outputs: [output("outputs/donor-01.rgba.json", firstBody), output("outputs/donor-01.rgba.json", secondBody)],
+    }],
+    ["content", {
+      provider: "openrouter",
+      model: decision.run.request.model,
+      providerEvidence: { mediaType: "application/json", body: providerBody, sha256: sha256(providerBody) },
+      outputs: [output("outputs/donor-01.rgba.json", firstBody), output("outputs/donor-02.rgba.json", firstBody)],
+    }],
+  ]
+  for (const [index, [name, result]] of duplicateResults.entries()) {
+    const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+    const clock = { now: () => Effect.succeed("2026-08-30T12:00:00.000Z") }
+    const reserved: RunRecordView = await Effect.runPromise(reserve({
+      plannedRun: decision.run,
+      payloadSha256: prepared.payloadSha256,
+    }).pipe(Effect.provide(memory.layer), Effect.provideService(RunRecordClock, clock)))
+    const marker: RecordResult = await Effect.runPromise(record({
+      _tag: "SubmissionMayHaveStarted",
+      runId: reserved.runId,
+      operationId: `duplicate-output-${index}`,
+    }).pipe(Effect.provide(memory.layer), Effect.provideService(RunRecordClock, clock)))
+    assert.equal(marker._tag, "SubmissionPermitIssued")
+    if (marker._tag !== "SubmissionPermitIssued") continue
+    const error = await Effect.runPromise(Effect.flip(invoke(prepared, marker.permit).pipe(
+      Effect.provideService(GenerationAdapter, { invoke: () => Effect.succeed(result) }),
+    )))
+    assert.equal(error.code, "ADAPTER_RESULT_INVALID", name)
+  }
+})
+
 test("treats a synchronous submission-adapter throw as post-call uncertainty", async () => {
   const fixture = makeFixture("qwen-image")
   const decision = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(

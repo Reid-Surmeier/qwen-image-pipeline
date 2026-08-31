@@ -419,7 +419,10 @@ const validateGenerationResult = (
   if (result.outputs.length !== prepared.request.requestedCount) {
     return yield* Effect.fail(new GenerationError("OUTPUT_COUNT_MISMATCH", "The adapter returned the wrong output count."))
   }
+  const outputPaths = new Set(result.outputs.map((output) => output.applicationPath))
+  const outputSha256s = new Set(result.outputs.map((output) => output.sha256))
   if (
+    outputPaths.size !== result.outputs.length || outputSha256s.size !== result.outputs.length ||
     sha256(result.providerEvidence.body) !== result.providerEvidence.sha256 ||
     parseProviderDocument(result.providerEvidence, "qwen") === undefined ||
     result.outputs.some((output) =>
@@ -443,6 +446,14 @@ const validateGenerationResult = (
     ))
   }
   return result
+})
+
+export const validatePersistedGeneration = (
+  prepared: PreparedGeneration,
+  result: GenerationResult,
+): Effect.Effect<GenerationResult, GenerationError> => Effect.gen(function*() {
+  const validatedPrepared = yield* validatePreparedGeneration(prepared)
+  return yield* validateGenerationResult(validatedPrepared, result)
 })
 
 export const invokeGeneration = (

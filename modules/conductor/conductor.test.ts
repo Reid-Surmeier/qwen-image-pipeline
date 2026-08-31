@@ -523,6 +523,70 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
   }
 })
 
+test("classifies duplicate Qwen output identities before any output persistence", async () => {
+  const exactCopy = { x: 0, y: 0, rgba: [0, 0, 0, 0] as const }
+  const fixture = makeFixture("qwen-image", {
+    objective: (objective) => {
+      objective.requestedCount = 2
+      objective.budgetCeilingUsd = "0.10"
+      objective.assemblyPlan = {
+        required: true,
+        baselineReferenceSlot: "source",
+        ownedRegion: { x: 0, y: 0, width: 1, height: 1 },
+        exactCopy: [{ ...exactCopy, sha256: hash(JSON.stringify(exactCopy)) }],
+      }
+    },
+  })
+  const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(MediaInspector, byteMediaInspector),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+  ))
+  assert.equal(planned._tag, "Planned")
+  if (planned._tag !== "Planned") return
+  const providerBody = Buffer.from('{"id":"duplicate-qwen","status":"completed"}')
+  const duplicateBody = Buffer.from(JSON.stringify({ height: 1, pixels: [90, 90, 90, 255], width: 1 }))
+  let submissions = 0
+  const adapter: GenerationAdapterService = {
+    invoke: (prepared) => Effect.sync(() => {
+      submissions += 1
+      return {
+        provider: "openrouter" as const,
+        model: prepared.request.model,
+        providerEvidence: {
+          mediaType: "application/json" as const,
+          body: providerBody,
+          sha256: hash(providerBody),
+        },
+        outputs: ["01", "02"].map((suffix) => ({
+          applicationPath: `outputs/duplicate-${suffix}.rgba.json`,
+          mediaType: "application/vnd.qwen.rgba+json" as const,
+          body: duplicateBody,
+          sha256: hash(duplicateBody),
+        })),
+      }
+    }),
+  }
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const execute = () => Effect.runPromise(advance({ run: planned.run }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(GenerationAdapter, adapter),
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:00:00.000Z") }),
+  ))
+  const blocked = await execute()
+  assert.equal(blocked._tag, "Blocked")
+  if (blocked._tag !== "Blocked") return
+  assert.equal(blocked.finding.code, "submission_unreconciled")
+  assert.equal(blocked.finding.correctionOwner, "Generation")
+  assert.equal(blocked.diagnostics.view.evidence.filter((item) => item.applicationPath.startsWith("outputs/")).length, 0)
+  assert.equal(blocked.diagnostics.view.spendState, "possibly_spent")
+  assert.equal(blocked.diagnostics.view.retryState, "reconcile-only")
+  assert.equal(submissions, 1)
+  assert.equal((await execute())._tag, "Blocked")
+  assert.equal(submissions, 1)
+})
+
 test("advances one Seedance Run by submitting once and polling the same job to verified video", async () => {
   const fixture = makeFixture("seedance-video")
   const plannedDecision = await Effect.runPromise(

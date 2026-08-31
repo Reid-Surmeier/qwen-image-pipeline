@@ -719,8 +719,21 @@ test("freezes Qwen generated output bytes before validation and durable persiste
       sha256: createHash("sha256").update(providerBody).digest("hex"),
     },
   })))
-  const safeBody = Buffer.from("safe")
-  const unsafeBody = Buffer.from("evil")
+  const malformedBody = Buffer.from("not normalized RGBA evidence")
+  const malformed = await Effect.runPromise(Effect.flip(provide(record({
+    _tag: "CommitGeneratedOutput",
+    runId: reserved.runId,
+    operationId: "malformed-qwen-output",
+    output: {
+      applicationPath: "outputs/malformed.rgba.json",
+      mediaType: "application/vnd.qwen.rgba+json",
+      body: malformedBody,
+      sha256: createHash("sha256").update(malformedBody).digest("hex"),
+    },
+  }))))
+  assert.equal(malformed.code, "EVIDENCE_HASH_MISMATCH")
+  const safeBody = raster([90, 90, 90, 255, 80, 80, 80, 255])
+  const unsafeBody = raster([10, 10, 10, 255, 20, 20, 20, 255])
   let reads = 0
   const output = {
     applicationPath: "outputs/stateful.rgba.json" as const,
@@ -2097,14 +2110,14 @@ test("two persisted outputs cannot manufacture a repeated failed-candidate findi
     },
   })))
   const persistOutput = (index: number) => {
-    const body = Buffer.from(`bad candidate ${index}`, "utf8")
+    const body = raster([index, index, index, 255, index + 10, index + 10, index + 10, 255])
     return record({
       _tag: "CommitGeneratedOutput" as const,
       runId: reserved.runId,
       operationId: `repeated-evidence-output-${index}`,
       output: {
-        applicationPath: `outputs/repeated-bad-${index}.png` as const,
-        mediaType: "image/png",
+        applicationPath: `outputs/repeated-bad-${index}.rgba.json` as const,
+        mediaType: "application/vnd.qwen.rgba+json",
         body,
         sha256: createHash("sha256").update(body).digest("hex"),
       },
@@ -2603,22 +2616,22 @@ test("persists generated output evidence and reads only its verified bytes", asy
       sha256: createHash("sha256").update(providerBody).digest("hex"),
     },
   })))
-  const output = Buffer.from("fake-png-output", "utf8")
+  const output = raster([42, 42, 42, 255, 43, 43, 43, 255])
   const outputSha256 = createHash("sha256").update(output).digest("hex")
   const committed = await Effect.runPromise(provide(record({
     _tag: "CommitGeneratedOutput",
     runId: reserved.runId,
     operationId: "output-one",
     output: {
-      applicationPath: "outputs/candidate-001.png",
-      mediaType: "image/png",
+      applicationPath: "outputs/candidate-001.rgba.json",
+      mediaType: "application/vnd.qwen.rgba+json",
       body: output,
       sha256: outputSha256,
     },
   })))
   assert.equal(committed.view.phase, "generated_outputs_received")
   assert.deepEqual(
-    Buffer.from(await Effect.runPromise(readEvidence(reserved.runId, "outputs/candidate-001.png").pipe(
+    Buffer.from(await Effect.runPromise(readEvidence(reserved.runId, "outputs/candidate-001.rgba.json").pipe(
       Effect.provide(memory.layer),
     ))),
     output,
@@ -2628,8 +2641,8 @@ test("persists generated output evidence and reads only its verified bytes", asy
     runId: reserved.runId,
     operationId: "output-one",
     output: {
-      applicationPath: "outputs/candidate-001.png",
-      mediaType: "image/png",
+      applicationPath: "outputs/candidate-001.rgba.json",
+      mediaType: "application/vnd.qwen.rgba+json",
       body: Buffer.from("changed replay body"),
       sha256: outputSha256,
     },
@@ -2646,8 +2659,8 @@ test("persists generated output evidence and reads only its verified bytes", asy
     }
     const { eventSha256: _discarded, ...withoutDigest } = outputEvent
     outputEvent.eventSha256 = createHash("sha256").update(canonicalJson(withoutDigest)).digest("hex")
-    stored.evidence["outputs/../escape.png"] = stored.evidence["outputs/candidate-001.png"]!
-    delete stored.evidence["outputs/candidate-001.png"]
+    stored.evidence["outputs/../escape.png"] = stored.evidence["outputs/candidate-001.rgba.json"]!
+    delete stored.evidence["outputs/candidate-001.rgba.json"]
     stored.events = Buffer.from(`${events.map(canonicalJson).join("\n")}\n`, "utf8")
     delete stored.state
   }))
@@ -2677,15 +2690,15 @@ test("records a donor-choice checkpoint and selects only a persisted output on t
       sha256: createHash("sha256").update(providerBody).digest("hex"),
     },
   })))
-  const output = Buffer.from("candidate-for-donor", "utf8")
+  const output = raster([50, 50, 50, 255, 51, 51, 51, 255])
   const outputSha256 = createHash("sha256").update(output).digest("hex")
   await Effect.runPromise(provide(record({
     _tag: "CommitGeneratedOutput",
     runId: reserved.runId,
     operationId: "donor-output",
     output: {
-      applicationPath: "outputs/donor.png",
-      mediaType: "image/png",
+      applicationPath: "outputs/donor.rgba.json",
+      mediaType: "application/vnd.qwen.rgba+json",
       body: output,
       sha256: outputSha256,
     },
@@ -2697,15 +2710,15 @@ test("records a donor-choice checkpoint and selects only a persisted output on t
     candidateSha256s: [outputSha256],
   }))))
   assert.equal(incompleteCheckpoint.code, "RESERVATION_OUTSIDE_PLAN")
-  const alternativeOutput = Buffer.from("alternative-donor-candidate", "utf8")
+  const alternativeOutput = raster([60, 60, 60, 255, 61, 61, 61, 255])
   const alternativeSha256 = createHash("sha256").update(alternativeOutput).digest("hex")
   await Effect.runPromise(provide(record({
     _tag: "CommitGeneratedOutput",
     runId: reserved.runId,
     operationId: "donor-output-alternative",
     output: {
-      applicationPath: "outputs/donor-alternative.png",
-      mediaType: "image/png",
+      applicationPath: "outputs/donor-alternative.rgba.json",
+      mediaType: "application/vnd.qwen.rgba+json",
       body: alternativeOutput,
       sha256: alternativeSha256,
     },
@@ -2715,10 +2728,10 @@ test("records a donor-choice checkpoint and selects only a persisted output on t
     runId: reserved.runId,
     operationId: "donor-output-over-count",
     output: {
-      applicationPath: "outputs/donor-over-count.png",
-      mediaType: "image/png",
-      body: Buffer.from("third-donor", "utf8"),
-      sha256: createHash("sha256").update("third-donor").digest("hex"),
+      applicationPath: "outputs/donor-over-count.rgba.json",
+      mediaType: "application/vnd.qwen.rgba+json",
+      body: raster([70, 70, 70, 255, 71, 71, 71, 255]),
+      sha256: createHash("sha256").update(raster([70, 70, 70, 255, 71, 71, 71, 255])).digest("hex"),
     },
   }))))
   assert.equal(overCount.code, "RESERVATION_OUTSIDE_PLAN")
@@ -2785,7 +2798,10 @@ test("replay rejects a donor checkpoint that omits part of the reserved output s
     operationId: "replay-provider",
     evidence: { mediaType: "application/json", body: providerBody, sha256: createHash("sha256").update(providerBody).digest("hex") },
   }))
-  const outputBodies = [Buffer.from("replay-output-one"), Buffer.from("replay-output-two")]
+  const outputBodies = [
+    raster([70, 70, 70, 255, 71, 71, 71, 255]),
+    raster([80, 80, 80, 255, 81, 81, 81, 255]),
+  ]
   const outputSha256s: string[] = []
   for (const [index, body] of outputBodies.entries()) {
     const outputSha256 = createHash("sha256").update(body).digest("hex")
@@ -2795,8 +2811,8 @@ test("replay rejects a donor checkpoint that omits part of the reserved output s
       runId: reserved.runId,
       operationId: `replay-output-${index + 1}`,
       output: {
-        applicationPath: `outputs/replay-${index + 1}.png`,
-        mediaType: "image/png",
+        applicationPath: `outputs/replay-${index + 1}.rgba.json`,
+        mediaType: "application/vnd.qwen.rgba+json",
         body,
         sha256: outputSha256,
       },
@@ -2856,7 +2872,7 @@ test("persists separately hashed assembled output and canonical Assembly report"
     _tag: "CommitGeneratedOutput",
     runId: reserved.runId,
     operationId: "assembly-donor-output",
-    output: { applicationPath: "outputs/donor.png", mediaType: "image/png", body: donor, sha256: donorSha256 },
+    output: { applicationPath: "outputs/donor.rgba.json", mediaType: "application/vnd.qwen.rgba+json", body: donor, sha256: donorSha256 },
   })))
   await Effect.runPromise(provide(record({
     _tag: "OpenDonorChoice",
@@ -2960,7 +2976,9 @@ test("persists separately hashed assembled output and canonical Assembly report"
   await Effect.runPromise(memory.mutate(reserved.runId, (stored) => {
     const persisted = stored.evidence["outputs/assembled.rgba.json"]
     if (persisted === undefined || persisted[0] === undefined) throw new Error("assembled fixture missing")
-    persisted[0] ^= 1
+    const tampered = Uint8Array.from(persisted)
+    tampered[0] = tampered[0]! ^ 1
+    stored.evidence["outputs/assembled.rgba.json"] = tampered
   }))
   const fabricatedZeros = await Effect.runPromise(Effect.flip(provide(record({
     _tag: "CommitChecks",
@@ -3041,7 +3059,7 @@ test("persists separately hashed assembled output and canonical Assembly report"
   assert.equal(changedReplay.code, "IDEMPOTENCY_CONFLICT")
 
   for (const path of [
-    "outputs/donor.png",
+    "outputs/donor.rgba.json",
     "outputs/assembled.rgba.json",
     "assembly-report.json",
     "checks.json",
@@ -3097,7 +3115,7 @@ test("a fresh filesystem adapter replays the completed Assembly Run and reads ve
     _tag: "CommitGeneratedOutput",
     runId: reserved.runId,
     operationId: "fs-donor-output",
-    output: { applicationPath: "outputs/donor.png", mediaType: "image/png", body: donor, sha256: donorSha256 },
+    output: { applicationPath: "outputs/donor.rgba.json", mediaType: "application/vnd.qwen.rgba+json", body: donor, sha256: donorSha256 },
   })))
   await Effect.runPromise(provide(record({
     _tag: "OpenDonorChoice",

@@ -2,7 +2,7 @@ import type { Effect } from "effect"
 
 import type { SubmissionPermit } from "../run-record/index.js"
 import type { GenerationError } from "./errors.js"
-import { invokeGeneration, pollSeedanceGeneration, prepareGeneration, recoverGeneration, submitSeedanceGeneration } from "./generation.js"
+import { invokeGeneration, pollSeedanceGeneration, prepareGeneration, recoverGeneration, submitSeedanceGeneration, validatePersistedGeneration } from "./generation.js"
 import type {
   GeneratedArtifact,
   GenerationAdapterService,
@@ -28,6 +28,11 @@ export const recover: (
   prepared: PreparedGeneration,
   providerEvidence: GenerationProviderEvidence,
 ) => Effect.Effect<GenerationResult, GenerationError, GenerationAdapterService> = recoverGeneration
+
+export const validatePersisted: (
+  prepared: PreparedGeneration,
+  result: GenerationResult,
+) => Effect.Effect<GenerationResult, GenerationError> = validatePersistedGeneration
 
 export const submitSeedance: (
   prepared: PreparedGeneration,

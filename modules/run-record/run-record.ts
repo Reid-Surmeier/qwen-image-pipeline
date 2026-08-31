@@ -387,6 +387,15 @@ const decodeRaster = (body: Uint8Array): Raster => {
   return { width, height, pixels: pixels as ReadonlyArray<number> }
 }
 
+const isNormalizedRgbaEvidence = (body: Uint8Array): boolean => {
+  try {
+    decodeRaster(body)
+    return true
+  } catch {
+    return false
+  }
+}
+
 const recomputeChecks = (
   request: CanonicalRunRequest,
   baselineBytes: Uint8Array,
@@ -1205,11 +1214,12 @@ const replay = (
       const mediaType = stringPayload(event.payload, "mediaType")
       const storedEvidence = evidenceBytes[applicationPath]
       if (
-        !/^outputs\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(applicationPath) ||
-        applicationPath.includes("..") ||
-        mediaType.trim().length === 0 ||
+        !/^outputs\/[a-z0-9][a-z0-9._-]*\.rgba\.json$/.test(applicationPath) ||
+        mediaType !== "application/vnd.qwen.rgba+json" ||
         !isSha256(evidenceSha256) ||
-        evidence.some((item) => item.applicationPath === applicationPath)
+        evidence.some((item) =>
+          item.applicationPath === applicationPath ||
+          (item.applicationPath.startsWith("outputs/") && item.sha256 === evidenceSha256))
       ) {
         throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Generated output journal metadata is unsafe or malformed.", "repair-evidence")
       }
@@ -1219,7 +1229,10 @@ const replay = (
       if (storedEvidence === undefined) {
         throw new RunRecordError("EVIDENCE_MISSING", `${applicationPath} is named by the journal but missing.`, "repair-evidence")
       }
-      if (storedEvidence.byteLength !== byteLength || sha256(storedEvidence) !== evidenceSha256) {
+      if (
+        storedEvidence.byteLength !== byteLength || sha256(storedEvidence) !== evidenceSha256 ||
+        !isNormalizedRgbaEvidence(storedEvidence)
+      ) {
         throw new RunRecordError("EVIDENCE_HASH_MISMATCH", `${applicationPath} no longer matches its event receipt.`, "repair-evidence")
       }
       evidence.push({ applicationPath, sha256: evidenceSha256, byteLength, mediaType })
@@ -2306,12 +2319,14 @@ export const recordOperation = (
       return yield* Effect.fail(new RunRecordError("RESERVATION_OUTSIDE_PLAN", "Generated output evidence exceeds the reserved maximum count."))
     }
     if (
-      !/^outputs\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(stableGeneratedOutput!.applicationPath) ||
-      stableGeneratedOutput!.applicationPath.includes("..") ||
-      stableGeneratedOutput!.mediaType.trim().length === 0 ||
-      current.evidence.some((item) => item.applicationPath === stableGeneratedOutput!.applicationPath) ||
+      !/^outputs\/[a-z0-9][a-z0-9._-]*\.rgba\.json$/.test(stableGeneratedOutput!.applicationPath) ||
+      stableGeneratedOutput!.mediaType !== "application/vnd.qwen.rgba+json" ||
+      current.evidence.some((item) =>
+        item.applicationPath === stableGeneratedOutput!.applicationPath ||
+        (item.applicationPath.startsWith("outputs/") && item.sha256 === stableGeneratedOutput!.sha256)) ||
       !isSha256(stableGeneratedOutput!.sha256) ||
-      sha256(stableGeneratedOutput!.body) !== stableGeneratedOutput!.sha256
+      sha256(stableGeneratedOutput!.body) !== stableGeneratedOutput!.sha256 ||
+      !isNormalizedRgbaEvidence(stableGeneratedOutput!.body)
     ) {
       return yield* Effect.fail(new RunRecordError("EVIDENCE_HASH_MISMATCH", "Generated output evidence is unsafe or does not match its declared SHA-256.", "repair-evidence"))
     }
