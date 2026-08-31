@@ -27,8 +27,51 @@ const decodeField = (encoded: string): string | undefined => {
   }
 }
 
+const decodeDiagnosticSyntax = (source: string): string | undefined => {
+  let current = source
+  for (let pass = 0; pass < 4; pass += 1) {
+    let invalidCodePoint = false
+    const codePoint = (original: string, encoded: string): string => {
+      const value = Number.parseInt(encoded, 16)
+      if (!Number.isSafeInteger(value) || value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff)) {
+        invalidCodePoint = true
+        return original
+      }
+      return String.fromCodePoint(value)
+    }
+    let next = current
+      .replace(/\\u\{([0-9a-f]{1,6})\}/giu, (original, encoded: string) => codePoint(original, encoded))
+      .replace(/\\u([0-9a-f]{4})/giu, (original, encoded: string) => codePoint(original, encoded))
+      .replace(/\\x([0-9a-f]{2})/giu, (original, encoded: string) => codePoint(original, encoded))
+      .replace(/&#x([0-9a-f]{1,6});?/giu, (original, encoded: string) => codePoint(original, encoded))
+      .replace(/&#([0-9]{1,7});?/gu, (original, encoded: string) => {
+        const value = Number.parseInt(encoded, 10)
+        if (!Number.isSafeInteger(value) || value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff)) {
+          invalidCodePoint = true
+          return original
+        }
+        return String.fromCodePoint(value)
+      })
+      .replace(/&colon;/giu, ":")
+      .replace(/&equals;/giu, "=")
+    if (invalidCodePoint) return undefined
+    if (/%[0-9a-f]{2}/iu.test(next)) {
+      try {
+        next = decodeURIComponent(next)
+      } catch {
+        return undefined
+      }
+    }
+    if (next === current) return next
+    current = next
+  }
+  return current
+}
+
 const stringHasCredentialField = (value: string): boolean => {
-  const compatibleValue = value.normalize("NFKC")
+  const decodedValue = decodeDiagnosticSyntax(value)
+  if (decodedValue === undefined) return true
+  const compatibleValue = decodedValue.normalize("NFKC")
   let structuralStart = 0
   for (let cursor = 0; cursor < compatibleValue.length;) {
     const codePoint = compatibleValue.codePointAt(cursor)

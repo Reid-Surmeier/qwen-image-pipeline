@@ -67,6 +67,30 @@ export const EMBEDDED_PROVIDER_SECRET_CASES = [
     debug: "provider diagnostic: api_key꞉opaque-private-value",
     status: "accepted",
   })],
+  ["escaped-separator-diagnostic-field", JSON.stringify({
+    debug: "provider diagnostic: api_key\\u003dopaque-private-value",
+    status: "accepted",
+  })],
+  ["escaped-key-and-separator-diagnostic-field", JSON.stringify({
+    debug: "provider diagnostic: \\u0061pi_key\\u003dopaque-private-value",
+    status: "accepted",
+  })],
+  ["hex-escaped-separator-diagnostic-field", JSON.stringify({
+    debug: "provider diagnostic: api_key\\x3dopaque-private-value",
+    status: "accepted",
+  })],
+  ["code-point-escaped-separator-diagnostic-field", JSON.stringify({
+    debug: "provider diagnostic: api_key\\u{3d}opaque-private-value",
+    status: "accepted",
+  })],
+  ["percent-escaped-separator-diagnostic-field", JSON.stringify({
+    debug: "provider diagnostic: api_key%3Dopaque-private-value",
+    status: "accepted",
+  })],
+  ["entity-escaped-separator-diagnostic-field", JSON.stringify({
+    debug: "provider diagnostic: api_key&#61;opaque-private-value",
+    status: "accepted",
+  })],
   ["nested-json-secret", '{"debug":"{\\"api_key\\":\\"actual-private-value\\"}","status":"accepted"}'],
   ["nested-json-duplicate-secret", '{"debug":"{\\"note\\":\\"sk-private-value-123456\\",\\"note\\":\\"redacted\\"}","status":"accepted"}'],
   ["deeply-nested-json-secret", JSON.stringify({
