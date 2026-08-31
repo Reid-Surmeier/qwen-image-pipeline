@@ -738,6 +738,39 @@ test("persists one Seedance job, polls only that identity, and records verified 
   assert.equal(wrongJob.code, "ILLEGAL_TRANSITION")
 })
 
+test("rejects an invalid Seedance submission before evidence or intent becomes durable", async () => {
+  const { planned } = await plannedSeedanceRun()
+  const memory = await memoryHarness()
+  const provide = <Success, Error>(
+    effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
+  ): Effect.Effect<Success, Error> => effect.pipe(
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, clock),
+  )
+  const reserved = await Effect.runPromise(provide(reserve(reservationFor(planned))))
+  await Effect.runPromise(provide(record({
+    _tag: "SubmissionMayHaveStarted",
+    runId: reserved.runId,
+    operationId: "invalid-seedance-marker",
+  })))
+  const invalidBody = Buffer.from('{"job_id":"seedance-invalid","status":"accepted"}')
+  const failure = await Effect.runPromise(Effect.flip(provide(record({
+    _tag: "CommitProviderEvidence",
+    runId: reserved.runId,
+    operationId: "invalid-seedance-provider",
+    evidence: {
+      mediaType: "application/json",
+      body: invalidBody,
+      sha256: createHash("sha256").update(invalidBody).digest("hex"),
+    },
+  }))))
+  assert.equal(failure.code, "EVIDENCE_HASH_MISMATCH")
+  const diagnostics = await Effect.runPromise(readDiagnostics(reserved.runId).pipe(Effect.provide(memory.layer)))
+  assert.equal(diagnostics.view.phase, "submission_may_have_started")
+  assert.equal(Buffer.from(diagnostics.events).toString("utf8").trimEnd().split("\n").length, 2)
+  assert.deepEqual(diagnostics.view.evidence, [])
+})
+
 test("video checks must cover every persisted Seedance output exactly once", async () => {
   const { planned, body: videoBody } = await plannedSeedanceRun(2)
   const memory = await memoryHarness()
@@ -1703,7 +1736,7 @@ test("a fresh process reloads the same hash-chained Run from an application file
 
   const runDirectory = join(applicationRoot, artifactRoot, "runs", reserved.runId)
   assert.equal((await readFile(join(runDirectory, "request.json"), "utf8")), planned.canonicalRequest)
-  assert.equal((await readFile(join(runDirectory, "events.jsonl"), "utf8")).trimEnd().split("\n").length, 3)
+  assert.equal((await readFile(join(runDirectory, "events.jsonl"), "utf8")).trimEnd().split("\n").length, 4)
   assert.deepEqual(await readFile(join(runDirectory, "provider-response.json")), body)
 
   const freshLayer = await Effect.runPromise(fileRunRecordLayer(applicationRoot, artifactRoot))

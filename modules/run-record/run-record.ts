@@ -62,7 +62,7 @@ type RunEvent = Readonly<{
   operationId: string
   runId: string
   timestamp: string
-  kind: "attempt_reserved" | "submission_may_have_started" | "provider_evidence_received" | "generated_output_persisted" | "seedance_poll_persisted" | "donor_choice_opened" | "donor_selected" | "assembly_persisted" | "checks_persisted" | "video_checks_persisted" | "definitive_pre_submit_failure"
+  kind: "attempt_reserved" | "submission_may_have_started" | "provider_evidence_intent" | "provider_evidence_received" | "generated_output_persisted" | "seedance_poll_persisted" | "donor_choice_opened" | "donor_selected" | "assembly_persisted" | "checks_persisted" | "video_checks_persisted" | "definitive_pre_submit_failure"
   previousEventSha256: string | null
   payload: Readonly<Record<string, JsonValue>>
   eventSha256: string
@@ -914,6 +914,12 @@ const replay = (
   let completedCount: number | undefined
   let costState: "actual" | "estimated-only" | "unknown" | undefined
   let actualCostUsd: string | undefined
+  let providerEvidenceIntent: Readonly<{
+    completionOperationId: string
+    sha256: string
+    byteLength: number
+    mediaType: string
+  }> | undefined
   for (const event of events.slice(1)) {
     if (event.kind === "submission_may_have_started") {
       if (phase !== "reserved" || stringPayload(event.payload, "attemptId") !== base.attemptId) {
@@ -924,6 +930,20 @@ const replay = (
       retryState = "reconcile-only"
       continue
     }
+    if (event.kind === "provider_evidence_intent") {
+      if (phase !== "submission_may_have_started" || providerEvidenceIntent !== undefined) {
+        throw new RunRecordError("ILLEGAL_TRANSITION", "Provider evidence intent was recorded out of order.")
+      }
+      const completionOperationId = stringPayload(event.payload, "completionOperationId")
+      const evidenceSha256 = stringPayload(event.payload, "sha256")
+      const byteLength = numberPayload(event.payload, "byteLength")
+      const mediaType = stringPayload(event.payload, "mediaType")
+      if (!isIdentifier(completionOperationId) || !isSha256(evidenceSha256) || byteLength < 1 || mediaType !== "application/json") {
+        throw new RunRecordError("ILLEGAL_TRANSITION", "Provider evidence intent is malformed.")
+      }
+      providerEvidenceIntent = { completionOperationId, sha256: evidenceSha256, byteLength, mediaType }
+      continue
+    }
     if (event.kind === "provider_evidence_received") {
       if (phase !== "submission_may_have_started") {
         throw new RunRecordError("ILLEGAL_TRANSITION", "Provider evidence was recorded before submission uncertainty.")
@@ -932,6 +952,14 @@ const replay = (
       const evidenceSha256 = stringPayload(event.payload, "sha256")
       const byteLength = numberPayload(event.payload, "byteLength")
       const mediaType = stringPayload(event.payload, "mediaType")
+      if (providerEvidenceIntent !== undefined && (
+        providerEvidenceIntent.completionOperationId !== event.operationId ||
+        providerEvidenceIntent.sha256 !== evidenceSha256 ||
+        providerEvidenceIntent.byteLength !== byteLength ||
+        providerEvidenceIntent.mediaType !== mediaType
+      )) {
+        throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Provider evidence receipt contradicts its durable intent.", "repair-evidence")
+      }
       const storedEvidence = evidenceBytes[applicationPath]
       if (mediaType !== "application/json" || storedEvidence === undefined) {
         throw new RunRecordError("EVIDENCE_MISSING", `${applicationPath} is named by the journal but missing.`, "repair-evidence")
@@ -959,6 +987,7 @@ const replay = (
         providerJobId = provider.job_id
       }
       phase = "provider_evidence_received"
+      providerEvidenceIntent = undefined
       spendState = "unknown"
       retryState = "never-resubmit"
       continue
@@ -1427,16 +1456,47 @@ export const reserveRun = (
         return store.read(runId).pipe(Effect.flatMap((stored) => {
           const orphanedProviderBody = stored.evidence["provider-response.json"]
           if (orphanedProviderBody === undefined) return Effect.succeed(existing)
-          return recordOperation({
-            _tag: "CommitProviderEvidence",
-            runId,
-            operationId: "recover-provider-evidence",
-            evidence: {
-              mediaType: "application/json",
-              body: orphanedProviderBody,
-              sha256: sha256(orphanedProviderBody),
-            },
-          }).pipe(Effect.map((result) => result.view))
+          return Effect.try({
+            try: () => parseEvents(stored.events),
+            catch: (error) => error instanceof RunRecordError
+              ? error
+              : new RunRecordError("EVENT_CHAIN_BROKEN", "Provider recovery intent could not be decoded.", "repair-evidence"),
+          }).pipe(Effect.flatMap((journal) => {
+            const intent = journal.find((event) => event.kind === "provider_evidence_intent")
+            if (intent === undefined) {
+              return Effect.fail(new RunRecordError(
+                "EVIDENCE_HASH_MISMATCH",
+                "Unjournaled provider evidence has no durable pre-write intent.",
+                "repair-evidence",
+              ))
+            }
+            const expectedSha256 = stringPayload(intent.payload, "sha256")
+            const expectedByteLength = numberPayload(intent.payload, "byteLength")
+            const expectedMediaType = stringPayload(intent.payload, "mediaType")
+            const completionOperationId = stringPayload(intent.payload, "completionOperationId")
+            if (
+              intent.eventSha256 !== journal.at(-1)?.eventSha256 ||
+              expectedMediaType !== "application/json" ||
+              orphanedProviderBody.byteLength !== expectedByteLength ||
+              sha256(orphanedProviderBody) !== expectedSha256
+            ) {
+              return Effect.fail(new RunRecordError(
+                "EVIDENCE_HASH_MISMATCH",
+                "Orphaned provider evidence does not match its durable pre-write intent.",
+                "repair-evidence",
+              ))
+            }
+            return recordOperation({
+              _tag: "CommitProviderEvidence",
+              runId,
+              operationId: completionOperationId,
+              evidence: {
+                mediaType: "application/json",
+                body: orphanedProviderBody,
+                sha256: expectedSha256,
+              },
+            }).pipe(Effect.map((result) => result.view))
+          }))
         }))
       }))
     }),
@@ -1484,7 +1544,7 @@ const valueHasSecret = (value: unknown, key?: string, embeddedDepth = 0): boolea
         if (hasDuplicateJsonKeys(value)) return true
         if (valueHasSecret(JSON.parse(value), key, embeddedDepth + 1)) return true
       } catch {
-        return false
+        return true
       }
     }
     return false
@@ -1566,7 +1626,7 @@ const hasDuplicateJsonKeys = (source: string): boolean => {
   }
 }
 
-const validateProviderEvidence = (operation: Extract<RecordOperation, { _tag: "CommitProviderEvidence" }>): void => {
+const validateProviderEvidence = (operation: Extract<RecordOperation, { _tag: "CommitProviderEvidence" }>): unknown => {
   if (
     operation.evidence.mediaType !== "application/json" ||
     !isSha256(operation.evidence.sha256) || sha256(operation.evidence.body) !== operation.evidence.sha256
@@ -1585,6 +1645,25 @@ const validateProviderEvidence = (operation: Extract<RecordOperation, { _tag: "C
   }
   if (valueHasSecret(parsed)) {
     throw new RunRecordError("SECRET_MATERIAL_DETECTED", "Provider evidence contains credential material.", "repair-evidence")
+  }
+  return parsed
+}
+
+const validateProviderEvidenceForRequest = (
+  operation: Extract<RecordOperation, { _tag: "CommitProviderEvidence" }>,
+  runRequest: CanonicalRunRequest,
+): void => {
+  const parsed = validateProviderEvidence(operation)
+  if (runRequest.mode !== "seedance-video") return
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance provider evidence must be one submitted job object.", "repair-evidence")
+  }
+  const provider = parsed as Readonly<Record<string, unknown>>
+  if (
+    typeof provider.job_id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(provider.job_id) ||
+    (provider.status !== "submitted" && provider.status !== "queued")
+  ) {
+    throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance provider evidence must bind one sanitized submitted job.", "repair-evidence")
   }
 }
 
@@ -1776,23 +1855,50 @@ export const recordOperation = (
       return yield* Effect.fail(new RunRecordError("ILLEGAL_TRANSITION", "Provider evidence requires the durable submission marker."))
     }
     yield* Effect.try({
-      try: () => validateProviderEvidence(operation),
+      try: () => validateProviderEvidenceForRequest(operation, runRequest),
       catch: (error) => error instanceof RunRecordError
         ? error
         : new RunRecordError("EVIDENCE_HASH_MISMATCH", "Provider evidence validation failed.", "repair-evidence"),
     })
     const applicationPath = "provider-response.json"
-    yield* store.writeEvidence(operation.runId, applicationPath, operation.evidence.body)
     const clock = yield* RunRecordClock
     const timestamp = yield* clock.now()
-    const event = makeEvent({
+    const intentOperationId = `provider-intent-${sha256(operation.operationId).slice(0, 24)}`
+    const existingIntent = events.find((event) => event.operationId === intentOperationId)
+    if (existingIntent !== undefined && (
+      existingIntent.kind !== "provider_evidence_intent" ||
+      existingIntent.eventSha256 !== events.at(-1)?.eventSha256 ||
+      stringPayload(existingIntent.payload, "completionOperationId") !== operation.operationId ||
+      stringPayload(existingIntent.payload, "sha256") !== operation.evidence.sha256 ||
+      numberPayload(existingIntent.payload, "byteLength") !== operation.evidence.body.byteLength ||
+      stringPayload(existingIntent.payload, "mediaType") !== operation.evidence.mediaType
+    )) {
+      return yield* Effect.fail(new RunRecordError("IDEMPOTENCY_CONFLICT", "Provider evidence contradicts its durable write intent."))
+    }
+    const intent = existingIntent ?? makeEvent({
       schemaVersion: "1",
       sequence: events.length + 1,
+      operationId: intentOperationId,
+      runId: operation.runId,
+      timestamp,
+      kind: "provider_evidence_intent",
+      previousEventSha256: current.chainHeadSha256,
+      payload: {
+        completionOperationId: operation.operationId,
+        sha256: operation.evidence.sha256,
+        byteLength: operation.evidence.body.byteLength,
+        mediaType: operation.evidence.mediaType,
+      },
+    })
+    const eventsWithIntent = existingIntent === undefined ? [...events, intent] : events
+    const receipt = makeEvent({
+      schemaVersion: "1",
+      sequence: eventsWithIntent.length + 1,
       operationId: operation.operationId,
       runId: operation.runId,
       timestamp,
       kind: "provider_evidence_received",
-      previousEventSha256: current.chainHeadSha256,
+      previousEventSha256: intent.eventSha256,
       payload: {
         applicationPath,
         sha256: operation.evidence.sha256,
@@ -1800,11 +1906,21 @@ export const recordOperation = (
         mediaType: operation.evidence.mediaType,
       },
     })
-    yield* store.appendEvent(operation.runId, current.chainHeadSha256, encodeEvent(event))
-    const next = replay(operation.runId, stored.request, [...events, event], {
+    const evidenceWithProvider = {
       ...stored.evidence,
       [applicationPath]: operation.evidence.body,
+    }
+    const next = yield* Effect.try({
+      try: () => replay(operation.runId, stored.request, [...eventsWithIntent, receipt], evidenceWithProvider),
+      catch: (error) => error instanceof RunRecordError
+        ? error
+        : new RunRecordError("EVIDENCE_HASH_MISMATCH", "Provider evidence trial replay failed.", "repair-evidence"),
     })
+    if (existingIntent === undefined) {
+      yield* store.appendEvent(operation.runId, current.chainHeadSha256, encodeEvent(intent))
+    }
+    yield* store.writeEvidence(operation.runId, applicationPath, operation.evidence.body)
+    yield* store.appendEvent(operation.runId, intent.eventSha256, encodeEvent(receipt))
     yield* store.writeState(operation.runId, encodeView(next))
     return { _tag: "Recorded" as const, view: next }
   }

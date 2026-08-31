@@ -551,8 +551,21 @@ test("advances one Seedance Run by submitting once and polling the same job to v
     runId: reservation.runId,
     operationId: "stranded-seedance-submission",
   }).pipe(Effect.provide(stranded.layer), Effect.provideService(RunRecordClock, clock)))
+  await Effect.runPromise(record({
+    _tag: "CommitProviderEvidence",
+    runId: reservation.runId,
+    operationId: "stranded-seedance-provider-evidence",
+    evidence: {
+      mediaType: "application/json",
+      body: submissionBody,
+      sha256: hash(submissionBody),
+    },
+  }).pipe(Effect.provide(stranded.layer), Effect.provideService(RunRecordClock, clock)))
   await Effect.runPromise(stranded.mutate(reservation.runId, (stored) => {
-    stored.evidence["provider-response.json"] = submissionBody
+    const frames = Buffer.from(stored.events).toString("utf8").trimEnd().split("\n")
+    assert.equal(frames.length, 4)
+    stored.events = Buffer.from(`${frames.slice(0, -1).join("\n")}\n`)
+    delete stored.state
   }))
   const submitsBeforeRecovery = submitCalls
   let recoveryPollCalls = 0
@@ -576,12 +589,23 @@ test("advances one Seedance Run by submitting once and polling the same job to v
       }
     }),
   }
-  const recoveredSubmission = await Effect.runPromise(advance({ run: plannedDecision.run }).pipe(
+  const executeRecovery = () => Effect.runPromise(advance({ run: plannedDecision.run }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
     Effect.provideService(GenerationAdapter, recoveryAdapter),
     Effect.provide(stranded.layer),
     Effect.provideService(RunRecordClock, clock),
   ))
+  const substitutedBody = Buffer.from('{"job_id":"different-provider-job","status":"submitted"}')
+  await Effect.runPromise(stranded.mutate(reservation.runId, (stored) => {
+    stored.evidence["provider-response.json"] = substitutedBody
+  }))
+  await assert.rejects(executeRecovery(), (error: unknown) =>
+    typeof error === "object" && error !== null && "code" in error && error.code === "RUN_RECORD_FAILURE")
+  assert.equal(recoveryPollCalls, 0)
+  await Effect.runPromise(stranded.mutate(reservation.runId, (stored) => {
+    stored.evidence["provider-response.json"] = submissionBody
+  }))
+  const recoveredSubmission = await executeRecovery()
   assert.equal(recoveredSubmission._tag, "ProviderPending")
   assert.equal(submitCalls, submitsBeforeRecovery)
   assert.equal(recoveryPollCalls, 1)

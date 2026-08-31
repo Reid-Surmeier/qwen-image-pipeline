@@ -25,4 +25,8 @@ export const EMBEDDED_PROVIDER_SECRET_CASES = [
     }),
     status: "accepted",
   })],
+  ["malformed-unicode-secret", JSON.stringify({
+    debug: '{"\\u0061pi_key":"actual-private-value"',
+    status: "accepted",
+  })],
 ] as const

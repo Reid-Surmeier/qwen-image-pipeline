@@ -108,7 +108,7 @@ const hasSecretMaterial = (value: unknown, parentKey = "", embeddedDepth = 0): b
         if (hasDuplicateJsonKeys(value)) return true
         if (hasSecretMaterial(JSON.parse(value), parentKey, embeddedDepth + 1)) return true
       } catch {
-        return false
+        return true
       }
     }
     return false

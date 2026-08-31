@@ -75,6 +75,61 @@ FORBIDDEN_BASELINE_COMMANDS = (
     "gh api",
 )
 
+CANONICAL_VERIFY_WORKFLOW = '''name: Verify
+
+on:
+  workflow_call:
+  pull_request:
+  push:
+    branches:
+      - main
+      - "build/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Python and Node checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out the candidate commit
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install the FFmpeg 6 prerequisite
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends ffmpeg
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the local Python package
+        run: python -m pip install --disable-pip-version-check -e .
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install the pinned Node dependencies without scripts
+        run: npm ci --ignore-scripts
+
+      - name: Run the canonical repository baseline
+        run: /usr/bin/env -i /bin/bash --noprofile --norc scripts/verify.sh
+'''
+
 
 def validate_repository(root: Path) -> list[str]:
     problems: list[str] = []
@@ -106,6 +161,8 @@ def validate_repository(root: Path) -> list[str]:
     else:
         workflow_text = workflow.read_text(encoding="utf-8")
         workflow_lines = workflow_text.splitlines()
+        if workflow_text != CANONICAL_VERIFY_WORKFLOW:
+            problems.append("Verify workflow differs from the canonical duplicate-free structure")
         try:
             verify_start = workflow_lines.index("  verify:")
         except ValueError:

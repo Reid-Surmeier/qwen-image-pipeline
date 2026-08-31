@@ -113,6 +113,44 @@ class SuccessorGovernanceTests(unittest.TestCase):
         self.assertIn("Verify workflow does not run on build branches", problems)
         self.assertIn("Verify workflow does not call the canonical baseline", problems)
 
+    def test_duplicate_active_runner_or_job_is_rejected(self) -> None:
+        for suffix, mutation in (
+            (
+                "runner",
+                lambda text: text.replace(
+                    "    runs-on: ubuntu-24.04",
+                    "    runs-on: ubuntu-24.04\n    runs-on: ubuntu-latest",
+                ),
+            ),
+            (
+                "job",
+                lambda text: text + "\n  verify:\n    runs-on: ubuntu-latest\n    steps:\n      - run: true\n",
+            ),
+        ):
+            with self.subTest(suffix=suffix), tempfile.TemporaryDirectory() as directory:
+                candidate = Path(directory) / "repository"
+                for relative in (
+                    "AGENTS.md",
+                    "README.md",
+                    ".github/pull_request_template.md",
+                    ".github/workflows/verify.yml",
+                    ".sandcastle/sweep.json",
+                    "docs/agents/issue-tracker.md",
+                    "docs/agents/repository-workflow.md",
+                    "docs/agents/triage-labels.md",
+                    "scripts/verify.sh",
+                ):
+                    source = REPO_ROOT / relative
+                    destination = candidate / relative
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    destination.write_bytes(source.read_bytes())
+                workflow = candidate / ".github/workflows/verify.yml"
+                workflow.write_text(mutation(workflow.read_text(encoding="utf-8")), encoding="utf-8")
+
+                problems = validate_repository(candidate)
+
+            self.assertTrue(problems, f"duplicate active {suffix} was accepted")
+
 
 if __name__ == "__main__":
     unittest.main()
