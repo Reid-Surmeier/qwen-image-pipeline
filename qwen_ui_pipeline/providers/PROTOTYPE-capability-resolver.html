@@ -1,0 +1,472 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>PROTOTYPE — Model Capability Resolver</title>
+<style>
+  :root{
+    --ink:#16181d; --muted:#6a7180; --line:#e2e5ea; --bg:#f7f8fa; --panel:#fff;
+    --accent:#3b5bdb; --ok:#1a7f4b; --warn:#a8620a; --bad:#b3261e;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.55 ui-sans-serif,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  .wrap{max-width:1080px;margin:0 auto;padding:40px 24px 80px}
+  h1{font-size:26px;margin:0 0 6px;letter-spacing:-.02em}
+  h2{font-size:13px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);
+     margin:34px 0 12px;font-weight:600}
+  .tag{display:inline-block;background:#ffe8a3;color:#6b4c00;font-size:11px;font-weight:700;
+       letter-spacing:.08em;padding:3px 8px;border-radius:4px;vertical-align:6px;margin-left:8px}
+  .lede{color:var(--muted);max-width:70ch;margin:0 0 4px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:20px}
+  .row{display:flex;gap:20px;flex-wrap:wrap}
+  .row>*{flex:1 1 320px}
+  button{font:inherit;background:var(--panel);border:1px solid #cdd2da;border-radius:7px;
+         padding:8px 13px;cursor:pointer;color:var(--ink);text-align:left}
+  button:hover{border-color:var(--accent);color:var(--accent)}
+  button.on{background:var(--accent);border-color:var(--accent);color:#fff}
+  button.step{display:block;width:100%;margin:6px 0}
+  button.done{opacity:.45}
+  button.next{border-color:var(--accent);box-shadow:0 0 0 3px rgba(59,91,219,.13)}
+  .btns{display:flex;gap:8px;flex-wrap:wrap}
+  .kv{display:grid;grid-template-columns:170px 1fr;gap:6px 14px;font-size:14px}
+  .kv dt{color:var(--muted)}
+  .kv dd{margin:0;font-variant-numeric:tabular-nums}
+  code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  pre{background:#12141a;color:#e6e9ef;padding:14px 16px;border-radius:8px;overflow-x:auto;
+      font-size:12.5px;line-height:1.5;margin:0}
+  table{border-collapse:collapse;width:100%;font-size:13.5px}
+  th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:11.5px;text-transform:uppercase;letter-spacing:.06em}
+  .pill{display:inline-block;font-size:11px;font-weight:700;padding:2px 7px;border-radius:20px;
+        letter-spacing:.03em;white-space:nowrap}
+  .p-ok{background:#e3f5ea;color:var(--ok)} .p-warn{background:#fdf0dc;color:var(--warn)}
+  .p-drop{background:#fde8e6;color:var(--bad)} .p-info{background:#e8ecfb;color:var(--accent)}
+  .banner{border-radius:9px;padding:14px 16px;margin-bottom:16px;font-size:14px}
+  .b-bad{background:#fde8e6;border:1px solid #f3bdb7;color:#7a1a13}
+  .b-ok{background:#e9f6ee;border:1px solid #b9e0c8;color:#145c37}
+  .tabs{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+  .changed{background:#fff6d8;border-radius:3px;padding:0 3px}
+  .note{color:var(--muted);font-size:13px;margin:8px 0 0}
+  label{display:block;font-size:12px;color:var(--muted);margin:10px 0 3px}
+  input,select{font:inherit;padding:6px 9px;border:1px solid #cdd2da;border-radius:6px;width:100%}
+  .foot{color:var(--muted);font-size:12.5px;margin-top:40px;border-top:1px solid var(--line);padding-top:16px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>Model Capability Resolver <span class="tag">PROTOTYPE</span></h1>
+<p class="lede">
+  <strong>The question this answers:</strong> the pipeline currently builds one OpenRouter request
+  shape and assumes every image model reads it the same way. It doesn't.
+  <code>meta/muse-image</code> accepts <code>resolution</code>, <code>seed</code> and
+  <code>aspect_ratio</code> without complaint and then <em>ignores or mangles</em> all three,
+  so a caller asking for a reproducible 16:9 image quietly gets a non-reproducible 3:2 one.
+  <code>qwen/qwen-image-3-pro</code> honours all of them but is refused outright by Alibaba
+  moderation on maps with national borders.
+  So: <strong>should the pipeline keep one request builder and hope, or should each model
+  declare what it honours and the resolver report every downgrade out loud?</strong>
+  Press the buttons and see whether being told "your seed was dropped, this run cannot be
+  replayed" feels like the right contract.
+</p>
+<p class="note">All capability data below was measured against the live API on 2026-08-31, not
+  read from documentation — <code>meta/muse-image</code>'s endpoint listing is empty.</p>
+
+<h2>1 · The brief you're asking for</h2>
+<div class="card">
+  <div class="row">
+    <div>
+      <label>What are you making? (content class)</label>
+      <select id="content">
+        <option value="generic">generic artwork</option>
+        <option value="political-map">a world map with national borders</option>
+        <option value="ui-screenshot">a UI screenshot edit</option>
+      </select>
+      <label>Framing you want</label>
+      <select id="framing">
+        <option value="2:1">2:1 — the world map</option>
+        <option value="16:9">16:9 — widescreen</option>
+        <option value="1:1">1:1 — square</option>
+        <option value="4:3">4:3</option>
+        <option value="9:16">9:16 — portrait</option>
+      </select>
+    </div>
+    <div>
+      <label>How many images?</label>
+      <input id="count" type="number" min="1" max="6" value="1">
+      <label>Seed (blank = don't care)</label>
+      <input id="seed" type="number" placeholder="e.g. 12345">
+      <label>Reference images attached</label>
+      <input id="refs" type="number" min="0" max="8" value="1">
+    </div>
+  </div>
+  <div class="btns" style="margin-top:16px">
+    <button id="m-muse" class="on" data-model="meta/muse-image">Send to Meta Muse Image</button>
+    <button id="m-qwen" data-model="qwen/qwen-image-3-pro">Send to Qwen Image 3 Pro</button>
+  </div>
+</div>
+
+<h2>2 · What the pipeline would actually send</h2>
+<div id="out"></div>
+
+<h2>3 · Guided walkthroughs</h2>
+<div class="tabs" id="tabs"></div>
+<div class="card" id="scenario"></div>
+
+<p class="foot">
+  Throwaway. The page is disposable; the <code>CAPABILITIES</code> table and
+  <code>resolve()</code> below it are the part meant to lift into
+  <code>qwen_ui_pipeline/providers/</code>. Evidence:
+  <code>qwen-pipeline-experiments/benchmarks/world-map/BENCHMARK.md</code>.
+</p>
+</div>
+
+<script>
+/* ============================================================================
+   PORTABLE MODULE — pure, no DOM. This is the bit worth keeping.
+
+   A Model Capability descriptor says, per field, what the model really does
+   with it. Three outcomes matter and the current code conflates all three:
+
+     honored   the model uses the value you sent
+     coerced   the model uses it, but not as asked (report the real effect)
+     ignored   the model discards it silently (so the pipeline must NOT send it,
+               and must tell the caller what they lost)
+
+   Framing needs its own idea. Qwen takes a *pixel contract*: ask for 2K 2:1 and
+   you get those pixels. Muse takes a *ratio contract*: it holds your ratio
+   exactly but picks its own dimensions near ~2.4 megapixels. Callers that need
+   exact pixels must resample afterwards, so the resolver says so up front.
+   ========================================================================= */
+
+const RATIOS = {"1:1":[1,1],"2:1":[2,1],"16:9":[16,9],"4:3":[4,3],"9:16":[9,16]};
+
+const CAPABILITIES = {
+  "meta/muse-image": {
+    label: "Meta Muse Image",
+    framing: "ratio",              // holds the ratio, chooses its own pixels
+    framingField: "size",
+    targetPixels: 2.45e6,
+    fields: {
+      prompt:           "honored",
+      n:                "honored",
+      input_references: "honored",
+      size:             "honored",
+      aspect_ratio:     "coerced", // collapses to 3 buckets — never send it
+      resolution:       "ignored",
+      seed:             "ignored",
+      width:            "ignored",
+      height:           "ignored",
+    },
+    reproducible: false,
+    maxReferences: null,           // not probed — unknown, don't pretend
+    moderation: "Meta",
+    refuses: [],
+    slowestObserved: 42,
+  },
+  "qwen/qwen-image-3-pro": {
+    label: "Qwen Image 3 Pro",
+    framing: "pixels",
+    framingField: "aspect_ratio",
+    resolutions: ["1K","2K"],
+    ratios: ["1:1","1:2","1:4","2:1","2:3","3:2","3:4","4:1","4:3","4:5","5:4","9:16","16:9"],
+    fields: {
+      prompt:           "honored",
+      n:                "honored",
+      input_references: "honored",
+      aspect_ratio:     "honored",
+      resolution:       "honored",
+      seed:             "honored",
+      size:             "unsupported",
+    },
+    reproducible: true,
+    maxReferences: 4,
+    moderation: "Alibaba",
+    refuses: ["political-map"],
+    slowestObserved: 253,
+  },
+};
+
+const REFUSAL_TEXT = {
+  "political-map":
+    "Alibaba moderation rejects maps drawn with national borders. Measured: HTTP 400 " +
+    "after 253 s, before any generation happened. No prompt wording gets past it.",
+};
+
+/**
+ * Pick a `size` for a ratio-contract model.
+ *
+ * The ratio must survive exactly, so both sides are integer multiples of the
+ * ratio AND of 32 — snapping each side independently would quietly turn 2:1
+ * into 1.97:1, which is the very bug this table exists to prevent. Among the
+ * legal pairs, take the one nearest the model's observed working magnitude.
+ *
+ * This predicts the ratio, not the pixels. Muse returns dimensions of its own
+ * choosing at the ratio you asked for (measured: 2048x1152 for 16:9,
+ * 2240x1120 for 2:1), so callers must read the real size off the response.
+ */
+function sizeForRatio(ratio, targetPixels){
+  const [rw, rh] = RATIOS[ratio];
+  let best = null;
+  for (let m = 32; m <= 4096; m += 32) {
+    const w = rw * m, h = rh * m;
+    if (w % 32 || h % 32) continue;
+    const off = Math.abs(w * h - targetPixels);
+    if (!best || off < best.off) best = {w, h, off};
+  }
+  return [best.w, best.h];
+}
+
+/**
+ * brief  -> { blocked, request, fields[], reproducible, notes[] }
+ * Never returns a request containing a field the model ignores.
+ */
+function resolve(brief, modelId){
+  const cap = CAPABILITIES[modelId];
+  const fields = [];
+  const notes = [];
+  const say = (name, intent, sent, status, note) =>
+    fields.push({name, intent, sent, status, note});
+
+  // --- refusal gate: cheapest possible check, before anything is built ------
+  if (cap.refuses.includes(brief.contentClass)) {
+    return {
+      model: modelId, label: cap.label, blocked: REFUSAL_TEXT[brief.contentClass],
+      alternatives: Object.keys(CAPABILITIES)
+        .filter(id => id !== modelId && !CAPABILITIES[id].refuses.includes(brief.contentClass))
+        .map(id => CAPABILITIES[id].label),
+      request: null, fields: [], reproducible: false, notes: [],
+    };
+  }
+
+  const req = { model: modelId, prompt: "<compiled Edit Brief>" };
+  say("prompt", "the compiled brief", "sent", "honored");
+
+  // --- framing --------------------------------------------------------------
+  if (cap.framing === "pixels") {
+    const ratio = cap.ratios.includes(brief.ratio) ? brief.ratio : null;
+    if (ratio) {
+      req.aspect_ratio = ratio;
+      req.resolution = "2K";
+      say("framing", brief.ratio, `aspect_ratio="${ratio}", resolution="2K"`, "honored",
+          "exact pixels, guaranteed");
+    } else {
+      say("framing", brief.ratio, "—", "dropped",
+          `${brief.ratio} is not in this model's ratio enum`);
+    }
+  } else {
+    const [w,h] = sizeForRatio(brief.ratio, cap.targetPixels);
+    req.size = `${w}x${h}`;
+    say("framing", brief.ratio, `size="${w}x${h}"`, "honored",
+        "ratio held exactly; the model returns pixels of its own choosing");
+    say("aspect_ratio", brief.ratio, "deliberately NOT sent", "ignored",
+        `this model collapses aspect_ratio to 3 buckets — "${brief.ratio}" would come ` +
+        `back as ${["1:1"].includes(brief.ratio) ? "1600x1600" :
+          RATIOS[brief.ratio][0] >= RATIOS[brief.ratio][1] ? "1920x1280 (3:2)" : "1280x1920 (2:3)"}`);
+    say("resolution", "2K", "deliberately NOT sent", "ignored",
+        "measured: 1K and 2K both returned identical dimensions");
+    notes.push("Output pixels are the model's choice. Verify them from the response " +
+               "and resample if the caller needs exact dimensions.");
+  }
+
+  // --- count ----------------------------------------------------------------
+  req.n = brief.count;
+  say("n", String(brief.count), String(brief.count), "honored",
+      brief.count > 1 ? "cost scales linearly with n" : "");
+
+  // --- seed / reproducibility ----------------------------------------------
+  if (brief.seed != null) {
+    if (cap.fields.seed === "honored") {
+      req.seed = brief.seed;
+      say("seed", String(brief.seed), String(brief.seed), "honored", "this run can be replayed");
+    } else {
+      say("seed", String(brief.seed), "deliberately NOT sent", "ignored",
+          "measured: the same seed twice produced different images. Sending it would " +
+          "record a reproducibility promise the provider does not keep.");
+      notes.push("This run cannot be replayed. Record the output, not the recipe.");
+    }
+  }
+
+  // --- references -----------------------------------------------------------
+  if (brief.references > 0) {
+    if (cap.maxReferences != null && brief.references > cap.maxReferences) {
+      say("input_references", `${brief.references} images`,
+          `first ${cap.maxReferences} only`, "coerced",
+          `this model accepts at most ${cap.maxReferences}`);
+      req.input_references = cap.maxReferences;
+    } else {
+      req.input_references = brief.references;
+      say("input_references", `${brief.references} images`, `${brief.references} images`,
+          "honored", cap.maxReferences == null ? "upper limit not yet probed" : "");
+    }
+  }
+
+  return {
+    model: modelId, label: cap.label, blocked: null, request: req, fields,
+    reproducible: cap.reproducible && brief.seed != null,
+    notes,
+    timeoutAdvice: Math.max(600, cap.slowestObserved * 4),
+  };
+}
+
+/* ======================= end portable module ============================= */
+
+// ---- throwaway page shell ------------------------------------------------
+let model = "meta/muse-image";
+let lastFields = null;
+
+const $ = id => document.getElementById(id);
+
+function readBrief(){
+  const s = $("seed").value.trim();
+  return {
+    contentClass: $("content").value,
+    ratio: $("framing").value,
+    count: Math.max(1, +$("count").value || 1),
+    seed: s === "" ? null : +s,
+    references: Math.max(0, +$("refs").value || 0),
+  };
+}
+
+const PILL = {honored:"p-ok", coerced:"p-warn", ignored:"p-drop", dropped:"p-drop"};
+const VERB = {honored:"honored", coerced:"changed", ignored:"withheld", dropped:"unavailable"};
+
+function render(){
+  const r = resolve(readBrief(), model);
+  const out = $("out");
+
+  if (r.blocked){
+    out.innerHTML = `<div class="card">
+      <div class="banner b-bad"><strong>${r.label} will refuse this.</strong><br>${r.blocked}</div>
+      <p class="note">Nothing is sent. Try instead: <strong>${r.alternatives.join(", ") || "no other model in the table"}</strong>.</p>
+    </div>`;
+    lastFields = null;
+    return;
+  }
+
+  const rows = r.fields.map(f => {
+    const changed = lastFields && !lastFields.some(p =>
+      p.name===f.name && p.sent===f.sent && p.status===f.status);
+    return `<tr>
+      <td><code${changed?' class="changed"':''}>${f.name}</code></td>
+      <td>${f.intent}</td>
+      <td>${f.sent}</td>
+      <td><span class="pill ${PILL[f.status]}">${VERB[f.status]}</span></td>
+      <td style="color:var(--muted)">${f.note||""}</td></tr>`;
+  }).join("");
+
+  out.innerHTML = `<div class="card">
+    <div class="banner ${r.reproducible?"b-ok":"b-bad"}" style="${r.reproducible?"":"background:#fdf0dc;border-color:#f0d3a8;color:#6b4308"}">
+      <strong>${r.label}</strong> —
+      ${r.reproducible ? "this run can be replayed exactly."
+        : "this run <strong>cannot</strong> be replayed; keep the image, not the recipe."}
+    </div>
+    <table><thead><tr><th>Field</th><th>You asked for</th><th>Actually sent</th><th></th><th>Why</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+    ${r.notes.length?`<p class="note">${r.notes.map(n=>"• "+n).join("<br>")}</p>`:""}
+    <p class="note">Recommended client timeout: <strong>${r.timeoutAdvice}s</strong>
+       (slowest observed call to this model × 4).</p>
+    <h2 style="margin-top:22px">Request body</h2>
+    <pre>${JSON.stringify(r.request, null, 2)}</pre>
+  </div>`;
+  lastFields = r.fields;
+}
+
+document.querySelectorAll("[data-model]").forEach(b => b.onclick = () => {
+  model = b.dataset.model;
+  document.querySelectorAll("[data-model]").forEach(x=>x.classList.toggle("on", x===b));
+  render();
+});
+["content","framing","count","seed","refs"].forEach(id => $(id).oninput = render);
+
+// ---- guided walkthroughs -------------------------------------------------
+const SCENARIOS = [
+  {
+    name: "The silent 16:9 lie",
+    blurb: "The most dangerous case, because nothing errors. You ask Muse for a widescreen " +
+           "image the way you'd ask Qwen. Watch the resolver refuse to send aspect_ratio at " +
+           "all, and say what you would have got if it had.",
+    steps: [
+      ["Ask for a generic 16:9 image", b=>{b.content="generic";b.framing="16:9";b.seed="";b.refs="0";}],
+      ["Send it to Qwen (the honest one)", null, "qwen/qwen-image-3-pro"],
+      ["Now send the same brief to Muse", null, "meta/muse-image"],
+    ],
+  },
+  {
+    name: "A seed that isn't a seed",
+    blurb: "You set a seed because you want to reproduce this render later. Qwen keeps that " +
+           "promise; Muse does not. The question is whether being told so loudly, and having " +
+           "the field withheld rather than sent, is the behaviour you want.",
+    steps: [
+      ["Pin seed 12345 on a square image", b=>{b.content="generic";b.framing="1:1";b.seed="12345";b.refs="0";}],
+      ["Send to Qwen", null, "qwen/qwen-image-3-pro"],
+      ["Send the identical brief to Muse", null, "meta/muse-image"],
+    ],
+  },
+  {
+    name: "The world map (the real one)",
+    blurb: "The actual benchmark. A 2:1 map with national borders and one reference image. " +
+           "Qwen should be stopped before a single byte is spent — it took 253 seconds to " +
+           "return a refusal in the real test.",
+    steps: [
+      ["Set up the world-map brief", b=>{b.content="political-map";b.framing="2:1";b.seed="";b.refs="1";}],
+      ["Try Qwen Image 3 Pro", null, "qwen/qwen-image-3-pro"],
+      ["Route it to Muse instead", null, "meta/muse-image"],
+    ],
+  },
+  {
+    name: "Too many references",
+    blurb: "Six reference images. Qwen's ceiling of four is documented and enforced; Muse's " +
+           "ceiling was never probed. Watch the resolver admit it doesn't know rather than " +
+           "inventing a limit.",
+    steps: [
+      ["Attach six references", b=>{b.content="ui-screenshot";b.framing="4:3";b.seed="";b.refs="6";}],
+      ["Send to Qwen", null, "qwen/qwen-image-3-pro"],
+      ["Send to Muse", null, "meta/muse-image"],
+    ],
+  },
+];
+
+let active = 0, stepAt = 0;
+
+function drawTabs(){
+  $("tabs").innerHTML = SCENARIOS.map((s,i)=>
+    `<button class="${i===active?"on":""}" data-tab="${i}">${i+1}. ${s.name}</button>`).join("");
+  document.querySelectorAll("[data-tab]").forEach(b=>b.onclick=()=>{
+    active=+b.dataset.tab; stepAt=0; reset(); drawTabs(); drawScenario();
+  });
+}
+function reset(){
+  $("content").value="generic"; $("framing").value="2:1"; $("count").value="1";
+  $("seed").value=""; $("refs").value="1";
+  model="meta/muse-image";
+  document.querySelectorAll("[data-model]").forEach(x=>x.classList.toggle("on", x.dataset.model===model));
+  lastFields=null; render();
+}
+function drawScenario(){
+  const s = SCENARIOS[active];
+  $("scenario").innerHTML = `<p style="margin-top:0">${s.blurb}</p>` +
+    s.steps.map((st,i)=>`<button class="step ${i<stepAt?"done":""} ${i===stepAt?"next":""}"
+      data-step="${i}">${i+1}. ${st[0]}</button>`).join("") +
+    `<div class="btns" style="margin-top:12px"><button id="restart">Start this scenario over</button></div>`;
+  document.querySelectorAll("[data-step]").forEach(b=>b.onclick=()=>{
+    const st = s.steps[+b.dataset.step];
+    if (st[1]) { const b2={}; st[1](b2);
+      if(b2.content!=null)$("content").value=b2.content;
+      if(b2.framing!=null)$("framing").value=b2.framing;
+      if(b2.seed!=null)$("seed").value=b2.seed;
+      if(b2.refs!=null)$("refs").value=b2.refs; }
+    if (st[2]) { model = st[2];
+      document.querySelectorAll("[data-model]").forEach(x=>x.classList.toggle("on", x.dataset.model===model)); }
+    stepAt = Math.max(stepAt, +b.dataset.step + 1);
+    render(); drawScenario();
+  });
+  $("restart").onclick = ()=>{ stepAt=0; reset(); drawScenario(); };
+}
+
+drawTabs(); drawScenario(); render();
+</script>
+</body>
+</html>
