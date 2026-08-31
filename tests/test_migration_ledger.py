@@ -196,6 +196,7 @@ class MigrationLedgerTests(unittest.TestCase):
             comfyui_node._partner_render(brief, [])
 
         with (
+            mock.patch.object(comfyui_node, "_reference_data_urls", return_value=[]),
             mock.patch.object(
                 comfyui_node,
                 "generate_with_provider",
