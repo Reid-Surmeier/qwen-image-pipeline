@@ -25,6 +25,11 @@ const AUDIO_VIDEO_MP4_BYTES = gunzipSync(Buffer.from(
   "base64",
 ))
 
+const ALAC_VIDEO_MP4_BYTES = gunzipSync(Buffer.from(
+  "H4sICNL5lGoCA3RtcC5yekhPbDVYUUdQLm1wNACVVNFrHEUYn02aEI5Q8xAxD5FMY4VQepfdvfRMIgspsZgHtYJaUQrb2Z3Z7HK7O5OZuctdfVCIDz77IKJ/QFFEHwVBKuJDwBfBlwT0QQRpFWoLgn2x5zd7SW+TpjUuNzPf983v++b75vvNIYRwpLsiUTxDaAiZFYZL2qGTiQUHoZGZjPM2QijN2jFFB77hGzBtIwuZ3+CzDqIO6yvokd8w5HFFS9IE+bJuFmcOHxFt+wHP45xrJrtQTzOqFazTLFW65LE98LV2MpoQEHBGD9c+B2MMvfZdoVRjmsr9nXZCWRl5CXS+RnKaMoOxtrIkj0CYbGdF0HKap2l/b5pKFpWSGm/JFPdla1XpIAX5utKKljBfmKY95CpM4TZag3VtH/H4C4Bv2LW6U3NsF6dJ0HEbCyWPqV4P5nOAWrUoqvR+QVPrsH62+9xb1oTpiZmslTuzb1yx0Gj8x6/fz37zz927xnVCECX20jBjMtBy747VXH+gKaWL+99PdwihE0aehLLKdjOmwRYespX3rpbShjhDP8J6sn9GyAf2kYvQsyVwu/kIfg0dwS/L+v+8Pg6/yMP5NQPhRleO4pfirbyMfAV0WuLX+B6/JlR2IOgxuIV+2ONWeohbl0lKwgfKtgwF+qma+AMMmCfmKicLJD6BrL/2UQMiFLbhD48ggmUK/4+mT5aa/sTAdr/ZoI/Nwhq0qDYX/GbGitV8p8qXCQ2QRIi0fKHVpN+xpz/R3AR8kpLCuSgHXk0Er8ZpwKsxfyRjkWTMMCgDFLDn89GRXu/Tny7c/Pq33bUvPzi7g3efuvWneVq4ikMuGXZAlHXHXsR1hzlL0RJsrNUAMP/iyxeery7g85dWAUlZCBurXHRTFmns2na96tpuHYyx1mJ5fn5zc7Nm/mx4SvIal+vz5pRarLMUMFzohOdqGYckIKHnYGi6V8eUBSkPm56zbC/bmOQk7Srm2Z36st1xnDrOmBezDlatAKRnsFBdcIXZl9RzajY4wYSzpMOobyI64OFLkq8zz2ngMJY8Iz64OlhLlqaJAmmxs0hDDUK4kXk2pEDoVZ4zz3XOOg6OiNK+UM1EGEQ/wIbweRQppr2qi3UswcMESjlvkhgUf2BTaRKygcHGuSzOCJOMaJNHkmsmgZmMgj1IW5J0/ZBngmjQQ7gi+C9IcggBQEkMJpIkYwouK/BFF+SEei7IhBJhqgj8ICHmJKAOK+raZMl6rAOQuGC5v84F7PaNAlybrAuxPfecvSf68EI9x8YqZDkLW9pbsHFxurlSyVQM7jL075dr9mXohTLCGTwgZsoCxXPrNRtvmGI8u9YAUZjAxUo6XmMJBKWZ8BZwIqBJQAjoIcQiG9B/0030jqE3e+9d9Gzv3t8vXR/6+NVvzwy//3rl962vKjvXLp7Jfi4e8zjgHhvbf/i9rZnbsFTOf3QqXX373rVbK/8CaRbOYUcIAAA=",
+  "base64",
+))
+
 export const sha256 = (bytes: Uint8Array): string =>
   createHash("sha256").update(bytes).digest("hex")
 
@@ -96,6 +101,43 @@ export const hiddenAudioTrackMp4 = (): Uint8Array => {
   const handler = result.indexOf(Buffer.from("soun", "ascii"))
   if (handler < 0 || result.indexOf(Buffer.from("soun", "ascii"), handler + 4) >= 0) {
     throw new Error("audio-video MP4 fixture layout changed")
+  }
+  result.write("meta", handler, "ascii")
+  return result
+}
+
+export const hiddenSecondSampleDescriptionMp4 = (): Uint8Array => {
+  const source = Buffer.from(hiddenAudioTrackMp4())
+  const firstAudioSampleEntry = 3_911
+  if (
+    source.readUInt32BE(3_907) !== 1 ||
+    source.toString("ascii", firstAudioSampleEntry + 4, firstAudioSampleEntry + 8) !== "mp4a"
+  ) throw new Error("AAC audio-video MP4 sample-description layout changed")
+  const unknownEntry = Buffer.alloc(8)
+  unknownEntry.writeUInt32BE(8, 0)
+  unknownEntry.write("zzzz", 4, "ascii")
+  const result = Buffer.concat([
+    source.subarray(0, firstAudioSampleEntry),
+    unknownEntry,
+    source.subarray(firstAudioSampleEntry),
+  ])
+  for (const boxStart of [2_882, 3_606, 3_742, 3_827, 3_887, 3_895]) {
+    result.writeUInt32BE(result.readUInt32BE(boxStart) + 8, boxStart)
+  }
+  result.writeUInt32BE(2, 3_907)
+  const shiftedAudioStsc = 4_061
+  const chunkMapCount = result.readUInt32BE(shiftedAudioStsc + 12)
+  for (let index = 0; index < chunkMapCount; index += 1) {
+    result.writeUInt32BE(2, shiftedAudioStsc + 24 + index * 12)
+  }
+  return result
+}
+
+export const hiddenUnrecognizedAudioTrackMp4 = (): Uint8Array => {
+  const result = Buffer.from(ALAC_VIDEO_MP4_BYTES)
+  const handler = result.indexOf(Buffer.from("soun", "ascii"))
+  if (handler < 0 || result.indexOf(Buffer.from("soun", "ascii"), handler + 4) >= 0) {
+    throw new Error("ALAC audio-video MP4 fixture layout changed")
   }
   result.write("meta", handler, "ascii")
   return result

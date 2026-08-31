@@ -518,12 +518,15 @@ export const submitSeedanceGeneration = (
       ))
     }
     return {
-      provider: "openrouter",
+      provider: "openrouter" as const,
       model: validatedPrepared.request.model,
       jobId: result.jobId,
       providerEvidence,
     }
-  })
+  }).pipe(Effect.catchDefect(() => Effect.fail(new GenerationError(
+    "ADAPTER_RESULT_INVALID",
+    "The Seedance submission result could not be inspected safely.",
+  ))))
 
 export const pollSeedanceGeneration = (
   prepared: PreparedGeneration,
@@ -578,8 +581,8 @@ export const pollSeedanceGeneration = (
     }
     if (result.status === "pending") {
       return {
-        status: "pending",
-        provider: "openrouter",
+        status: "pending" as const,
+        provider: "openrouter" as const,
         model: validatedPrepared.request.model,
         jobId,
         providerEvidence,
@@ -634,15 +637,18 @@ export const pollSeedanceGeneration = (
       ))
     }
     return {
-      status: "completed",
-      provider: "openrouter",
+      status: "completed" as const,
+      provider: "openrouter" as const,
       model: validatedPrepared.request.model,
       jobId,
       providerEvidence,
       outputs,
       completedCount: result.completedCount,
       cost: cost.state === "actual"
-        ? { state: "actual", actualCostUsd: cost.actualCostUsd as string }
-        : { state: cost.state },
+        ? { state: "actual" as const, actualCostUsd: cost.actualCostUsd as string }
+        : { state: cost.state as "estimated-only" | "unknown" },
     }
-  })
+  }).pipe(Effect.catchDefect(() => Effect.fail(new GenerationError(
+    "ADAPTER_RESULT_INVALID",
+    "The Seedance poll result could not be inspected safely.",
+  ))))

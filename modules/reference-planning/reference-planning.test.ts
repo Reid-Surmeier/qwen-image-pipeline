@@ -13,6 +13,8 @@ import {
 import {
   forgedNonDecodableMp4,
   hiddenAudioTrackMp4,
+  hiddenSecondSampleDescriptionMp4,
+  hiddenUnrecognizedAudioTrackMp4,
   malformedAudioTrack,
   makeFixture,
   sha256,
@@ -95,6 +97,26 @@ test("refuses an AAC track whose handler was relabeled to hide its audio", async
   const forged = hiddenAudioTrackMp4()
   const result = await Effect.runPromiseExit(byteMediaInspector.inspect({
     applicationPath: "references/hidden-audio.mp4",
+    bytes: forged,
+    sha256: sha256(forged),
+  }))
+  assert.equal(result._tag, "Failure")
+})
+
+test("refuses a decodable unrecognized audio codec relabeled under a non-audio handler", async () => {
+  const forged = hiddenUnrecognizedAudioTrackMp4()
+  const result = await Effect.runPromiseExit(byteMediaInspector.inspect({
+    applicationPath: "references/hidden-unrecognized-audio.mp4",
+    bytes: forged,
+    sha256: sha256(forged),
+  }))
+  assert.equal(result._tag, "Failure")
+})
+
+test("refuses hidden audio selected from a later sample description", async () => {
+  const forged = hiddenSecondSampleDescriptionMp4()
+  const result = await Effect.runPromiseExit(byteMediaInspector.inspect({
+    applicationPath: "references/hidden-second-description.mp4",
     bytes: forged,
     sha256: sha256(forged),
   }))

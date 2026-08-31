@@ -7,6 +7,8 @@ import { Effect } from "effect"
 import {
   forgedNonDecodableMp4,
   hiddenAudioTrackMp4,
+  hiddenSecondSampleDescriptionMp4,
+  hiddenUnrecognizedAudioTrackMp4,
   malformedAudioTrack,
   makeFixture,
   zeroVideoTimingSampleCount,
@@ -215,6 +217,40 @@ test("rejects an AAC track whose handler was relabeled to hide its audio", async
   const failure = await Effect.runPromise(Effect.flip(verifyVideo({
     outputs: [{
       applicationPath: "outputs/hidden-audio.mp4",
+      mediaType: "video/mp4",
+      body,
+      sha256: hash(body),
+    }],
+    expected: { width: 64, height: 48, durationSeconds: 0.2, audioExpected: false },
+    requestedCount: 1,
+    completedCount: 1,
+    cost: { state: "unknown", estimatedMaximumCostUsd: "0.20" },
+  })))
+  assert.equal(failure.code, "VIDEO_MEDIA_INVALID")
+})
+
+test("rejects a decodable unrecognized audio codec relabeled under a non-audio handler", async () => {
+  const body = hiddenUnrecognizedAudioTrackMp4()
+  const failure = await Effect.runPromise(Effect.flip(verifyVideo({
+    outputs: [{
+      applicationPath: "outputs/hidden-unrecognized-audio.mp4",
+      mediaType: "video/mp4",
+      body,
+      sha256: hash(body),
+    }],
+    expected: { width: 64, height: 48, durationSeconds: 0.2, audioExpected: false },
+    requestedCount: 1,
+    completedCount: 1,
+    cost: { state: "unknown", estimatedMaximumCostUsd: "0.20" },
+  })))
+  assert.equal(failure.code, "VIDEO_MEDIA_INVALID")
+})
+
+test("rejects hidden audio selected from a later sample description", async () => {
+  const body = hiddenSecondSampleDescriptionMp4()
+  const failure = await Effect.runPromise(Effect.flip(verifyVideo({
+    outputs: [{
+      applicationPath: "outputs/hidden-second-description.mp4",
       mediaType: "video/mp4",
       body,
       sha256: hash(body),

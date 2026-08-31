@@ -500,14 +500,20 @@ test("advances one Seedance Run by submitting once and polling the same job to v
   assert.equal(submitCalls, 1)
   assert.equal(pollCalls, 0)
 
-  const pending = await executeAdvance()
-  assert.equal(pending._tag, "ProviderPending")
-  if (pending._tag !== "ProviderPending") return
-  assert.equal(pending.runId, submitted.runId)
-  assert.equal(pending.jobId, submitted.jobId)
-  assert.equal(pending.pollCount, 1)
+  await Effect.runPromise(memory.failNext("append-event"))
+  await assert.rejects(executeAdvance(), (error: unknown) =>
+    typeof error === "object" && error !== null && "code" in error && error.code === "RUN_RECORD_FAILURE")
   assert.equal(submitCalls, 1)
   assert.equal(pollCalls, 1)
+
+  const recoveredPending = await executeAdvance()
+  assert.equal(recoveredPending._tag, "ProviderPending")
+  if (recoveredPending._tag !== "ProviderPending") return
+  assert.equal(recoveredPending.runId, submitted.runId)
+  assert.equal(recoveredPending.jobId, submitted.jobId)
+  assert.equal(recoveredPending.pollCount, 1)
+  assert.equal(submitCalls, 1)
+  assert.equal(pollCalls, 2)
 
   const completed = await executeAdvance()
   assert.equal(completed._tag, "VerifiedCandidate")
@@ -523,6 +529,6 @@ test("advances one Seedance Run by submitting once and polling the same job to v
   assert.equal(plannedDecision.run.request.videoPlan?.assembly.pixelOwnership, "none-authoritative")
   assert.equal("assemblyPlan" in plannedDecision.run.request, false)
   assert.equal(submitCalls, 1)
-  assert.equal(pollCalls, 2)
+  assert.equal(pollCalls, 3)
   assert.match(completed.normalView.evidence, /video.*checks/i)
 })

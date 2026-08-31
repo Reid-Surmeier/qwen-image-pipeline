@@ -264,6 +264,20 @@ test("submits exact Seedance video once and polls only the same sanitized job id
   ).pipe(Effect.provideService(GenerationAdapter, contradictoryAdapter))))
   assert.equal(contradiction.code, "ADAPTER_RESULT_INVALID")
 
+  const throwingResult = new Proxy({}, {
+    get: () => { throw new Error("throwing Seedance result getter") },
+  })
+  const throwingAdapter: GenerationAdapterService = {
+    invoke: () => Effect.die("Qwen invocation must not run"),
+    pollSeedance: () => Effect.succeed(throwingResult as never),
+  }
+  const throwingFailure = await Effect.runPromise(Effect.flip(pollSeedance(
+    prepared,
+    submission.jobId,
+    submission.providerEvidence,
+  ).pipe(Effect.provideService(GenerationAdapter, throwingAdapter))))
+  assert.equal(throwingFailure.code, "ADAPTER_RESULT_INVALID")
+
   const duplicate = await Effect.runPromise(Effect.flip(submitSeedance(prepared, marker.permit).pipe(
     Effect.provideService(GenerationAdapter, adapter),
   )))

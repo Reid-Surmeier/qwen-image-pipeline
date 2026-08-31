@@ -556,16 +556,38 @@ const requireReplayBox = (boxes: ReadonlyArray<ReplayMp4Box>, type: string): Rep
 
 type ReplayMp4MediaKind = "video" | "audio"
 
+const replaySampleDescriptionKinds = (
+  value: Uint8Array,
+  stsd: ReplayMp4Box,
+): ReadonlyArray<ReplayMp4MediaKind | "unknown"> | undefined => {
+  if (stsd.contentStart + 8 > stsd.end) return undefined
+  const count = readReplayUint32(value, stsd.contentStart + 4)
+  if (count < 1) return undefined
+  const kinds: Array<ReplayMp4MediaKind | "unknown"> = []
+  let cursor = stsd.contentStart + 8
+  for (let index = 0; index < count; index += 1) {
+    if (cursor + 8 > stsd.end) return undefined
+    const size = readReplayUint32(value, cursor)
+    if (size < 8 || cursor + size > stsd.end) return undefined
+    const codec = Buffer.from(value.subarray(cursor + 4, cursor + 8)).toString("ascii")
+    kinds.push(/^(?:avc1|avc3|hvc1|hev1|av01|vp09|mp4v)$/.test(codec)
+      ? "video"
+      : /^(?:mp4a|ac-3|ec-3|Opus)$/.test(codec) ? "audio" : "unknown")
+    cursor += size
+  }
+  return cursor === stsd.end ? kinds : undefined
+}
+
 const replaySampleTableMediaKind = (
   value: Uint8Array,
   stbl: ReplayMp4Box,
-): ReplayMp4MediaKind | undefined => {
+): ReplayMp4MediaKind | "invalid" | undefined => {
   const stsd = replayBoxes(value, stbl.contentStart, stbl.end).find((box) => box.type === "stsd")
-  if (stsd === undefined || stsd.contentStart + 16 > stsd.end) return undefined
-  const codec = Buffer.from(value.subarray(stsd.contentStart + 12, stsd.contentStart + 16)).toString("ascii")
-  if (/^(?:avc1|avc3|hvc1|hev1|av01|vp09|mp4v)$/.test(codec)) return "video"
-  if (/^(?:mp4a|ac-3|ec-3|Opus)$/.test(codec)) return "audio"
-  return undefined
+  if (stsd === undefined) return undefined
+  const kinds = replaySampleDescriptionKinds(value, stsd)
+  if (kinds === undefined) return "invalid"
+  const recognized = new Set(kinds.filter((kind): kind is ReplayMp4MediaKind => kind !== "unknown"))
+  return recognized.size > 1 ? "invalid" : recognized.values().next().value
 }
 
 const validReplaySampleTable = (
@@ -597,13 +619,18 @@ const validReplaySampleTable = (
     stsc.contentStart + 8 + chunkMapCount * 12 > stsc.end ||
     offsets.contentStart + 8 + offsetCount * offsetWidth > offsets.end
   ) return false
-  const sampleEntrySize = readReplayUint32(value, stsd.contentStart + 8)
-  if (sampleEntrySize < 8 || stsd.contentStart + 8 + sampleEntrySize > stsd.end) return false
-  const codec = Buffer.from(value.subarray(stsd.contentStart + 12, stsd.contentStart + 16)).toString("ascii")
-  if (
-    (mediaKind === "video" && !/^(?:avc1|avc3|hvc1|hev1|av01|vp09|mp4v)$/.test(codec)) ||
-    (mediaKind === "audio" && !/^(?:mp4a|ac-3|ec-3|Opus)$/.test(codec))
-  ) return false
+  const descriptionKinds = replaySampleDescriptionKinds(value, stsd)
+  if (descriptionKinds === undefined || descriptionKinds.length !== descriptionCount) return false
+  for (let index = 0; index < chunkMapCount; index += 1) {
+    const entryOffset = stsc.contentStart + 8 + index * 12
+    const firstChunk = readReplayUint32(value, entryOffset)
+    const samplesPerChunk = readReplayUint32(value, entryOffset + 4)
+    const descriptionIndex = readReplayUint32(value, entryOffset + 8)
+    if (
+      firstChunk < 1 || samplesPerChunk < 1 || descriptionIndex < 1 ||
+      descriptionIndex > descriptionKinds.length || descriptionKinds[descriptionIndex - 1] !== mediaKind
+    ) return false
+  }
   const sampleSize = readReplayUint32(value, stsz.contentStart + 4)
   const sampleCount = readReplayUint32(value, stsz.contentStart + 8)
   if (sampleCount < 1) return false
@@ -700,10 +727,12 @@ const inspectVideoForReplay = (
       ? "video"
       : handler === "soun" ? "audio" : undefined
     const codecKind = replaySampleTableMediaKind(value, stbl)
-    if ((declaredKind !== undefined || codecKind !== undefined) && declaredKind !== codecKind) {
+    if (codecKind === "invalid" || codecKind === undefined) {
+      throw new RunRecordError("CHECKS_NOT_PASSED", "The replayed MP4 sample descriptions are unsupported or malformed.", "repair-evidence")
+    }
+    if (declaredKind !== codecKind) {
       throw new RunRecordError("CHECKS_NOT_PASSED", "The replayed MP4 track handler contradicts its media codec.", "repair-evidence")
     }
-    if (codecKind === undefined) continue
     const sampleTableValid = validReplaySampleTable(value, stbl, mediaData, codecKind)
     if (!sampleTableValid) {
       throw new RunRecordError("CHECKS_NOT_PASSED", "The replayed MP4 video or audio sample table is malformed.", "repair-evidence")
@@ -1714,9 +1743,37 @@ export const recordOperation = (
       const orphanedPoll = orphanedDocument as Readonly<Record<string, unknown>>
       if (
         orphanedDocument === null || typeof orphanedDocument !== "object" || Array.isArray(orphanedDocument) ||
-        orphanedPoll.job_id !== operation.jobId || orphanedPoll.status !== operation.status
+        orphanedPoll.job_id !== operation.jobId
       ) {
-        return yield* Effect.fail(new RunRecordError("EVIDENCE_HASH_MISMATCH", "Orphaned Seedance evidence belongs to a different job or poll status.", "repair-evidence"))
+        return yield* Effect.fail(new RunRecordError("EVIDENCE_HASH_MISMATCH", "Orphaned Seedance evidence belongs to a different job.", "repair-evidence"))
+      }
+      if (orphanedPoll.status !== operation.status) {
+        if (orphanedPoll.status !== "pending" || operation.status !== "completed") {
+          return yield* Effect.fail(new RunRecordError("EVIDENCE_HASH_MISMATCH", "Orphaned Seedance evidence has an impossible poll-status progression.", "repair-evidence"))
+        }
+        const clock = yield* RunRecordClock
+        const timestamp = yield* clock.now()
+        const recoveredEvent = makeEvent({
+          schemaVersion: "1",
+          sequence: events.length + 1,
+          operationId: operation.operationId,
+          runId: operation.runId,
+          timestamp,
+          kind: "seedance_poll_persisted",
+          previousEventSha256: current.chainHeadSha256,
+          payload: {
+            applicationPath,
+            sha256: durablePollEvidence.sha256,
+            byteLength: durablePollEvidence.body.byteLength,
+            mediaType: durablePollEvidence.mediaType,
+            jobId: operation.jobId,
+            status: "pending",
+          },
+        })
+        yield* store.appendEvent(operation.runId, current.chainHeadSha256, encodeEvent(recoveredEvent))
+        const recovered = replay(operation.runId, stored.request, [...events, recoveredEvent], stored.evidence)
+        yield* store.writeState(operation.runId, encodeView(recovered))
+        return { _tag: "Recorded" as const, view: recovered }
       }
       if (operation.status === "completed" && !completedPollMatchesOperation(orphanedPoll, operation)) {
         return yield* Effect.fail(new RunRecordError(

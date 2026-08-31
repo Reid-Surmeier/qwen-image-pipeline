@@ -427,7 +427,7 @@ const advanceSeedanceRun = (
             "The Seedance poll response could not be persisted.",
           )))
       current = persisted.view
-      if (polled.status === "pending") {
+      if (polled.status === "pending" || current.phase === "provider_evidence_received") {
         const diagnostics = yield* readDiagnostics(current.runId).pipe(Effect.mapError(asConductorError(
           "RUN_RECORD_FAILURE",
           "The pending Seedance diagnostics could not be replayed.",

@@ -125,13 +125,35 @@ const requireBox = (boxes: ReadonlyArray<Mp4Box>, type: string): Mp4Box => {
 
 type Mp4MediaKind = "video" | "audio"
 
-const sampleTableMediaKind = (bytes: Uint8Array, stbl: Mp4Box): Mp4MediaKind | undefined => {
+const sampleDescriptionKinds = (
+  bytes: Uint8Array,
+  stsd: Mp4Box,
+): ReadonlyArray<Mp4MediaKind | "unknown"> | undefined => {
+  if (stsd.contentStart + 8 > stsd.end) return undefined
+  const count = readUint32(bytes, stsd.contentStart + 4)
+  if (count < 1) return undefined
+  const kinds: Array<Mp4MediaKind | "unknown"> = []
+  let cursor = stsd.contentStart + 8
+  for (let index = 0; index < count; index += 1) {
+    if (cursor + 8 > stsd.end) return undefined
+    const size = readUint32(bytes, cursor)
+    if (size < 8 || cursor + size > stsd.end) return undefined
+    const codec = Buffer.from(bytes.subarray(cursor + 4, cursor + 8)).toString("ascii")
+    kinds.push(/^(?:avc1|avc3|hvc1|hev1|av01|vp09|mp4v)$/.test(codec)
+      ? "video"
+      : /^(?:mp4a|ac-3|ec-3|Opus)$/.test(codec) ? "audio" : "unknown")
+    cursor += size
+  }
+  return cursor === stsd.end ? kinds : undefined
+}
+
+const sampleTableMediaKind = (bytes: Uint8Array, stbl: Mp4Box): Mp4MediaKind | "invalid" | undefined => {
   const stsd = parseBoxes(bytes, stbl.contentStart, stbl.end).find((box) => box.type === "stsd")
-  if (stsd === undefined || stsd.contentStart + 16 > stsd.end) return undefined
-  const codec = Buffer.from(bytes.subarray(stsd.contentStart + 12, stsd.contentStart + 16)).toString("ascii")
-  if (/^(?:avc1|avc3|hvc1|hev1|av01|vp09|mp4v)$/.test(codec)) return "video"
-  if (/^(?:mp4a|ac-3|ec-3|Opus)$/.test(codec)) return "audio"
-  return undefined
+  if (stsd === undefined) return undefined
+  const kinds = sampleDescriptionKinds(bytes, stsd)
+  if (kinds === undefined) return "invalid"
+  const recognized = new Set(kinds.filter((kind): kind is Mp4MediaKind => kind !== "unknown"))
+  return recognized.size > 1 ? "invalid" : recognized.values().next().value
 }
 
 const validMediaSampleTable = (
@@ -163,13 +185,18 @@ const validMediaSampleTable = (
     stsc.contentStart + 8 + chunkMapCount * 12 > stsc.end ||
     offsets.contentStart + 8 + offsetCount * offsetWidth > offsets.end
   ) return false
-  const sampleEntrySize = readUint32(bytes, stsd.contentStart + 8)
-  if (sampleEntrySize < 8 || stsd.contentStart + 8 + sampleEntrySize > stsd.end) return false
-  const codec = Buffer.from(bytes.subarray(stsd.contentStart + 12, stsd.contentStart + 16)).toString("ascii")
-  if (
-    (mediaKind === "video" && !/^(?:avc1|avc3|hvc1|hev1|av01|vp09|mp4v)$/.test(codec)) ||
-    (mediaKind === "audio" && !/^(?:mp4a|ac-3|ec-3|Opus)$/.test(codec))
-  ) return false
+  const descriptionKinds = sampleDescriptionKinds(bytes, stsd)
+  if (descriptionKinds === undefined || descriptionKinds.length !== descriptionCount) return false
+  for (let index = 0; index < chunkMapCount; index += 1) {
+    const entryOffset = stsc.contentStart + 8 + index * 12
+    const firstChunk = readUint32(bytes, entryOffset)
+    const samplesPerChunk = readUint32(bytes, entryOffset + 4)
+    const descriptionIndex = readUint32(bytes, entryOffset + 8)
+    if (
+      firstChunk < 1 || samplesPerChunk < 1 || descriptionIndex < 1 ||
+      descriptionIndex > descriptionKinds.length || descriptionKinds[descriptionIndex - 1] !== mediaKind
+    ) return false
+  }
   const sampleSize = readUint32(bytes, stsz.contentStart + 4)
   const sampleCount = readUint32(bytes, stsz.contentStart + 8)
   if (sampleCount < 1) return false
@@ -267,10 +294,12 @@ const inspectVideoBytes = (
       continue
     }
     const codecKind = sampleTableMediaKind(bytes, stbl)
-    if ((declaredKind !== undefined || codecKind !== undefined) && declaredKind !== codecKind) {
+    if (codecKind === "invalid" || codecKind === undefined) {
       throw new MediaInspectionError("MALFORMED_MEDIA")
     }
-    if (codecKind === undefined) continue
+    if (declaredKind !== codecKind) {
+      throw new MediaInspectionError("MALFORMED_MEDIA")
+    }
     if (!validMediaSampleTable(bytes, stbl, mediaData, codecKind)) {
       throw new MediaInspectionError("MALFORMED_MEDIA")
     }
