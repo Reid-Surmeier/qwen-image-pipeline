@@ -278,6 +278,107 @@ test("submits exact Seedance video once and polls only the same sanitized job id
   ).pipe(Effect.provideService(GenerationAdapter, throwingAdapter))))
   assert.equal(throwingFailure.code, "ADAPTER_RESULT_INVALID")
 
+  const duplicateSecretBody = Buffer.from(
+    '{"job_id":"seedance-job-1","note":"sk-private-value-123456","note":"redacted","status":"pending"}',
+  )
+  const duplicateSecretAdapter: GenerationAdapterService = {
+    invoke: () => Effect.die("Qwen invocation must not run"),
+    pollSeedance: () => Effect.succeed({
+      status: "pending" as const,
+      provider: "openrouter" as const,
+      model: decision.run.request.model,
+      jobId: "seedance-job-1",
+      providerEvidence: {
+        mediaType: "application/json" as const,
+        body: duplicateSecretBody,
+        sha256: sha256(duplicateSecretBody),
+      },
+    }),
+  }
+  const duplicateSecret = await Effect.runPromise(Effect.flip(pollSeedance(
+    prepared,
+    submission.jobId,
+    submission.providerEvidence,
+  ).pipe(Effect.provideService(GenerationAdapter, duplicateSecretAdapter))))
+  assert.equal(duplicateSecret.code, "ADAPTER_RESULT_INVALID")
+
+  let costStateReads = 0
+  const statefulCostBody = completedPollBody("seedance-job-1", [{
+    applicationPath: "outputs/seedance-result.mp4",
+    mediaType: "video/mp4",
+    sha256: sha256(snapshot.bytes),
+  }], 1, { state: "estimated-only" })
+  const statefulCostAdapter: GenerationAdapterService = {
+    invoke: () => Effect.die("Qwen invocation must not run"),
+    pollSeedance: () => Effect.succeed({
+      status: "completed" as const,
+      provider: "openrouter" as const,
+      model: decision.run.request.model,
+      jobId: "seedance-job-1",
+      providerEvidence: {
+        mediaType: "application/json" as const,
+        body: statefulCostBody,
+        sha256: sha256(statefulCostBody),
+      },
+      outputs: [{
+        applicationPath: "outputs/seedance-result.mp4" as const,
+        mediaType: "video/mp4" as const,
+        body: snapshot.bytes,
+        sha256: sha256(snapshot.bytes),
+      }],
+      completedCount: 1,
+      cost: {
+        get state() {
+          costStateReads += 1
+          return costStateReads === 1 ? "estimated-only" as const : "unknown" as const
+        },
+      },
+    }),
+  }
+  const stableCost = await Effect.runPromise(pollSeedance(
+    prepared,
+    submission.jobId,
+    submission.providerEvidence,
+  ).pipe(Effect.provideService(GenerationAdapter, statefulCostAdapter)))
+  assert.equal(stableCost.status, "completed")
+  if (stableCost.status === "completed") assert.equal(stableCost.cost.state, "estimated-only")
+  assert.equal(costStateReads, 1)
+
+  const secondMemory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const secondReserved = await Effect.runPromise(reserve({
+    plannedRun: decision.run,
+    payloadSha256: prepared.payloadSha256,
+  }).pipe(Effect.provide(secondMemory.layer), Effect.provideService(RunRecordClock, clock)))
+  const secondMarker = await Effect.runPromise(record({
+    _tag: "SubmissionMayHaveStarted",
+    runId: secondReserved.runId,
+    operationId: "seedance-stateful-submit",
+  }).pipe(Effect.provide(secondMemory.layer), Effect.provideService(RunRecordClock, clock)))
+  assert.equal(secondMarker._tag, "SubmissionPermitIssued")
+  if (secondMarker._tag !== "SubmissionPermitIssued") return
+  let jobIdReads = 0
+  const statefulSubmissionAdapter: GenerationAdapterService = {
+    invoke: () => Effect.die("Qwen invocation must not run"),
+    submitSeedance: () => Effect.succeed({
+      provider: "openrouter" as const,
+      model: decision.run.request.model,
+      get jobId() {
+        jobIdReads += 1
+        return jobIdReads === 1 ? "seedance-job-1" : "seedance-job-substituted"
+      },
+      providerEvidence: {
+        mediaType: "application/json" as const,
+        body: submissionBody,
+        sha256: sha256(submissionBody),
+      },
+    }),
+  }
+  const stableSubmission = await Effect.runPromise(submitSeedance(prepared, secondMarker.permit).pipe(
+    Effect.provideService(GenerationAdapter, statefulSubmissionAdapter),
+  ))
+  assert.equal(stableSubmission.jobId, "seedance-job-1")
+  assert.equal(jobIdReads, 1)
+
   const duplicate = await Effect.runPromise(Effect.flip(submitSeedance(prepared, marker.permit).pipe(
     Effect.provideService(GenerationAdapter, adapter),
   )))

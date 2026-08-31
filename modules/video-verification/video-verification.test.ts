@@ -6,11 +6,13 @@ import { Effect } from "effect"
 
 import {
   forgedNonDecodableMp4,
+  falsifiedVideoMetadataMp4,
   hiddenAudioTrackMp4,
   hiddenSecondSampleDescriptionMp4,
   hiddenUnrecognizedAudioTrackMp4,
   malformedAudioTrack,
   makeFixture,
+  multipleVideoTracksMp4,
   zeroVideoTimingSampleCount,
 } from "../../tests/control-plane-fixture.js"
 import { verifyVideo, type VerifyVideoInput } from "./index.js"
@@ -183,6 +185,45 @@ test("rejects MP4 timing tables with zero declared video samples", async () => {
   const failure = await Effect.runPromise(Effect.flip(verifyVideo({
     outputs: [{
       applicationPath: "outputs/zero-timing-samples.mp4",
+      mediaType: "video/mp4",
+      body,
+      sha256: hash(body),
+    }],
+    expected: { width: 64, height: 48, durationSeconds: 0.2, audioExpected: false },
+    requestedCount: 1,
+    completedCount: 1,
+    cost: { state: "unknown", estimatedMaximumCostUsd: "0.20" },
+  })))
+  assert.equal(failure.code, "VIDEO_MEDIA_INVALID")
+})
+
+test("rejects MP4 dimensions and duration that contradict decoded frames", async () => {
+  const source = await fixtureVideo()
+  for (const body of [
+    falsifiedVideoMetadataMp4(source, { width: 32, height: 24 }),
+    falsifiedVideoMetadataMp4(source, { durationUnits: 100 }),
+  ]) {
+    const failure = await Effect.runPromise(Effect.flip(verifyVideo({
+      outputs: [{
+        applicationPath: "outputs/forged-metadata.mp4",
+        mediaType: "video/mp4",
+        body,
+        sha256: hash(body),
+      }],
+      expected: { width: 64, height: 48, durationSeconds: 0.2, audioExpected: false },
+      requestedCount: 1,
+      completedCount: 1,
+      cost: { state: "unknown", estimatedMaximumCostUsd: "0.20" },
+    })))
+    assert.equal(failure.code, "VIDEO_MEDIA_INVALID")
+  }
+})
+
+test("rejects ambiguous MP4 evidence with multiple video tracks", async () => {
+  const body = multipleVideoTracksMp4(await fixtureVideo())
+  const failure = await Effect.runPromise(Effect.flip(verifyVideo({
+    outputs: [{
+      applicationPath: "outputs/multiple-video.mp4",
       mediaType: "video/mp4",
       body,
       sha256: hash(body),

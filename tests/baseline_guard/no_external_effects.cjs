@@ -17,7 +17,7 @@ if (process.env.QWEN_BASELINE_OFFLINE === "1") {
   const ffmpegArguments = [
     "-nostdin", "-hide_banner", "-loglevel", "error", "-xerror", "-threads", "1",
     "-protocol_whitelist", "pipe", "-i", "pipe:0", "-map", "0:v:0", "-map", "0:a?",
-    "-f", "null", "-",
+    "-f", "framehash", "-",
   ];
   const isExactFfmpegDecode = (file, arguments_, options) => {
     if (

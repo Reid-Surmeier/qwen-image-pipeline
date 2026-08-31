@@ -5,7 +5,7 @@ const { spawnSync } = require("node:child_process");
 const arguments_ = [
   "-nostdin", "-hide_banner", "-loglevel", "error", "-xerror", "-threads", "1",
   "-protocol_whitelist", "pipe", "-i", "pipe:0", "-map", "0:v:0", "-map", "0:a?",
-  "-f", "null", "-",
+  "-f", "framehash", "-",
 ];
 const options = {
   input: Buffer.alloc(0),

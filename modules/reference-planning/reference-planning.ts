@@ -225,13 +225,78 @@ const validMediaSampleTable = (
     Number.isSafeInteger(sampleBytes) && sampleBytes > 0 && sampleBytes <= totalMediaBytes
 }
 
-const requireDecodableVideo = (bytes: Uint8Array): void => {
+type DecodedVideo = Readonly<{
+  width: number
+  height: number
+  durationSeconds: number
+  hasAudio: boolean
+}>
+
+const parseFramehash = (value: string): DecodedVideo | undefined => {
+  const timebases = new Map<number, Readonly<{ numerator: number; denominator: number }>>()
+  const mediaTypes = new Map<number, string>()
+  const dimensions = new Map<number, Readonly<{ width: number; height: number }>>()
+  const frameEnds = new Map<number, number>()
+  for (const line of value.split(/\r?\n/)) {
+    let match = /^#tb (\d+): (\d+)\/(\d+)$/.exec(line)
+    if (match !== null) {
+      const stream = Number(match[1])
+      const numerator = Number(match[2])
+      const denominator = Number(match[3])
+      if (!Number.isSafeInteger(stream) || !Number.isSafeInteger(numerator) || numerator < 1 ||
+          !Number.isSafeInteger(denominator) || denominator < 1 || timebases.has(stream)) return undefined
+      timebases.set(stream, { numerator, denominator })
+      continue
+    }
+    match = /^#media_type (\d+): (video|audio)$/.exec(line)
+    if (match !== null) {
+      const stream = Number(match[1])
+      if (!Number.isSafeInteger(stream) || mediaTypes.has(stream)) return undefined
+      mediaTypes.set(stream, match[2]!)
+      continue
+    }
+    match = /^#dimensions (\d+): (\d+)x(\d+)$/.exec(line)
+    if (match !== null) {
+      const stream = Number(match[1])
+      const width = Number(match[2])
+      const height = Number(match[3])
+      if (!Number.isSafeInteger(stream) || !Number.isSafeInteger(width) || width < 1 ||
+          !Number.isSafeInteger(height) || height < 1 || dimensions.has(stream)) return undefined
+      dimensions.set(stream, { width, height })
+      continue
+    }
+    if (/^\s*\d+\s*,/.test(line)) {
+      const fields = line.split(",").map((field) => field.trim())
+      if (fields.length < 5) return undefined
+      const stream = Number(fields[0])
+      const pts = Number(fields[1])
+      const duration = Number(fields[3])
+      if (!Number.isSafeInteger(stream) || !Number.isSafeInteger(pts) ||
+          !Number.isSafeInteger(duration) || duration < 1) return undefined
+      const end = pts + duration
+      if (!Number.isSafeInteger(end)) return undefined
+      frameEnds.set(stream, Math.max(frameEnds.get(stream) ?? Number.NEGATIVE_INFINITY, end))
+    }
+  }
+  const videoStreams = [...mediaTypes].filter(([, kind]) => kind === "video").map(([stream]) => stream)
+  if (videoStreams.length !== 1) return undefined
+  const stream = videoStreams[0]!
+  const timebase = timebases.get(stream)
+  const size = dimensions.get(stream)
+  const frameEnd = frameEnds.get(stream)
+  if (timebase === undefined || size === undefined || frameEnd === undefined || frameEnd < 1) return undefined
+  const durationSeconds = frameEnd * timebase.numerator / timebase.denominator
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return undefined
+  return { ...size, durationSeconds, hasAudio: [...mediaTypes.values()].includes("audio") }
+}
+
+const requireDecodableVideo = (bytes: Uint8Array): DecodedVideo => {
   const result = spawnSync(
     "/usr/bin/ffmpeg",
     [
       "-nostdin", "-hide_banner", "-loglevel", "error", "-xerror", "-threads", "1",
       "-protocol_whitelist", "pipe", "-i", "pipe:0", "-map", "0:v:0", "-map", "0:a?",
-      "-f", "null", "-",
+      "-f", "framehash", "-",
     ],
     {
       input: bytes,
@@ -239,9 +304,12 @@ const requireDecodableVideo = (bytes: Uint8Array): void => {
       maxBuffer: 1_048_576,
       env: { LANG: "C", LC_ALL: "C", PATH: "/usr/bin:/bin" },
       windowsHide: true,
+      encoding: "utf8",
     },
   )
-  if (result.error !== undefined || result.status !== 0) throw new MediaInspectionError("MALFORMED_MEDIA")
+  const decoded = result.error === undefined && result.status === 0 ? parseFramehash(result.stdout) : undefined
+  if (decoded === undefined) throw new MediaInspectionError("MALFORMED_MEDIA")
+  return decoded
 }
 
 const inspectVideoBytes = (
@@ -304,6 +372,7 @@ const inspectVideoBytes = (
       throw new MediaInspectionError("MALFORMED_MEDIA")
     }
     if (codecKind !== "video") continue
+    if (dimensions !== undefined) throw new MediaInspectionError("MALFORMED_MEDIA")
     dimensions = {
       width: readUint32(bytes, tkhd.end - 8) / 65_536,
       height: readUint32(bytes, tkhd.end - 4) / 65_536,
@@ -314,8 +383,13 @@ const inspectVideoBytes = (
     !Number.isSafeInteger(dimensions.width) || dimensions.width < 1 ||
     !Number.isSafeInteger(dimensions.height) || dimensions.height < 1
   ) throw new MediaInspectionError("MALFORMED_MEDIA")
-  requireDecodableVideo(bytes)
-  return { ...dimensions, durationSeconds: duration / timescale }
+  const metadataDuration = duration / timescale
+  const decoded = requireDecodableVideo(bytes)
+  if (
+    decoded.width !== dimensions.width || decoded.height !== dimensions.height ||
+    Math.abs(decoded.durationSeconds - metadataDuration) > 0.001
+  ) throw new MediaInspectionError("MALFORMED_MEDIA")
+  return { width: decoded.width, height: decoded.height, durationSeconds: decoded.durationSeconds }
 }
 
 const inspectBytes = (snapshot: FileSnapshot): MediaInspection => {

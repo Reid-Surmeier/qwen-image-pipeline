@@ -167,7 +167,7 @@ static int approved_ffmpeg_arguments(char *const argv[]) {
     static const char *expected[] = {
         "-nostdin", "-hide_banner", "-loglevel", "error", "-xerror", "-threads", "1",
         "-protocol_whitelist", "pipe", "-i", "pipe:0", "-map", "0:v:0", "-map", "0:a?",
-        "-f", "null", "-", NULL,
+        "-f", "framehash", "-", NULL,
     };
     if (argv == NULL) {
         return 0;

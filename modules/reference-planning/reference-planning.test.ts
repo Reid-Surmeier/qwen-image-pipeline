@@ -12,11 +12,13 @@ import {
 } from "./index.js"
 import {
   forgedNonDecodableMp4,
+  falsifiedVideoMetadataMp4,
   hiddenAudioTrackMp4,
   hiddenSecondSampleDescriptionMp4,
   hiddenUnrecognizedAudioTrackMp4,
   malformedAudioTrack,
   makeFixture,
+  multipleVideoTracksMp4,
   sha256,
   zeroVideoTimingSampleCount,
 } from "../../tests/control-plane-fixture.js"
@@ -77,6 +79,34 @@ test("refuses MP4 timing tables with zero declared video samples", async () => {
     applicationPath: snapshot.applicationPath,
     bytes: malformed,
     sha256: sha256(malformed),
+  }))
+  assert.equal(result._tag, "Failure")
+})
+
+test("refuses MP4 dimensions and duration that contradict decoded frames", async () => {
+  const fixture = makeFixture("seedance-video")
+  const snapshot = await Effect.runPromise(fixture.files.read("references/neutral.mp4"))
+  for (const forged of [
+    falsifiedVideoMetadataMp4(snapshot.bytes, { width: 32, height: 24 }),
+    falsifiedVideoMetadataMp4(snapshot.bytes, { durationUnits: 100 }),
+  ]) {
+    const result = await Effect.runPromiseExit(byteMediaInspector.inspect({
+      applicationPath: snapshot.applicationPath,
+      bytes: forged,
+      sha256: sha256(forged),
+    }))
+    assert.equal(result._tag, "Failure")
+  }
+})
+
+test("refuses ambiguous MP4 evidence with multiple video tracks", async () => {
+  const fixture = makeFixture("seedance-video")
+  const snapshot = await Effect.runPromise(fixture.files.read("references/neutral.mp4"))
+  const ambiguous = multipleVideoTracksMp4(snapshot.bytes)
+  const result = await Effect.runPromiseExit(byteMediaInspector.inspect({
+    applicationPath: snapshot.applicationPath,
+    bytes: ambiguous,
+    sha256: sha256(ambiguous),
   }))
   assert.equal(result._tag, "Failure")
 })

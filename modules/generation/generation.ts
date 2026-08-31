@@ -107,6 +107,76 @@ const hasSecretMaterial = (value: unknown, parentKey = ""): boolean => {
   return false
 }
 
+const hasDuplicateJsonKeys = (source: string): boolean => {
+  let cursor = 0
+  const whitespace = () => { while (/\s/.test(source[cursor] ?? "")) cursor += 1 }
+  const string = (): string => {
+    const start = cursor
+    cursor += 1
+    while (cursor < source.length) {
+      if (source[cursor] === "\\") { cursor += 2; continue }
+      if (source[cursor] === '"') {
+        cursor += 1
+        return JSON.parse(source.slice(start, cursor)) as string
+      }
+      cursor += 1
+    }
+    throw new Error("unterminated JSON string")
+  }
+  const value = (): boolean => {
+    whitespace()
+    if (source[cursor] === "{") return object()
+    if (source[cursor] === "[") return array()
+    if (source[cursor] === '"') { string(); return false }
+    const start = cursor
+    while (cursor < source.length && !/[\s,}\]]/.test(source[cursor]!)) cursor += 1
+    if (cursor === start) throw new Error("missing JSON value")
+    return false
+  }
+  const object = (): boolean => {
+    cursor += 1
+    whitespace()
+    const keys = new Set<string>()
+    if (source[cursor] === "}") { cursor += 1; return false }
+    while (cursor < source.length) {
+      whitespace()
+      if (source[cursor] !== '"') throw new Error("missing JSON key")
+      const key = string()
+      if (keys.has(key)) return true
+      keys.add(key)
+      whitespace()
+      if (source[cursor] !== ":") throw new Error("missing JSON colon")
+      cursor += 1
+      if (value()) return true
+      whitespace()
+      if (source[cursor] === "}") { cursor += 1; return false }
+      if (source[cursor] !== ",") throw new Error("missing JSON object separator")
+      cursor += 1
+    }
+    throw new Error("unterminated JSON object")
+  }
+  const array = (): boolean => {
+    cursor += 1
+    whitespace()
+    if (source[cursor] === "]") { cursor += 1; return false }
+    while (cursor < source.length) {
+      if (value()) return true
+      whitespace()
+      if (source[cursor] === "]") { cursor += 1; return false }
+      if (source[cursor] !== ",") throw new Error("missing JSON array separator")
+      cursor += 1
+    }
+    throw new Error("unterminated JSON array")
+  }
+  try {
+    const duplicate = value()
+    whitespace()
+    return duplicate
+  } catch {
+    return false
+  }
+}
+
 const parseProviderDocument = (
   evidence: GenerationProviderEvidence,
 ): Record<string, unknown> | undefined => {
@@ -117,7 +187,9 @@ const parseProviderDocument = (
     sha256(evidence.body) !== evidence.sha256
   ) return undefined
   try {
-    const document: unknown = JSON.parse(Buffer.from(evidence.body).toString("utf8"))
+    const source = Buffer.from(evidence.body).toString("utf8")
+    if (hasDuplicateJsonKeys(source)) return undefined
+    const document: unknown = JSON.parse(source)
     if (document === null || typeof document !== "object" || Array.isArray(document) || hasSecretMaterial(document)) {
       return undefined
     }
@@ -125,6 +197,57 @@ const parseProviderDocument = (
   } catch {
     return undefined
   }
+}
+
+type ProviderEvidenceSnapshot = Readonly<{
+  mediaType: unknown
+  body: unknown
+  sha256: unknown
+}>
+
+const snapshotProviderEvidence = (value: unknown): ProviderEvidenceSnapshot | undefined => {
+  const evidence = objectRecord(value)
+  if (evidence === undefined) return undefined
+  const { mediaType, body, sha256: digest } = evidence
+  return { mediaType, body, sha256: digest }
+}
+
+const snapshotSeedanceSubmission = (value: unknown): Readonly<{
+  provider: unknown
+  model: unknown
+  jobId: unknown
+  providerEvidence: ProviderEvidenceSnapshot | undefined
+}> | undefined => {
+  const result = objectRecord(value)
+  if (result === undefined) return undefined
+  const { provider, model, jobId, providerEvidence } = result
+  return { provider, model, jobId, providerEvidence: snapshotProviderEvidence(providerEvidence) }
+}
+
+const snapshotSeedancePoll = (value: unknown): Readonly<Record<string, unknown>> | undefined => {
+  const result = objectRecord(value)
+  if (result === undefined) return undefined
+  const { status, provider, model, jobId, providerEvidence } = result
+  const common = { status, provider, model, jobId, providerEvidence: snapshotProviderEvidence(providerEvidence) }
+  if (status !== "completed") return common
+  const { outputs: rawOutputs, completedCount, cost: rawCost } = result
+  if (!Array.isArray(rawOutputs)) return { ...common, outputs: rawOutputs, completedCount, cost: rawCost }
+  const outputCount = rawOutputs.length
+  const outputs: unknown[] = []
+  for (let index = 0; index < outputCount; index += 1) {
+    if (!Object.hasOwn(rawOutputs, index)) return { ...common, outputs: undefined, completedCount, cost: rawCost }
+    const output = objectRecord(rawOutputs[index])
+    if (output === undefined) { outputs.push(undefined); continue }
+    const { applicationPath, mediaType, body, sha256: digest } = output
+    outputs.push({ applicationPath, mediaType, body, sha256: digest })
+  }
+  const cost = objectRecord(rawCost)
+  let snapshottedCost: unknown = rawCost
+  if (cost !== undefined) {
+    const { state, actualCostUsd } = cost
+    snapshottedCost = { state, actualCostUsd }
+  }
+  return { ...common, outputs, completedCount, cost: snapshottedCost }
 }
 
 const completedPollMatchesResult = (
@@ -493,8 +616,11 @@ export const submitSeedanceGeneration = (
       () => adapter.submitSeedance!(validatedPrepared),
       "The Seedance submission adapter",
     )
-    const result = objectRecord(untrusted)
-    const evidenceRecord = result === undefined ? undefined : objectRecord(result.providerEvidence)
+    const result = yield* Effect.try({
+      try: () => snapshotSeedanceSubmission(untrusted),
+      catch: () => new GenerationError("ADAPTER_RESULT_INVALID", "The Seedance submission result could not be snapshotted safely."),
+    })
+    const evidenceRecord = result?.providerEvidence
     const providerEvidence: GenerationProviderEvidence | undefined = evidenceRecord === undefined ||
         evidenceRecord.mediaType !== "application/json" ||
         !(evidenceRecord.body instanceof Uint8Array) ||
@@ -554,7 +680,10 @@ export const pollSeedanceGeneration = (
       () => adapter.pollSeedance!(validatedPrepared, jobId, submissionEvidence),
       "The Seedance polling adapter",
     )
-    const result = objectRecord(untrusted)
+    const result = yield* Effect.try({
+      try: () => snapshotSeedancePoll(untrusted),
+      catch: () => new GenerationError("ADAPTER_RESULT_INVALID", "The Seedance poll result could not be snapshotted safely."),
+    })
     const evidenceRecord = result === undefined ? undefined : objectRecord(result.providerEvidence)
     const providerEvidence: GenerationProviderEvidence | undefined = evidenceRecord === undefined ||
         evidenceRecord.mediaType !== "application/json" ||

@@ -16,11 +16,13 @@ import {
   type PlannedRun,
 } from "../run-contract/index.js"
 import {
+  falsifiedVideoMetadataMp4,
   forgedNonDecodableMp4,
   hiddenAudioTrackMp4,
   hiddenUnrecognizedAudioTrackMp4,
   malformedAudioTrack,
   makeFixture,
+  multipleVideoTracksMp4,
 } from "../../tests/control-plane-fixture.js"
 import { verifyVideo } from "../video-verification/index.js"
 import {
@@ -124,6 +126,85 @@ const plannedSeedanceRun = async (requestedCount = 1): Promise<Readonly<{
   )
   const body = (await Effect.runPromise(fixture.files.read("references/neutral.mp4"))).bytes
   return { planned, body }
+}
+
+const assertRunRecordRejectsMedia = async (body: Uint8Array, suffix: string): Promise<void> => {
+  const { planned } = await plannedSeedanceRun()
+  const memory = await memoryHarness()
+  const provide = <Success, Error>(
+    effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
+  ): Effect.Effect<Success, Error> => effect.pipe(
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, clock),
+  )
+  const reserved = await Effect.runPromise(provide(reserve(reservationFor(planned))))
+  await Effect.runPromise(provide(record({
+    _tag: "SubmissionMayHaveStarted",
+    runId: reserved.runId,
+    operationId: `${suffix}-marker`,
+  })))
+  const jobId = `job-${suffix}`
+  const submissionBody = Buffer.from(JSON.stringify({ job_id: jobId, status: "submitted" }))
+  await Effect.runPromise(provide(record({
+    _tag: "CommitProviderEvidence",
+    runId: reserved.runId,
+    operationId: `${suffix}-submission`,
+    evidence: {
+      mediaType: "application/json",
+      body: submissionBody,
+      sha256: createHash("sha256").update(submissionBody).digest("hex"),
+    },
+  })))
+  const outputSha256 = createHash("sha256").update(body).digest("hex")
+  const applicationPath = `outputs/${suffix}.mp4` as const
+  const completionBody = completedPollBody(jobId, [{
+    applicationPath,
+    mediaType: "video/mp4",
+    sha256: outputSha256,
+  }], 1, { state: "unknown" })
+  await Effect.runPromise(provide(record({
+    _tag: "CommitSeedancePoll",
+    runId: reserved.runId,
+    operationId: `${suffix}-complete`,
+    jobId,
+    status: "completed",
+    evidence: {
+      mediaType: "application/json",
+      body: completionBody,
+      sha256: createHash("sha256").update(completionBody).digest("hex"),
+    },
+    outputs: [{ applicationPath, mediaType: "video/mp4", body, sha256: outputSha256 }],
+    completedCount: 1,
+    cost: { state: "unknown" },
+  })))
+  const failure = await Effect.runPromise(Effect.flip(provide(record({
+    _tag: "CommitVideoChecks",
+    runId: reserved.runId,
+    operationId: `${suffix}-checks`,
+    jobId,
+    report: {
+      algorithm: "seedance-media-v1",
+      classification: "verified-candidate",
+      outputs: [{
+        applicationPath,
+        mediaType: "video/mp4",
+        sha256: outputSha256,
+        actual: { width: 64, height: 48, durationSeconds: 0.2, hasAudio: false },
+      }],
+      requestedCount: 1,
+      completedCount: 1,
+      expected: planned.request.videoPlan!.expectedMedia,
+      cost: { state: "unknown", estimatedMaximumCostUsd: planned.request.estimatedMaximumCostUsd },
+      checks: [
+        { name: "integrity", passed: true, measured: 0 },
+        { name: "media", passed: true, measured: 0 },
+        { name: "dimensions", passed: true, measured: 0 },
+        { name: "duration", passed: true, measured: 0 },
+        { name: "audio-expectation", passed: true, measured: 0 },
+      ],
+    },
+  }))))
+  assert.equal(failure.code, "CHECKS_NOT_PASSED")
 }
 
 const markerOnlyMp4 = (): Uint8Array => {
@@ -428,6 +509,7 @@ test("sanitized token counts pass while credential query strings are refused", a
     ["credential-value", '{"credential_value":"opaque-private-value"}'],
     ["signed-url-sig", '{"url":"https://provider.test/result?sig=opaque-private-value"}'],
     ["signed-url-signature", '{"url":"https://provider.test/result?signature=opaque-private-value"}'],
+    ["duplicate-secret-key", '{"note":"sk-private-value-123456","note":"redacted","status":"accepted"}'],
   ] as const) {
     const memory = await memoryHarness()
     const run = await prepare(memory, suffix)
@@ -892,6 +974,19 @@ test("Run Record replay refuses box-consistent but non-decodable Seedance output
   }))))
 
   assert.equal(failure.code, "CHECKS_NOT_PASSED")
+})
+
+test("Run Record replay refuses MP4 metadata that contradicts decoded frames", async () => {
+  const { body } = await plannedSeedanceRun()
+  await assertRunRecordRejectsMedia(
+    falsifiedVideoMetadataMp4(body, { width: 32, height: 24 }),
+    "forged-metadata",
+  )
+})
+
+test("Run Record replay refuses ambiguous MP4 evidence with multiple video tracks", async () => {
+  const { body } = await plannedSeedanceRun()
+  await assertRunRecordRejectsMedia(multipleVideoTracksMp4(body), "multiple-video")
 })
 
 test("Run Record replay refuses a malformed declared audio track", async () => {

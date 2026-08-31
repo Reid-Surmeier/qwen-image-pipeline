@@ -659,13 +659,68 @@ const validReplaySampleTable = (
     Number.isSafeInteger(sampleBytes) && sampleBytes > 0 && sampleBytes <= totalMediaBytes
 }
 
-const requireReplayDecodableVideo = (value: Uint8Array): void => {
+type ReplayDecodedVideo = Readonly<{
+  width: number
+  height: number
+  durationSeconds: number
+  hasAudio: boolean
+}>
+
+const parseReplayFramehash = (value: string): ReplayDecodedVideo | undefined => {
+  const timebases = new Map<number, Readonly<{ numerator: number; denominator: number }>>()
+  const mediaTypes = new Map<number, string>()
+  const dimensions = new Map<number, Readonly<{ width: number; height: number }>>()
+  const frameEnds = new Map<number, number>()
+  for (const line of value.split(/\r?\n/)) {
+    let match = /^#tb (\d+): (\d+)\/(\d+)$/.exec(line)
+    if (match !== null) {
+      const stream = Number(match[1]); const numerator = Number(match[2]); const denominator = Number(match[3])
+      if (!Number.isSafeInteger(stream) || !Number.isSafeInteger(numerator) || numerator < 1 ||
+          !Number.isSafeInteger(denominator) || denominator < 1 || timebases.has(stream)) return undefined
+      timebases.set(stream, { numerator, denominator }); continue
+    }
+    match = /^#media_type (\d+): (video|audio)$/.exec(line)
+    if (match !== null) {
+      const stream = Number(match[1])
+      if (!Number.isSafeInteger(stream) || mediaTypes.has(stream)) return undefined
+      mediaTypes.set(stream, match[2]!); continue
+    }
+    match = /^#dimensions (\d+): (\d+)x(\d+)$/.exec(line)
+    if (match !== null) {
+      const stream = Number(match[1]); const width = Number(match[2]); const height = Number(match[3])
+      if (!Number.isSafeInteger(stream) || !Number.isSafeInteger(width) || width < 1 ||
+          !Number.isSafeInteger(height) || height < 1 || dimensions.has(stream)) return undefined
+      dimensions.set(stream, { width, height }); continue
+    }
+    if (/^\s*\d+\s*,/.test(line)) {
+      const fields = line.split(",").map((field) => field.trim())
+      if (fields.length < 5) return undefined
+      const stream = Number(fields[0]); const pts = Number(fields[1]); const frameDuration = Number(fields[3])
+      if (!Number.isSafeInteger(stream) || !Number.isSafeInteger(pts) ||
+          !Number.isSafeInteger(frameDuration) || frameDuration < 1) return undefined
+      const end = pts + frameDuration
+      if (!Number.isSafeInteger(end)) return undefined
+      frameEnds.set(stream, Math.max(frameEnds.get(stream) ?? Number.NEGATIVE_INFINITY, end))
+    }
+  }
+  const videos = [...mediaTypes].filter(([, kind]) => kind === "video").map(([stream]) => stream)
+  if (videos.length !== 1) return undefined
+  const stream = videos[0]!
+  const timebase = timebases.get(stream); const size = dimensions.get(stream); const frameEnd = frameEnds.get(stream)
+  if (timebase === undefined || size === undefined || frameEnd === undefined || frameEnd < 1) return undefined
+  const durationSeconds = frameEnd * timebase.numerator / timebase.denominator
+  return Number.isFinite(durationSeconds) && durationSeconds > 0
+    ? { ...size, durationSeconds, hasAudio: [...mediaTypes.values()].includes("audio") }
+    : undefined
+}
+
+const requireReplayDecodableVideo = (value: Uint8Array): ReplayDecodedVideo => {
   const result = spawnSync(
     "/usr/bin/ffmpeg",
     [
       "-nostdin", "-hide_banner", "-loglevel", "error", "-xerror", "-threads", "1",
       "-protocol_whitelist", "pipe", "-i", "pipe:0", "-map", "0:v:0", "-map", "0:a?",
-      "-f", "null", "-",
+      "-f", "framehash", "-",
     ],
     {
       input: value,
@@ -673,11 +728,14 @@ const requireReplayDecodableVideo = (value: Uint8Array): void => {
       maxBuffer: 1_048_576,
       env: { LANG: "C", LC_ALL: "C", PATH: "/usr/bin:/bin" },
       windowsHide: true,
+      encoding: "utf8",
     },
   )
-  if (result.error !== undefined || result.status !== 0) {
+  const decoded = result.error === undefined && result.status === 0 ? parseReplayFramehash(result.stdout) : undefined
+  if (decoded === undefined) {
     throw new RunRecordError("CHECKS_NOT_PASSED", "The replayed MP4 video stream could not be decoded safely.", "repair-evidence")
   }
+  return decoded
 }
 
 const inspectVideoForReplay = (
@@ -738,6 +796,9 @@ const inspectVideoForReplay = (
       throw new RunRecordError("CHECKS_NOT_PASSED", "The replayed MP4 video or audio sample table is malformed.", "repair-evidence")
     }
     if (codecKind === "video") {
+      if (videoTrack !== undefined) {
+        throw new RunRecordError("CHECKS_NOT_PASSED", "The replayed MP4 contains multiple ambiguous video tracks.", "repair-evidence")
+      }
       videoTrack = {
         width: readReplayUint32(value, tkhd.end - 8) / 65_536,
         height: readReplayUint32(value, tkhd.end - 4) / 65_536,
@@ -757,8 +818,13 @@ const inspectVideoForReplay = (
   ) {
     throw new RunRecordError("CHECKS_NOT_PASSED", "The replayed MP4 dimensions or duration are invalid.", "repair-evidence")
   }
-  requireReplayDecodableVideo(value)
-  return { width, height, durationSeconds: duration / timescale, hasAudio }
+  const metadataDuration = duration / timescale
+  const decoded = requireReplayDecodableVideo(value)
+  if (
+    decoded.width !== width || decoded.height !== height ||
+    Math.abs(decoded.durationSeconds - metadataDuration) > 0.001 || decoded.hasAudio !== hasAudio
+  ) throw new RunRecordError("CHECKS_NOT_PASSED", "Decoded media contradicts the replayed MP4 metadata.", "repair-evidence")
+  return decoded
 }
 
 const replay = (
@@ -1389,6 +1455,76 @@ const valueHasSecret = (value: unknown, key?: string): boolean => {
   return false
 }
 
+const hasDuplicateJsonKeys = (source: string): boolean => {
+  let cursor = 0
+  const whitespace = () => { while (/\s/.test(source[cursor] ?? "")) cursor += 1 }
+  const string = (): string => {
+    const start = cursor
+    cursor += 1
+    while (cursor < source.length) {
+      if (source[cursor] === "\\") { cursor += 2; continue }
+      if (source[cursor] === '"') {
+        cursor += 1
+        return JSON.parse(source.slice(start, cursor)) as string
+      }
+      cursor += 1
+    }
+    throw new Error("unterminated JSON string")
+  }
+  const value = (): boolean => {
+    whitespace()
+    if (source[cursor] === "{") return object()
+    if (source[cursor] === "[") return array()
+    if (source[cursor] === '"') { string(); return false }
+    const start = cursor
+    while (cursor < source.length && !/[\s,}\]]/.test(source[cursor]!)) cursor += 1
+    if (cursor === start) throw new Error("missing JSON value")
+    return false
+  }
+  const object = (): boolean => {
+    cursor += 1
+    whitespace()
+    const keys = new Set<string>()
+    if (source[cursor] === "}") { cursor += 1; return false }
+    while (cursor < source.length) {
+      whitespace()
+      if (source[cursor] !== '"') throw new Error("missing JSON key")
+      const key = string()
+      if (keys.has(key)) return true
+      keys.add(key)
+      whitespace()
+      if (source[cursor] !== ":") throw new Error("missing JSON colon")
+      cursor += 1
+      if (value()) return true
+      whitespace()
+      if (source[cursor] === "}") { cursor += 1; return false }
+      if (source[cursor] !== ",") throw new Error("missing JSON object separator")
+      cursor += 1
+    }
+    throw new Error("unterminated JSON object")
+  }
+  const array = (): boolean => {
+    cursor += 1
+    whitespace()
+    if (source[cursor] === "]") { cursor += 1; return false }
+    while (cursor < source.length) {
+      if (value()) return true
+      whitespace()
+      if (source[cursor] === "]") { cursor += 1; return false }
+      if (source[cursor] !== ",") throw new Error("missing JSON array separator")
+      cursor += 1
+    }
+    throw new Error("unterminated JSON array")
+  }
+  try {
+    const duplicate = value()
+    whitespace()
+    return duplicate
+  } catch {
+    return false
+  }
+}
+
 const validateProviderEvidence = (operation: Extract<RecordOperation, { _tag: "CommitProviderEvidence" }>): void => {
   if (
     operation.evidence.mediaType !== "application/json" ||
@@ -1396,9 +1532,13 @@ const validateProviderEvidence = (operation: Extract<RecordOperation, { _tag: "C
   ) {
     throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Provider evidence does not match its declared SHA-256.", "repair-evidence")
   }
+  const source = Buffer.from(operation.evidence.body).toString("utf8")
+  if (hasDuplicateJsonKeys(source)) {
+    throw new RunRecordError("SECRET_MATERIAL_DETECTED", "Provider evidence contains duplicate JSON keys.", "repair-evidence")
+  }
   let parsed: unknown
   try {
-    parsed = JSON.parse(Buffer.from(operation.evidence.body).toString("utf8"))
+    parsed = JSON.parse(source)
   } catch {
     throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Provider evidence must be valid sanitized JSON.", "repair-evidence")
   }

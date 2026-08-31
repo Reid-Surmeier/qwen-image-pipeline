@@ -96,6 +96,54 @@ export const zeroVideoTimingSampleCount = (bytes: Uint8Array): Uint8Array => {
   return result
 }
 
+export const falsifiedVideoMetadataMp4 = (
+  bytes: Uint8Array,
+  mutation: Readonly<{ width?: number; height?: number; durationUnits?: number }>,
+): Uint8Array => {
+  const result = Buffer.from(bytes)
+  const mvhdTypeOffset = result.indexOf(Buffer.from("mvhd", "ascii"))
+  const tkhdTypeOffset = result.indexOf(Buffer.from("tkhd", "ascii"))
+  if (mvhdTypeOffset < 4 || tkhdTypeOffset < 4) throw new Error("neutral MP4 metadata layout changed")
+  const tkhdBoxStart = tkhdTypeOffset - 4
+  const tkhdBoxEnd = tkhdBoxStart + result.readUInt32BE(tkhdBoxStart)
+  if (tkhdBoxEnd > result.byteLength || tkhdBoxEnd - tkhdTypeOffset < 12) {
+    throw new Error("neutral MP4 track header layout changed")
+  }
+  if (mutation.width !== undefined) result.writeUInt32BE(mutation.width * 65_536, tkhdBoxEnd - 8)
+  if (mutation.height !== undefined) result.writeUInt32BE(mutation.height * 65_536, tkhdBoxEnd - 4)
+  if (mutation.durationUnits !== undefined) result.writeUInt32BE(mutation.durationUnits, mvhdTypeOffset + 20)
+  return result
+}
+
+export const multipleVideoTracksMp4 = (bytes: Uint8Array): Uint8Array => {
+  const source = Buffer.from(bytes)
+  const moovStart = 32
+  const trackStart = 148
+  const trackEnd = 752
+  const moovEnd = 850
+  const videoChunkOffsetField = 748
+  const oldMdatContentOffset = 866
+  if (
+    source.toString("ascii", moovStart + 4, moovStart + 8) !== "moov" ||
+    source.toString("ascii", trackStart + 4, trackStart + 8) !== "trak" ||
+    source.readUInt32BE(videoChunkOffsetField) !== oldMdatContentOffset
+  ) throw new Error("neutral MP4 fixture layout changed")
+  const copiedTrack = source.subarray(trackStart, trackEnd)
+  const result = Buffer.concat([
+    source.subarray(0, moovEnd),
+    copiedTrack,
+    source.subarray(moovEnd),
+  ])
+  const shiftedMdatContentOffset = oldMdatContentOffset + copiedTrack.length
+  result.writeUInt32BE(source.readUInt32BE(moovStart) + copiedTrack.length, moovStart)
+  result.writeUInt32BE(shiftedMdatContentOffset, videoChunkOffsetField)
+  result.writeUInt32BE(
+    shiftedMdatContentOffset,
+    moovEnd + (videoChunkOffsetField - trackStart),
+  )
+  return result
+}
+
 export const hiddenAudioTrackMp4 = (): Uint8Array => {
   const result = Buffer.from(AUDIO_VIDEO_MP4_BYTES)
   const handler = result.indexOf(Buffer.from("soun", "ascii"))
