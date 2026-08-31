@@ -5,8 +5,11 @@ import type {
   MediaInspectorService,
   PlanningIdentityService,
 } from "../run-contract/index.js"
-import { planObjective } from "./conductor.js"
-import type { PlanCommand, PlanDecision } from "./types.js"
+import type { GenerationAdapterService } from "../generation/index.js"
+import type { RunRecordClockService, RunRecordStoreService } from "../run-record/index.js"
+import { advanceRun, planObjective } from "./conductor.js"
+import type { AdvanceCommand, AdvanceDecision, PlanCommand, PlanDecision } from "./types.js"
+import type { ConductorError } from "./errors.js"
 
 export const plan: (
   command: PlanCommand,
@@ -16,7 +19,16 @@ export const plan: (
   ApplicationFilesService | MediaInspectorService | PlanningIdentityService
 > = planObjective
 
-export type { PlanningRefusal, PlanningRefusalCode } from "./errors.js"
+export const advance: (
+  command: AdvanceCommand,
+) => Effect.Effect<
+  AdvanceDecision,
+  ConductorError,
+  ApplicationFilesService | GenerationAdapterService | RunRecordStoreService | RunRecordClockService
+> = advanceRun
+
+export { ConductorError } from "./errors.js"
+export type { ConductorErrorCode, PlanningRefusal, PlanningRefusalCode } from "./errors.js"
 export {
   ApplicationFiles,
   MediaInspector,
@@ -34,6 +46,8 @@ export {
   TOOL_LOCK_PATH,
 } from "./types.js"
 export type {
+  AdvanceCommand,
+  AdvanceDecision,
   NormalView,
   PlanCommand,
   PlanDecision,

@@ -1,5 +1,7 @@
 import { Effect } from "effect"
 
+import { assemble } from "../assembly/index.js"
+import { invoke, prepare } from "../generation/index.js"
 import {
   ApplicationFiles,
   compilePlannedRun,
@@ -7,16 +9,36 @@ import {
   type MediaInspectorService,
   type PlanningIdentityService,
 } from "../run-contract/index.js"
+import {
+  readEvidence,
+  record,
+  reserve,
+  type RunRecordView,
+} from "../run-record/index.js"
+import { verify } from "../verification/index.js"
 import type {
+  AdvanceCommand,
+  AdvanceDecision,
   NormalView,
   PlanCommand,
   PlanDecision,
 } from "./types.js"
 import { PROJECT_CONTRACT_PATH, TOOL_LOCK_PATH } from "./types.js"
+import { ConductorError, type ConductorErrorCode } from "./errors.js"
 import type {
   PlanningRefusal,
   PlanningRefusalCode,
 } from "./errors.js"
+
+const namedCause = (error: unknown): string | undefined =>
+  error !== null && typeof error === "object" && "code" in error && typeof error.code === "string"
+    ? error.code
+    : undefined
+
+const asConductorError = (
+  code: ConductorErrorCode,
+  message: string,
+) => (error: unknown): ConductorError => new ConductorError(code, message, namedCause(error))
 
 const spendRisk = "Planning made no provider request, created no attempt, and spent $0. A later advance may spend up to the locked ceiling."
 
@@ -185,3 +207,253 @@ export const planObjective = (
     }),
   )
 }
+
+const humanDecision = (view: RunRecordView): AdvanceDecision => ({
+  _tag: "HumanDecisionRequired",
+  runId: view.runId,
+  decision: {
+    kind: "donor-choice",
+    candidateSha256s: view.donorCandidateSha256s ?? [],
+  },
+  normalView: {
+    objective: "Choose which generated donor should supply pixels inside the declared Assembly region.",
+    evidence: "Generation evidence is durable, but the raw output is only a donor and cannot be the final candidate.",
+    nextAction: "Inspect the persisted donor candidates and advance this same Run with one selected SHA-256.",
+    spendRisk: "The one planned provider request may already be spent; this Run will never submit it again.",
+    humanDecision: "A human must choose one persisted donor before deterministic Assembly can continue.",
+  },
+  diagnostics: view,
+})
+
+const verifiedDecision = (view: RunRecordView): AdvanceDecision => {
+  return {
+    _tag: "VerifiedCandidate",
+    runId: view.runId,
+    candidate: {
+      applicationPath: "outputs/assembled.rgba.json",
+      sha256: view.assemblyOutputSha256!,
+    },
+    normalView: {
+      objective: "Produce one reference-preserving Qwen edit through deterministic Assembly.",
+      evidence: "Assembly and all ordered Fidelity Checks passed against the hash-locked baseline and selected donor.",
+      nextAction: "Review the assembled candidate visually; do not substitute the raw generated donor.",
+      spendRisk: "No further provider request is allowed on this Run.",
+      humanDecision: "Subjective final visual approval remains with the human owner.",
+    },
+    diagnostics: view,
+  }
+}
+
+export const advanceRun = (
+  command: AdvanceCommand,
+): Effect.Effect<AdvanceDecision, ConductorError, ApplicationFilesService | import("../generation/index.js").GenerationAdapterService | import("../run-record/index.js").RunRecordStoreService | import("../run-record/index.js").RunRecordClockService> =>
+  Effect.gen(function*() {
+    const request = command.run.request
+    if (request.mode !== "qwen-image" || request.assemblyPlan?.required !== true) {
+      return yield* Effect.fail(new ConductorError(
+        "ADVANCE_REQUIRES_QWEN_ASSEMBLY",
+        "This advance path requires a Qwen Image Planned Run with mandatory Assembly.",
+      ))
+    }
+
+    const files = yield* ApplicationFiles
+    const references = yield* Effect.forEach(request.references, (reference) =>
+      files.read(reference.applicationPath).pipe(
+        Effect.map((snapshot) => ({
+          slot: reference.slot,
+          applicationPath: reference.applicationPath,
+          sha256: reference.sha256,
+          payloadDestination: reference.payloadDestination,
+          mediaType: reference.kind === "video" ? "video/mp4" as const : "image/png" as const,
+          bytes: snapshot.bytes,
+        })),
+        Effect.mapError(asConductorError(
+          "REFERENCE_EVIDENCE_UNAVAILABLE",
+          `The locked reference ${reference.applicationPath} could not be read.`,
+        )),
+      ),
+    )
+    const prepared = yield* prepare(request, references).pipe(
+      Effect.mapError(asConductorError(
+        "REFERENCE_EVIDENCE_UNAVAILABLE",
+        "The exact Generation reference payload could not be prepared.",
+      )),
+    )
+    let current = yield* reserve({
+      plannedRun: command.run,
+      payloadSha256: prepared.payloadSha256,
+    }).pipe(Effect.mapError(asConductorError(
+      "RUN_RECORD_FAILURE",
+      "The immutable Planned Run could not be reserved or reloaded.",
+    )))
+
+    if (current.phase === "reserved") {
+      const marked = yield* record({
+        _tag: "SubmissionMayHaveStarted",
+        runId: current.runId,
+        operationId: "conductor-submit-once",
+      }).pipe(Effect.mapError(asConductorError(
+        "RUN_RECORD_FAILURE",
+        "The durable submission marker could not be recorded.",
+      )))
+      if (marked._tag !== "SubmissionPermitIssued") {
+        return yield* Effect.fail(new ConductorError(
+          "RUN_STATE_UNSUPPORTED",
+          "The Run did not issue its one in-process Submission Permit.",
+        ))
+      }
+      const generated = yield* invoke(prepared, marked.permit).pipe(
+        Effect.mapError(asConductorError(
+          "GENERATION_FAILURE",
+          "The one permitted Generation invocation did not return trustworthy normalized evidence.",
+        )),
+      )
+      const provider = yield* record({
+        _tag: "CommitProviderEvidence",
+        runId: current.runId,
+        operationId: "conductor-provider-evidence",
+        evidence: generated.providerEvidence,
+      }).pipe(Effect.mapError(asConductorError(
+        "RUN_RECORD_FAILURE",
+        "Normalized provider evidence could not be persisted.",
+      )))
+      current = provider.view
+      for (const [index, output] of generated.outputs.entries()) {
+        const persisted = yield* record({
+          _tag: "CommitGeneratedOutput",
+          runId: current.runId,
+          operationId: `conductor-generated-output-${index + 1}`,
+          output: {
+            ...output,
+            applicationPath: output.applicationPath as `outputs/${string}`,
+          },
+        }).pipe(Effect.mapError(asConductorError(
+          "RUN_RECORD_FAILURE",
+          "Normalized generated output evidence could not be persisted.",
+        )))
+        current = persisted.view
+      }
+      const opened = yield* record({
+        _tag: "OpenDonorChoice",
+        runId: current.runId,
+        operationId: "conductor-open-donor-choice",
+        candidateSha256s: generated.outputs.map((output) => output.sha256),
+      }).pipe(Effect.mapError(asConductorError(
+        "RUN_RECORD_FAILURE",
+        "The donor-choice checkpoint could not be persisted.",
+      )))
+      current = opened.view
+    }
+
+    if (current.phase === "verified_candidate") return verifiedDecision(current)
+    if (current.phase === "awaiting_donor_choice" && command.selectedDonorSha256 === undefined) {
+      return humanDecision(current)
+    }
+    if (current.phase === "awaiting_donor_choice") {
+      if (!current.donorCandidateSha256s?.includes(command.selectedDonorSha256!)) {
+        return yield* Effect.fail(new ConductorError(
+          "DONOR_DECISION_INVALID",
+          "The selected SHA-256 must name one persisted candidate in this Run's donor checkpoint.",
+        ))
+      }
+      const selected = yield* record({
+        _tag: "SelectDonor",
+        runId: current.runId,
+        operationId: "conductor-select-donor",
+        selectedSha256: command.selectedDonorSha256!,
+      }).pipe(Effect.mapError(asConductorError(
+        "DONOR_DECISION_INVALID",
+        "The donor decision could not be recorded on this Run.",
+      )))
+      current = selected.view
+    }
+
+    if (current.phase !== "donor_selected" && current.phase !== "assembly_completed") {
+      return yield* Effect.fail(new ConductorError(
+        "RUN_STATE_UNSUPPORTED",
+        `The Run is in ${current.phase}; it cannot be submitted again or advanced without reconciliation.`,
+      ))
+    }
+    if (
+      command.selectedDonorSha256 !== undefined &&
+      current.selectedDonorSha256 !== command.selectedDonorSha256
+    ) {
+      return yield* Effect.fail(new ConductorError(
+        "DONOR_DECISION_INVALID",
+        "The supplied donor SHA-256 disagrees with the immutable selection already recorded on this Run.",
+      ))
+    }
+
+    const baselineReference = request.references.find(
+      (reference) => reference.slot === request.assemblyPlan!.baselineReferenceSlot,
+    )!
+    const baseline = references.find((reference) => reference.slot === baselineReference.slot)!
+    const donorEvidence = current.evidence.find((evidence) =>
+      evidence.applicationPath.startsWith("outputs/") && evidence.sha256 === current.selectedDonorSha256)
+    if (donorEvidence === undefined || current.selectedDonorSha256 === undefined) {
+      return yield* Effect.fail(new ConductorError(
+        "DONOR_DECISION_INVALID",
+        "The selected donor has no verified persisted evidence on this Run.",
+      ))
+    }
+    const selectedDonorSha256 = current.selectedDonorSha256
+    const donorBytes = yield* readEvidence(current.runId, donorEvidence.applicationPath).pipe(
+      Effect.mapError(asConductorError(
+        "RUN_RECORD_FAILURE",
+        "The selected donor evidence could not be verified and read.",
+      )),
+    )
+
+    if (current.phase === "donor_selected") {
+      const assembled = yield* assemble({
+        baseline: { body: baseline.bytes, sha256: baseline.sha256 },
+        donor: { body: donorBytes, sha256: selectedDonorSha256 },
+        ownedRegion: request.assemblyPlan.ownedRegion,
+        exactCopy: request.assemblyPlan.exactCopy,
+      }).pipe(Effect.mapError(asConductorError(
+        "ASSEMBLY_FAILURE",
+        "Hash-locked deterministic Assembly failed.",
+      )))
+      const persisted = yield* record({
+        _tag: "CommitAssembly",
+        runId: current.runId,
+        operationId: "conductor-commit-assembly",
+        output: assembled.output,
+        report: assembled.report,
+      }).pipe(Effect.mapError(asConductorError(
+        "RUN_RECORD_FAILURE",
+        "The Assembly output and report could not be persisted.",
+      )))
+      current = persisted.view
+    }
+
+    const candidateBytes = yield* readEvidence(current.runId, "outputs/assembled.rgba.json").pipe(
+      Effect.mapError(asConductorError(
+        "RUN_RECORD_FAILURE",
+        "The assembled candidate evidence could not be verified and read.",
+      )),
+    )
+    const checked = yield* verify({
+      baseline: { body: baseline.bytes, sha256: baseline.sha256 },
+      donor: { body: donorBytes, sha256: selectedDonorSha256 },
+      candidate: { body: candidateBytes, sha256: current.assemblyOutputSha256! },
+      ownedRegion: request.assemblyPlan.ownedRegion,
+      assemblyRequired: true,
+      candidateKind: "assembled",
+    }).pipe(Effect.mapError(asConductorError(
+      "VERIFICATION_FAILURE",
+      "The assembled candidate did not pass the ordered Fidelity Checks.",
+    )))
+    const committed = yield* record({
+      _tag: "CommitChecks",
+      runId: current.runId,
+      operationId: "conductor-commit-checks",
+      candidateSha256: checked.candidateSha256,
+      classification: checked.classification,
+      checks: checked.checks,
+    }).pipe(Effect.mapError(asConductorError(
+      "RUN_RECORD_FAILURE",
+      "The ordered Fidelity Check evidence could not be persisted.",
+    )))
+    return verifiedDecision(committed.view)
+  })

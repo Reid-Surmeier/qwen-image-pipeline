@@ -4,6 +4,7 @@ import test from "node:test"
 import { Effect } from "effect"
 
 import {
+  advance,
   ApplicationFiles,
   MediaInspector,
   PROJECT_CONTRACT_PATH,
@@ -13,7 +14,19 @@ import {
   plan,
   type PlanDecision,
 } from "./index.js"
+import {
+  GenerationAdapter,
+  type GenerationAdapterService,
+} from "../generation/index.js"
+import type { PlannedRun } from "../run-contract/index.js"
+import {
+  RunRecordClock,
+  makeMemoryRunRecordHarness,
+  readEvidence,
+  type RunRecordClockService,
+} from "../run-record/index.js"
 import { makeFixture } from "../../tests/control-plane-fixture.js"
+import { createHash } from "node:crypto"
 
 const execute = async (
   mode: "qwen-image" | "seedance-video",
@@ -117,4 +130,168 @@ test("a secret-bearing objective is refused without echoing secret material", as
     assert.doesNotMatch(JSON.stringify(result.normalView), new RegExp(secret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
     assert.match(result.normalView.objective, /could not be read safely/i)
   }
+})
+
+const hash = (value: Uint8Array | string): string =>
+  createHash("sha256").update(value).digest("hex")
+
+const rgba = (pixels: ReadonlyArray<number>): Uint8Array =>
+  Buffer.from(JSON.stringify({ height: 2, pixels, width: 2 }), "utf8")
+
+const canonical = (value: unknown): string => {
+  if (value === null || typeof value !== "object") return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`
+  const record = value as Record<string, unknown>
+  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonical(record[key])}`).join(",")}}`
+}
+
+test("advances one Qwen Assembly Run through a genuine donor choice to verified evidence", async () => {
+  const baseline = rgba([
+    10, 10, 10, 255, 20, 20, 20, 255,
+    30, 30, 30, 255, 40, 40, 40, 255,
+  ])
+  const donor = rgba([
+    90, 90, 90, 255, 80, 80, 80, 255,
+    70, 70, 70, 255, 60, 60, 60, 255,
+  ])
+  const exactCopyCore = { x: 1, y: 0, rgba: [80, 80, 80, 255] as const }
+  const fixture = makeFixture("qwen-image")
+  const plannedDecision = await Effect.runPromise(
+    plan({ objectivePath: fixture.objectivePath }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(MediaInspector, byteMediaInspector),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+    ),
+  )
+  assert.equal(plannedDecision._tag, "Planned")
+  if (plannedDecision._tag !== "Planned") return
+  const request = {
+    ...plannedDecision.run.request,
+    assemblyPlan: {
+      required: true as const,
+      baselineReferenceSlot: "source",
+      ownedRegion: { x: 1, y: 0, width: 1, height: 2 },
+      exactCopy: [{
+        ...exactCopyCore,
+        sha256: hash(JSON.stringify(exactCopyCore)),
+      }],
+    },
+    references: plannedDecision.run.request.references.map((reference) => ({
+      ...reference,
+      sha256: hash(baseline),
+      byteLength: baseline.byteLength,
+      inspectedMedia: { width: 2, height: 2 },
+    })),
+  }
+  const canonicalRequest = canonical(request)
+  const plannedRun: PlannedRun = {
+    state: "planned",
+    request,
+    canonicalRequest,
+    requestSha256: hash(canonicalRequest),
+  }
+  const applicationFiles = {
+    read: (applicationPath: string) => applicationPath === "references/neutral.png"
+      ? Effect.succeed({ applicationPath, bytes: baseline })
+      : fixture.files.read(applicationPath),
+  }
+
+  const providerBody = Buffer.from('{"request_id":"fake-qwen-1","status":"succeeded"}', "utf8")
+  let adapterCalls = 0
+  const adapter: GenerationAdapterService = {
+    invoke: (prepared) => Effect.sync(() => {
+      adapterCalls += 1
+      const destination = (
+        prepared.payload.input_references as ReadonlyArray<{
+          image_url: { url: { applicationPath: string; bytesBase64: string; sha256: string } }
+        }>
+      )[0]!.image_url.url
+      assert.equal(destination.applicationPath, "references/neutral.png")
+      assert.equal(destination.sha256, hash(baseline))
+      assert.deepEqual(Buffer.from(destination.bytesBase64, "base64"), Buffer.from(baseline))
+      return {
+        provider: "openrouter" as const,
+        model: prepared.request.model,
+        providerEvidence: {
+          mediaType: "application/json" as const,
+          body: providerBody,
+          sha256: hash(providerBody),
+        },
+        outputs: [{
+          applicationPath: "outputs/fake-donor.rgba.json" as const,
+          mediaType: "application/vnd.qwen.rgba+json" as const,
+          body: donor,
+          sha256: hash(donor),
+        }],
+      }
+    }),
+  }
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const clock: RunRecordClockService = {
+    now: () => Effect.succeed("2026-08-30T15:00:00.000Z"),
+  }
+  const executeAdvance = (selectedDonorSha256?: string) => Effect.runPromise(
+    advance({ run: plannedRun, ...(selectedDonorSha256 === undefined ? {} : { selectedDonorSha256 }) }).pipe(
+      Effect.provideService(ApplicationFiles, applicationFiles),
+      Effect.provideService(GenerationAdapter, adapter),
+      Effect.provide(memory.layer),
+      Effect.provideService(RunRecordClock, clock),
+    ),
+  )
+
+  const checkpoint = await executeAdvance()
+  assert.equal(checkpoint._tag, "HumanDecisionRequired")
+  if (checkpoint._tag !== "HumanDecisionRequired") return
+  assert.equal(adapterCalls, 1)
+  assert.equal(checkpoint.diagnostics.phase, "awaiting_donor_choice")
+  assert.equal(checkpoint.diagnostics.classification, undefined)
+  assert.deepEqual(checkpoint.decision.candidateSha256s, [hash(donor)])
+  assert.match(checkpoint.normalView.humanDecision, /choose.*donor/i)
+
+  const completed = await executeAdvance(hash(donor))
+  assert.equal(completed._tag, "VerifiedCandidate")
+  if (completed._tag !== "VerifiedCandidate") return
+  assert.equal(adapterCalls, 1)
+  assert.equal(completed.runId, checkpoint.runId)
+  assert.equal(completed.diagnostics.runId, checkpoint.diagnostics.runId)
+  assert.equal(completed.diagnostics.selectedDonorSha256, hash(donor))
+  assert.equal(completed.diagnostics.phase, "verified_candidate")
+  assert.equal(completed.diagnostics.classification, "verified_candidate")
+  assert.notEqual(completed.candidate.sha256, hash(donor))
+  assert.deepEqual(
+    completed.diagnostics.evidence.map((item) => item.applicationPath),
+    [
+      "provider-response.json",
+      "outputs/fake-donor.rgba.json",
+      "outputs/assembled.rgba.json",
+      "assembly-report.json",
+      "checks.json",
+    ],
+  )
+  const assembledBytes = await Effect.runPromise(
+    readEvidence(completed.runId, "outputs/assembled.rgba.json").pipe(Effect.provide(memory.layer)),
+  )
+  assert.deepEqual(JSON.parse(Buffer.from(assembledBytes).toString("utf8")), {
+    height: 2,
+    pixels: [
+      10, 10, 10, 255, 80, 80, 80, 255,
+      30, 30, 30, 255, 60, 60, 60, 255,
+    ],
+    width: 2,
+  })
+  const checksBytes = await Effect.runPromise(
+    readEvidence(completed.runId, "checks.json").pipe(Effect.provide(memory.layer)),
+  )
+  assert.deepEqual(JSON.parse(Buffer.from(checksBytes).toString("utf8")), {
+    candidateSha256: completed.candidate.sha256,
+    checks: [
+      { measured: 0, name: "integrity", passed: true },
+      { measured: 0, name: "media", passed: true },
+      { measured: 0, name: "outside-region-preservation", passed: true },
+      { measured: 0, name: "donor-equality-inside-region", passed: true },
+    ],
+    classification: "verified-candidate",
+  })
+  assert.match(completed.normalView.evidence, /Assembly.*checks/i)
+  assert.match(completed.normalView.humanDecision, /visual approval/i)
 })

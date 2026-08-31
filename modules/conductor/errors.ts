@@ -25,3 +25,25 @@ export type PlanningRefusal = Readonly<{
   code: PlanningRefusalCode
   message: string
 }>
+
+export type ConductorErrorCode =
+  | "ADVANCE_REQUIRES_QWEN_ASSEMBLY"
+  | "REFERENCE_EVIDENCE_UNAVAILABLE"
+  | "RUN_RECORD_FAILURE"
+  | "GENERATION_FAILURE"
+  | "DONOR_DECISION_INVALID"
+  | "ASSEMBLY_FAILURE"
+  | "VERIFICATION_FAILURE"
+  | "RUN_STATE_UNSUPPORTED"
+
+export class ConductorError extends Error {
+  readonly code: ConductorErrorCode
+  readonly causeCode: string | undefined
+
+  constructor(code: ConductorErrorCode, message: string, causeCode?: string) {
+    super(message)
+    this.name = "ConductorError"
+    this.code = code
+    this.causeCode = causeCode
+  }
+}
