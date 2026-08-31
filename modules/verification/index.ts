@@ -10,5 +10,6 @@ export const verify: (input: VerificationInput) => Effect.Effect<VerificationRes
 export const inspectVerificationFailure = (
   error: unknown,
 ): Effect.Effect<VerificationFailureEvidence | undefined> => Effect.sync(() => inspectVerificationFailureSync(error))
-export type { VerificationError, VerificationErrorCode, VerificationFailureEvidence } from "./errors.js"
+export { VerificationError } from "./errors.js"
+export type { VerificationErrorCode, VerificationFailureEvidence } from "./errors.js"
 export type { VerificationInput, VerificationResult } from "./types.js"

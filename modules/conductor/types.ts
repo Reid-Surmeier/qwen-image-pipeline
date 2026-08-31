@@ -1,5 +1,5 @@
 import type { PlannedRun } from "../run-contract/index.js"
-import type { RunRecordDiagnostics } from "../run-record/index.js"
+import type { RunRecordDiagnostics, RunRecordView } from "../run-record/index.js"
 import type { PlanningRefusal } from "./errors.js"
 
 export const PROJECT_CONTRACT_PATH = ".qwen-pipeline/project-contract.json"
@@ -89,6 +89,18 @@ export type AdvanceDecision =
       finding: OutcomeFinding
       normalView: NormalView
       diagnostics: RunRecordDiagnostics
+    }>
+  | Readonly<{
+      _tag: "PersistenceInterrupted"
+      outcome: "blocked"
+      runId: string
+      finding: OutcomeFinding
+      spendState: "possibly_spent" | "unknown"
+      retryState: "reconcile-only"
+      recovery: "reconcile"
+      causeRecovery?: "reload" | "reconcile" | "new-linked-run" | "repair-evidence"
+      lastDurableView: RunRecordView
+      normalView: NormalView
     }>
   | Readonly<{
       _tag: "Failed"

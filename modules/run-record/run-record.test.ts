@@ -1997,6 +1997,28 @@ test("definitive unspent failures permit only bounded, material correction Runs"
   ))
   assert.equal(exhaustedError.code, "CORRECTION_LIMIT_EXHAUSTED")
 
+  await Effect.runPromise(memory.mutate(failedSecond.runId, (stored) => {
+    const events = Buffer.from(stored.events).toString("utf8").trimEnd().split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+    const genesis = events[0]!
+    ;(genesis.payload as Record<string, unknown>).correctionDepth = 0
+    for (const [index, event] of events.entries()) {
+      event.previousEventSha256 = index === 0 ? null : events[index - 1]!.eventSha256
+      const { eventSha256: _discarded, ...withoutDigest } = event
+      event.eventSha256 = createHash("sha256").update(canonicalJson(withoutDigest)).digest("hex")
+    }
+    stored.events = Buffer.from(`${events.map((event) => canonicalJson(event)).join("\n")}\n`)
+    delete stored.state
+  }))
+  await assert.rejects(
+    Effect.runPromise(load(failedSecond.runId).pipe(Effect.provide(memory.layer))),
+    (error: unknown) => error instanceof RunRecordError && error.code === "REQUEST_TAMPERED",
+  )
+  const ancestryBypass = await Effect.runPromise(Effect.flip(
+    provide(reserve(reservationFor(exhausted))),
+  ))
+  assert.equal(ancestryBypass.code, "REQUEST_TAMPERED")
+
   const sibling = await plannedRun(linkOne, 1, "A sibling correction must not bypass the lineage ceiling.")
   const siblingError = await Effect.runPromise(Effect.flip(
     provide(reserve(reservationFor(sibling))),
@@ -2103,6 +2125,49 @@ test("derives one honest unreconciled-submission finding and refuses caller-auth
       retryState: "reconcile-only",
       spendState: "possibly_spent",
     })
+
+    await Effect.runPromise(memory.mutate(reserved.runId, (stored) => {
+      const forged = JSON.parse(Buffer.from(stored.evidence["failure.json"]!).toString("utf8")) as {
+        evidence: { failureProof: unknown }
+      }
+      forged.evidence.failureProof = { module: "Fabricated", observation: "invented" }
+      const forgedBytes = Buffer.from(canonicalJson(forged))
+      const forgedSha256 = createHash("sha256").update(forgedBytes).digest("hex")
+      const events = Buffer.from(stored.events).toString("utf8").trimEnd().split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>)
+      const intentIndex = events.findIndex((event) => event.kind === "classified_outcome_intent")
+      const receiptIndex = events.findIndex((event) => event.kind === "classified_outcome")
+      for (const index of [intentIndex, receiptIndex]) {
+        const payload = events[index]!.payload as Record<string, unknown>
+        payload.sha256 = forgedSha256
+        payload.byteLength = forgedBytes.byteLength
+      }
+      for (let index = intentIndex; index < events.length; index += 1) {
+        const event = events[index]!
+        event.previousEventSha256 = events[index - 1]!.eventSha256
+        const { eventSha256: _discarded, ...withoutDigest } = event
+        event.eventSha256 = createHash("sha256").update(canonicalJson(withoutDigest)).digest("hex")
+      }
+      stored.evidence["failure.json"] = forgedBytes
+      stored.events = Buffer.from(`${events.map((event) => canonicalJson(event)).join("\n")}\n`)
+      delete stored.state
+    }))
+    await assert.rejects(
+      Effect.runPromise(load(reserved.runId).pipe(Effect.provide(memory.layer))),
+      (error: unknown) => error instanceof RunRecordError && error.code === "EVIDENCE_HASH_MISMATCH",
+    )
+  }
+})
+
+test("keeps every frozen module error class available as a runtime interface value", async () => {
+  const interfaces = [
+    [await import("./index.js") as Record<string, unknown>, "RunRecordError"],
+    [await import("../assembly/index.js") as Record<string, unknown>, "AssemblyError"],
+    [await import("../verification/index.js") as Record<string, unknown>, "VerificationError"],
+    [await import("../video-verification/index.js") as Record<string, unknown>, "VideoVerificationError"],
+  ] as const
+  for (const [moduleInterface, errorName] of interfaces) {
+    assert.equal(typeof moduleInterface[errorName], "function", errorName)
   }
 })
 

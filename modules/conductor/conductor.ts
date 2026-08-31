@@ -16,6 +16,7 @@ import {
   reserve,
   type ClassifiedFailureInput,
   type RunRecordDiagnostics,
+  type RunRecordView,
   type SubmissionPermit,
 } from "../run-record/index.js"
 import { verify } from "../verification/index.js"
@@ -478,10 +479,53 @@ const classifyGenerationFailure = (
 const persistWithReconciliation = <Success, Error, Requirements>(
   operation: Effect.Effect<Success, Error, Requirements>,
   message: string,
-): Effect.Effect<Success, ConductorError, Requirements> =>
+  objective: string,
+  lastDurableView: RunRecordView,
+): Effect.Effect<
+  Readonly<{ _tag: "Persisted"; value: Success }> |
+    Extract<AdvanceDecision, { _tag: "PersistenceInterrupted" }>,
+  never,
+  Requirements
+> =>
   operation.pipe(
     Effect.catchEager(() => operation),
-    Effect.mapError(asConductorError("RUN_RECORD_FAILURE", message)),
+    Effect.match({
+      onFailure: (error) => {
+        const namedRecovery = error !== null && typeof error === "object" && "recovery" in error
+          ? error.recovery
+          : undefined
+        const causeRecovery = namedRecovery === "reload" || namedRecovery === "reconcile" ||
+          namedRecovery === "new-linked-run" || namedRecovery === "repair-evidence"
+          ? namedRecovery
+          : undefined
+        const spendState = lastDurableView.spendState === "possibly_spent" ? "possibly_spent" : "unknown"
+        return {
+          _tag: "PersistenceInterrupted" as const,
+          outcome: "blocked" as const,
+          runId: lastDurableView.runId,
+          finding: {
+            code: "persistence_interrupted",
+            message,
+            correctionOwner: "Generation" as const,
+          },
+          spendState,
+          retryState: "reconcile-only" as const,
+          recovery: "reconcile" as const,
+          ...(causeRecovery === undefined ? {} : { causeRecovery }),
+          lastDurableView,
+          normalView: {
+            objective,
+            evidence: `${message} The last verified durable phase is ${lastDurableView.phase}.`,
+            nextAction: "Repair or reload application-owned Run storage, then reconcile this exact Run; do not submit or poll again yet.",
+            spendRisk: spendState === "possibly_spent"
+              ? "The provider action may be spent; this Run cannot authorize another submission."
+              : "Provider spend is unknown; this Run cannot authorize another submission.",
+            humanDecision: "No subjective Approval is requested; Generation owns evidence reconciliation after storage is restored.",
+          },
+        }
+      },
+      onSuccess: (value) => ({ _tag: "Persisted" as const, value }),
+    }),
   )
 
 const advanceSeedanceRun = (
@@ -573,12 +617,14 @@ const advanceSeedanceRun = (
         return yield* classifyGenerationFailure(current.runId, request.objective, submissionAttempt.error, marked.permit)
       }
       const submitted = submissionAttempt.value
-      const persisted = yield* persistWithReconciliation(record({
+      const persistence = yield* persistWithReconciliation(record({
         _tag: "CommitProviderEvidence",
         runId: current.runId,
         operationId: "conductor-seedance-submission-evidence",
         evidence: submitted.providerEvidence,
-      }), "The submitted Seedance job receipt could not be reconciled after a local persistence interruption.")
+      }), "The submitted Seedance job receipt could not be reconciled after a local persistence interruption.", request.objective, marked.view)
+      if (persistence._tag === "PersistenceInterrupted") return persistence
+      const persisted = persistence.value
       const diagnostics = yield* readDiagnostics(persisted.view.runId).pipe(Effect.mapError(asConductorError(
         "RUN_RECORD_FAILURE",
         "The submitted Seedance job diagnostics could not be replayed.",
@@ -618,7 +664,7 @@ const advanceSeedanceRun = (
         return yield* classifyGenerationFailure(current.runId, request.objective, pollAttempt.error)
       }
       const polled = pollAttempt.value
-      const persisted = yield* persistWithReconciliation(record(polled.status === "pending"
+      const persistence = yield* persistWithReconciliation(record(polled.status === "pending"
         ? {
             _tag: "CommitSeedancePoll" as const,
             runId: current.runId,
@@ -637,7 +683,9 @@ const advanceSeedanceRun = (
             outputs: polled.outputs,
             completedCount: polled.completedCount,
             cost: polled.cost,
-          }), "The Seedance poll receipt could not be reconciled after a local persistence interruption.")
+          }), "The Seedance poll receipt could not be reconciled after a local persistence interruption.", request.objective, current)
+      if (persistence._tag === "PersistenceInterrupted") return persistence
+      const persisted = persistence.value
       current = persisted.view
       if (polled.status === "pending" || current.phase === "provider_evidence_received") {
         const diagnostics = yield* readDiagnostics(current.runId).pipe(Effect.mapError(asConductorError(
@@ -809,12 +857,14 @@ export const advanceRun = (
         return yield* classifyGenerationFailure(current.runId, request.objective, generationAttempt.error, marked.permit)
       }
       generated = generationAttempt.value
-      const provider = yield* persistWithReconciliation(record({
+      const persistence = yield* persistWithReconciliation(record({
         _tag: "CommitProviderEvidence",
         runId: current.runId,
         operationId: "conductor-provider-evidence",
         evidence: generated.providerEvidence,
-      }), "The Qwen provider receipt could not be reconciled after a local persistence interruption.")
+      }), "The Qwen provider receipt could not be reconciled after a local persistence interruption.", request.objective, marked.view)
+      if (persistence._tag === "PersistenceInterrupted") return persistence
+      const provider = persistence.value
       current = provider.view
     }
 

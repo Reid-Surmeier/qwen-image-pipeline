@@ -37,7 +37,8 @@ export { fileRunRecordLayer, makeFileRunRecordHarness } from "./file-store.js"
 export type { FileRunRecordFault, FileRunRecordHarness } from "./file-store.js"
 export { makeMemoryRunRecordHarness } from "./memory-store.js"
 export type { MemoryRunRecordHarness } from "./memory-store.js"
-export type { RunRecordError, RunRecordErrorCode } from "./errors.js"
+export { RunRecordError } from "./errors.js"
+export type { RunRecordErrorCode } from "./errors.js"
 export { RunRecordClock } from "./types.js"
 export type {
   ProviderEvidenceInput,

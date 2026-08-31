@@ -10,5 +10,6 @@ export const assemble: (input: AssemblyInput) => Effect.Effect<AssemblyResult, A
 export const inspectAssemblyFailure = (
   error: unknown,
 ): Effect.Effect<AssemblyFailureEvidence | undefined> => Effect.sync(() => inspectAssemblyFailureSync(error))
-export type { AssemblyError, AssemblyErrorCode, AssemblyFailureEvidence } from "./errors.js"
+export { AssemblyError } from "./errors.js"
+export type { AssemblyErrorCode, AssemblyFailureEvidence } from "./errors.js"
 export type { AssemblyInput, AssemblyResult, ExactCopyPixel, OwnedRegion, RasterEvidence } from "./types.js"

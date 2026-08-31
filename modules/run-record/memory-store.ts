@@ -10,7 +10,7 @@ import type {
 
 export type MemoryRunRecordHarness = Readonly<{
   layer: Layer.Layer<RunRecordStoreService>
-  failNext: (operation: StoreOperation) => Effect.Effect<void>
+  failNext: (operation: StoreOperation, count?: number) => Effect.Effect<void>
   mutate: (runId: string, mutation: (record: {
     request: Uint8Array
     events: Uint8Array
@@ -26,11 +26,12 @@ export const makeMemoryRunRecordHarness = (): Effect.Effect<MemoryRunRecordHarne
     state?: Uint8Array
     evidence: Record<string, Uint8Array>
   }>()
-  let failing: StoreOperation | undefined
+  let failing: Readonly<{ operation: StoreOperation; remaining: number }> | undefined
 
   const check = (operation: StoreOperation): Effect.Effect<void, RunRecordError> => {
-    if (failing !== operation) return Effect.void
-    failing = undefined
+    if (failing?.operation !== operation) return Effect.void
+    const remaining = failing.remaining - 1
+    failing = remaining === 0 ? undefined : { operation, remaining }
     return Effect.fail(new RunRecordError("DURABILITY_FAILURE", `${operation} was interrupted.`))
   }
 
@@ -118,7 +119,10 @@ export const makeMemoryRunRecordHarness = (): Effect.Effect<MemoryRunRecordHarne
 
   return {
     layer: Layer.succeed(RunRecordStore, service),
-    failNext: (operation) => Effect.sync(() => { failing = operation }),
+    failNext: (operation, count = 1) => Effect.sync(() => {
+      if (!Number.isSafeInteger(count) || count < 1) throw new Error("Failure count must be a positive safe integer.")
+      failing = { operation, remaining: count }
+    }),
     mutate: (runId, mutation) => Effect.try({
       try: () => mutation(get(runId)),
       catch: (error) => error instanceof RunRecordError

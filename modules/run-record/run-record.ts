@@ -400,6 +400,98 @@ const isNormalizedRgbaEvidence = (body: Uint8Array): boolean => {
   }
 }
 
+type ClassifiedFailureProofContext = Readonly<{
+  phase: RunRecordView["phase"]
+  runRequest: CanonicalRunRequest
+  evidence: RunRecordView["evidence"]
+  selectedDonorSha256?: string
+  assemblyOutputSha256?: string
+  completedCount?: number
+  costState?: "actual" | "estimated-only" | "unknown"
+  actualCostUsd?: string
+}>
+
+const jsonRecord = (value: unknown): Readonly<Record<string, JsonValue>> | undefined =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Readonly<Record<string, JsonValue>>
+    : undefined
+
+const exactJsonKeys = (value: Readonly<Record<string, JsonValue>>, keys: ReadonlyArray<string>): boolean =>
+  Object.keys(value).sort().join(",") === [...keys].sort().join(",")
+
+const classifiedFailureProofMatches = (
+  failureClass: ClassifiedFailureClass,
+  proofValue: unknown,
+  context: ClassifiedFailureProofContext,
+): boolean => {
+  const proof = jsonRecord(proofValue)
+  if (proof === undefined) return false
+  if (failureClass === "submission_unreconciled") {
+    return exactJsonKeys(proof, ["module", "observation"]) &&
+      proof.module === "Run Record" && proof.observation === "submission result remains unreconciled" &&
+      (
+        context.phase === "submission_may_have_started" ||
+        context.phase === "provider_evidence_received" ||
+        (
+          context.runRequest.mode === "qwen-image" && context.phase === "generated_outputs_received" &&
+          context.evidence.filter((item) => item.applicationPath.startsWith("outputs/")).length < context.runRequest.requestedCount
+        )
+      )
+  }
+  const assemblyPlan = context.runRequest.assemblyPlan
+  const baselineSha256 = assemblyPlan === undefined
+    ? undefined
+    : context.runRequest.references.find((reference) => reference.slot === assemblyPlan.baselineReferenceSlot)?.sha256
+  const regionSha256 = assemblyPlan === undefined ? undefined : sha256(JSON.stringify(assemblyPlan.ownedRegion))
+  const exactCopySha256 = assemblyPlan === undefined
+    ? undefined
+    : sha256(JSON.stringify(assemblyPlan.exactCopy.map((copy) => copy.sha256)))
+  if (failureClass === "assembly_failure") {
+    return context.phase === "donor_selected" &&
+      exactJsonKeys(proof, ["module", "errorCode", "baselineSha256", "donorSha256", "regionSha256", "exactCopySha256"]) &&
+      proof.module === "Assembly" &&
+      ["ASSEMBLY_INPUT_HASH_MISMATCH", "RASTER_INVALID", "OWNED_REGION_INVALID", "EXACT_COPY_HASH_MISMATCH"].includes(String(proof.errorCode)) &&
+      proof.baselineSha256 === baselineSha256 && proof.donorSha256 === context.selectedDonorSha256 &&
+      proof.regionSha256 === regionSha256 && proof.exactCopySha256 === exactCopySha256
+  }
+  if (proof.module === "Verification") {
+    const completedChecks = proof.completedChecks
+    const completed = Array.isArray(completedChecks) ? completedChecks : undefined
+    const expectedCompleted = proof.errorCode === "INTEGRITY_CHECK_FAILED"
+      ? [[]]
+      : proof.errorCode === "MEDIA_CHECK_FAILED"
+        ? [["integrity"], ["integrity", "media"]]
+        : [["integrity", "media"]]
+    return context.phase === "assembly_completed" &&
+      exactJsonKeys(proof, ["module", "errorCode", "completedChecks", "baselineSha256", "donorSha256", "candidateSha256", "regionSha256", "exactCopySha256"]) &&
+      ["INTEGRITY_CHECK_FAILED", "MEDIA_CHECK_FAILED", "ASSEMBLY_REQUIRED", "FIDELITY_CHECK_FAILED"].includes(String(proof.errorCode)) &&
+      completed !== undefined && expectedCompleted.some((candidate) => canonicalJson(candidate) === canonicalJson(completed as JsonValue)) &&
+      proof.baselineSha256 === baselineSha256 && proof.donorSha256 === context.selectedDonorSha256 &&
+      proof.candidateSha256 === context.assemblyOutputSha256 && proof.regionSha256 === regionSha256 &&
+      proof.exactCopySha256 === exactCopySha256
+  }
+  if (proof.module !== "Video Verification") return false
+  const videoOutputs = context.evidence
+    .filter((item) => item.applicationPath.startsWith("outputs/") && item.mediaType === "video/mp4")
+    .map((item) => ({
+      applicationPath: item.applicationPath,
+      mediaType: item.mediaType,
+      sha256: item.sha256,
+    }))
+  const videoCost = {
+    state: context.costState ?? "unknown",
+    estimatedMaximumCostUsd: context.runRequest.estimatedMaximumCostUsd,
+    ...(context.actualCostUsd === undefined ? {} : { actualCostUsd: context.actualCostUsd }),
+  }
+  return context.phase === "generated_outputs_received" && context.runRequest.mode === "seedance-video" &&
+    exactJsonKeys(proof, ["module", "errorCode", "outputs", "requestedCount", "completedCount", "expected", "cost"]) &&
+    ["VIDEO_EVIDENCE_INVALID", "VIDEO_MEDIA_INVALID", "VIDEO_CHECK_FAILED", "OUTPUT_COUNT_MISMATCH"].includes(String(proof.errorCode)) &&
+    proof.requestedCount === context.runRequest.requestedCount && proof.completedCount === context.completedCount &&
+    canonicalJson(proof.outputs!) === canonicalJson(videoOutputs) &&
+    canonicalJson(proof.expected!) === canonicalJson(context.runRequest.videoPlan!.expectedMedia as unknown as JsonValue) &&
+    canonicalJson(proof.cost!) === canonicalJson(videoCost)
+}
+
 const recomputeChecks = (
   request: CanonicalRunRequest,
   baselineBytes: Uint8Array,
@@ -1520,6 +1612,16 @@ const replay = (
         Object.keys(failureEvidence).sort().join(",") !== "artifactSha256s,failureProof,requestSha256,stateEventSha256" ||
         failureEvidenceRecord.failureProof === null || typeof failureEvidenceRecord.failureProof !== "object" ||
         Array.isArray(failureEvidenceRecord.failureProof) ||
+        !classifiedFailureProofMatches(failureClass as ClassifiedFailureClass, failureEvidenceRecord.failureProof, {
+          phase,
+          runRequest,
+          evidence,
+          ...(selectedDonorSha256 === undefined ? {} : { selectedDonorSha256 }),
+          ...(assemblyOutputSha256 === undefined ? {} : { assemblyOutputSha256 }),
+          ...(completedCount === undefined ? {} : { completedCount }),
+          ...(costState === undefined ? {} : { costState }),
+          ...(actualCostUsd === undefined ? {} : { actualCostUsd }),
+        }) ||
         canonicalJson(failureEvidenceRecord.artifactSha256s!) !== canonicalJson(expectedArtifactSha256s) ||
         failureEvidenceRecord.requestSha256 !== base.requestSha256 ||
         failureEvidenceRecord.stateEventSha256 !== classifiedOutcomeIntent.previousEventSha256 ||
@@ -1632,6 +1734,66 @@ const assertDerivedViewConsistent = (
   }
   return derived
 }
+
+const validateCorrectionAncestry = (
+  store: RunRecordStoreService,
+  view: RunRecordView,
+  seen: ReadonlySet<string> = new Set(),
+): Effect.Effect<void, RunRecordError> => Effect.gen(function*() {
+  if (seen.has(view.runId)) {
+    return yield* Effect.fail(new RunRecordError(
+      "REQUEST_TAMPERED",
+      "The correction ancestry contains a cycle.",
+      "repair-evidence",
+    ))
+  }
+  if (view.linkedFrom === undefined) {
+    if (view.correctionDepth !== 0) {
+      return yield* Effect.fail(new RunRecordError(
+        "REQUEST_TAMPERED",
+        "An unlinked Run must have correction depth zero.",
+        "repair-evidence",
+      ))
+    }
+    return
+  }
+  const parentStored = yield* store.read(view.linkedFrom.parentRunId)
+  const parentEvents = yield* Effect.try({
+    try: () => parseEvents(parentStored.events),
+    catch: (error) => error instanceof RunRecordError
+      ? error
+      : new RunRecordError("EVENT_CHAIN_BROKEN", "The correction parent journal could not be decoded.", "repair-evidence"),
+  })
+  const parent = yield* Effect.try({
+    try: () => replay(view.linkedFrom!.parentRunId, parentStored.request, parentEvents, parentStored.evidence),
+    catch: (error) => error instanceof RunRecordError
+      ? error
+      : new RunRecordError("EVENT_CHAIN_BROKEN", "The correction parent journal could not be replayed.", "repair-evidence"),
+  })
+  yield* Effect.try({
+    try: () => assertDerivedViewConsistent(parentStored, parentEvents, parent),
+    catch: (error) => error instanceof RunRecordError
+      ? error
+      : new RunRecordError("DERIVED_VIEW_CONTRADICTION", "The correction parent view could not be verified.", "repair-evidence"),
+  })
+  const parentFailure = parentEvents.find((event) =>
+    event.eventSha256 === view.linkedFrom!.parentFailureEventSha256)
+  if (
+    parentFailure?.kind !== "definitive_pre_submit_failure" ||
+    parent.phase !== "definitive_pre_submit_failure" ||
+    parent.linkedCorrectionRunId !== view.runId ||
+    parent.linkedCorrectionRequestSha256 !== view.requestSha256 ||
+    view.correctionDepth !== parent.correctionDepth + 1 ||
+    view.maximumCorrectionRuns !== parent.maximumCorrectionRuns
+  ) {
+    return yield* Effect.fail(new RunRecordError(
+      "REQUEST_TAMPERED",
+      "The correction depth is not proven by the immutable parent lineage.",
+      "repair-evidence",
+    ))
+  }
+  yield* validateCorrectionAncestry(store, parent, new Set([...seen, view.runId]))
+})
 
 export const reserveRun = (
   input: ReserveRun,
@@ -2038,6 +2200,7 @@ export const recordOperation = (
       ? error
       : new RunRecordError("DERIVED_VIEW_CONTRADICTION", "The derived state view could not be read.", "repair-evidence"),
   })
+  yield* validateCorrectionAncestry(store, current)
   const runRequest = JSON.parse(Buffer.from(stored.request).toString("utf8")) as CanonicalRunRequest
   let stableProviderEvidence: ProviderEvidenceInput | undefined
   if (operation._tag === "CommitProviderEvidence" || operation._tag === "CommitSeedancePoll") {
@@ -2845,56 +3008,17 @@ export const recordOperation = (
   if (operation._tag === "ClassifyFailure" || operation._tag === "SubmissionUnreconciled") {
     const failure = stableClassifiedFailure!
     const policy = classifiedFailurePolicy(failure.class)
-    const assemblyPlan = runRequest.assemblyPlan
-    const baselineSha256 = assemblyPlan === undefined
-      ? undefined
-      : runRequest.references.find((reference) => reference.slot === assemblyPlan.baselineReferenceSlot)?.sha256
-    const regionSha256 = assemblyPlan === undefined ? undefined : sha256(JSON.stringify(assemblyPlan.ownedRegion))
-    const exactCopySha256 = assemblyPlan === undefined
-      ? undefined
-      : sha256(JSON.stringify(assemblyPlan.exactCopy.map((copy) => copy.sha256)))
     const proof = failure.proof
-    const assemblyProofAllowed = failure.class !== "assembly_failure" || (
-      current.phase === "donor_selected" && proof?.module === "Assembly" &&
-      proof.baselineSha256 === baselineSha256 && proof.donorSha256 === current.selectedDonorSha256 &&
-      proof.regionSha256 === regionSha256 && proof.exactCopySha256 === exactCopySha256
-    )
-    const rasterVerificationProofAllowed = failure.class !== "verification_failure" || proof?.module !== "Verification" || (
-      current.phase === "assembly_completed" && proof.baselineSha256 === baselineSha256 &&
-      proof.donorSha256 === current.selectedDonorSha256 && proof.candidateSha256 === current.assemblyOutputSha256 &&
-      proof.regionSha256 === regionSha256 && proof.exactCopySha256 === exactCopySha256
-    )
-    const videoOutputs = current.evidence
-      .filter((item) => item.applicationPath.startsWith("outputs/") && item.mediaType === "video/mp4")
-      .map((item) => ({
-        applicationPath: item.applicationPath,
-        mediaType: item.mediaType,
-        sha256: item.sha256,
-      }))
-    const videoExpected = runRequest.videoPlan?.expectedMedia
-    const videoCost = {
-      state: current.costState ?? "unknown",
-      estimatedMaximumCostUsd: runRequest.estimatedMaximumCostUsd,
+    if (!classifiedFailureProofMatches(failure.class, proof, {
+      phase: current.phase,
+      runRequest,
+      evidence: current.evidence,
+      ...(current.selectedDonorSha256 === undefined ? {} : { selectedDonorSha256: current.selectedDonorSha256 }),
+      ...(current.assemblyOutputSha256 === undefined ? {} : { assemblyOutputSha256: current.assemblyOutputSha256 }),
+      ...(current.completedCount === undefined ? {} : { completedCount: current.completedCount }),
+      ...(current.costState === undefined ? {} : { costState: current.costState }),
       ...(current.actualCostUsd === undefined ? {} : { actualCostUsd: current.actualCostUsd }),
-    }
-    const videoVerificationProofAllowed = failure.class !== "verification_failure" || proof?.module !== "Video Verification" || (
-      current.phase === "generated_outputs_received" && runRequest.mode === "seedance-video" &&
-      proof.requestedCount === runRequest.requestedCount && proof.completedCount === current.completedCount &&
-      canonicalJson(proof.outputs!) === canonicalJson(videoOutputs) &&
-      canonicalJson(proof.expected!) === canonicalJson(videoExpected as unknown as JsonValue) &&
-      canonicalJson(proof.cost!) === canonicalJson(videoCost)
-    )
-    const phaseAllowed = failure.class === "assembly_failure"
-      ? current.phase === "donor_selected"
-      : failure.class === "verification_failure"
-        ? proof?.module === "Verification" ? current.phase === "assembly_completed" : current.phase === "generated_outputs_received"
-        : current.phase === "submission_may_have_started" ||
-          current.phase === "provider_evidence_received" ||
-          (
-            runRequest.mode === "qwen-image" && current.phase === "generated_outputs_received" &&
-            current.evidence.filter((item) => item.applicationPath.startsWith("outputs/")).length < runRequest.requestedCount
-          )
-    if (!phaseAllowed || !assemblyProofAllowed || !rasterVerificationProofAllowed || !videoVerificationProofAllowed) {
+    })) {
       return yield* Effect.fail(new RunRecordError(
         "ILLEGAL_TRANSITION",
         `The ${failure.class} classification is not backed by the exact module failure for ${current.phase}.`,
@@ -3139,6 +3263,7 @@ export const loadRun = (
       ? error
       : new RunRecordError("DERIVED_VIEW_CONTRADICTION", "The derived state view could not be read.", "repair-evidence"),
   })
+  yield* validateCorrectionAncestry(store, view)
   if (derived !== undefined) {
     if (derived.chainHeadSha256 !== view.chainHeadSha256) {
       yield* store.writeState(runId, encodeView(view))
@@ -3175,6 +3300,7 @@ export const readRunDiagnostics = (
       ? error
       : new RunRecordError("DERIVED_VIEW_CONTRADICTION", "The derived state view could not be read.", "repair-evidence"),
   })
+  yield* validateCorrectionAncestry(store, view)
   return Object.freeze({
     request: Uint8Array.from(stored.request),
     events: Uint8Array.from(stored.events),
@@ -3206,6 +3332,7 @@ export const readRunEvidence = (
       ? error
       : new RunRecordError("DERIVED_VIEW_CONTRADICTION", "The derived state view could not be read.", "repair-evidence"),
   })
+  yield* validateCorrectionAncestry(store, view)
   if (!view.evidence.some((item) => item.applicationPath === applicationPath)) {
     return yield* Effect.fail(new RunRecordError("EVIDENCE_MISSING", `${applicationPath} is not named by the verified Run journal.`, "repair-evidence"))
   }

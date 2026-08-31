@@ -12,7 +12,8 @@ export const verifyVideo: (
 export const inspectVideoVerificationFailure = (
   error: unknown,
 ): Effect.Effect<VideoVerificationFailureEvidence | undefined> => Effect.sync(() => inspectVideoVerificationFailureSync(error))
-export type { VideoVerificationError, VideoVerificationErrorCode, VideoVerificationFailureEvidence } from "./errors.js"
+export { VideoVerificationError } from "./errors.js"
+export type { VideoVerificationErrorCode, VideoVerificationFailureEvidence } from "./errors.js"
 export type {
   VerifyVideoInput,
   VideoArtifact,

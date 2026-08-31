@@ -587,6 +587,71 @@ test("classifies duplicate Qwen output identities before any output persistence"
   assert.equal(submissions, 1)
 })
 
+test("returns a classified persistence interruption after a paid result cannot become durable", async () => {
+  const exactCopy = { x: 0, y: 0, rgba: [0, 0, 0, 0] as const }
+  const fixture = makeFixture("qwen-image", {
+    objective: (objective) => {
+      objective.assemblyPlan = {
+        required: true,
+        baselineReferenceSlot: "source",
+        ownedRegion: { x: 0, y: 0, width: 1, height: 1 },
+        exactCopy: [{ ...exactCopy, sha256: hash(JSON.stringify(exactCopy)) }],
+      }
+    },
+  })
+  const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(MediaInspector, byteMediaInspector),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+  ))
+  assert.equal(planned._tag, "Planned")
+  if (planned._tag !== "Planned") return
+  const providerBody = Buffer.from('{"id":"persistence-interrupted","status":"completed"}')
+  const outputBody = Buffer.from(JSON.stringify({ height: 1, pixels: [1, 2, 3, 255], width: 1 }))
+  let submissions = 0
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  await Effect.runPromise(memory.failNext("write-evidence", 2))
+  const decision = await Effect.runPromise(advance({ run: planned.run }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(GenerationAdapter, {
+      invoke: (prepared) => Effect.sync(() => {
+        submissions += 1
+        return {
+          provider: "openrouter" as const,
+          model: prepared.request.model,
+          providerEvidence: { mediaType: "application/json" as const, body: providerBody, sha256: hash(providerBody) },
+          outputs: [{
+            applicationPath: "outputs/persistence-interrupted.rgba.json" as const,
+            mediaType: "application/vnd.qwen.rgba+json" as const,
+            body: outputBody,
+            sha256: hash(outputBody),
+          }],
+        }
+      }),
+    }),
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:00:00.000Z") }),
+  )) as unknown as Readonly<{
+    _tag: string
+    outcome: string
+    runId: string
+    finding: { code: string; correctionOwner: string }
+    spendState: string
+    retryState: string
+    recovery: string
+    causeRecovery?: string
+  }>
+  assert.equal(decision._tag, "PersistenceInterrupted")
+  assert.equal(decision.outcome, "blocked")
+  assert.equal(decision.finding.code, "persistence_interrupted")
+  assert.equal(decision.finding.correctionOwner, "Generation")
+  assert.equal(decision.spendState, "possibly_spent")
+  assert.equal(decision.retryState, "reconcile-only")
+  assert.equal(decision.recovery, "reconcile")
+  assert.equal(decision.causeRecovery, "reload")
+  assert.equal(submissions, 1)
+})
+
 test("reconciles partial Qwen recovery by persisted output identity instead of recovery order", async () => {
   const exactCopy = { x: 0, y: 0, rgba: [0, 0, 0, 0] as const }
   const fixture = makeFixture("qwen-image", {
