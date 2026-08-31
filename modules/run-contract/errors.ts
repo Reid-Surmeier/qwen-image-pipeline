@@ -7,6 +7,7 @@ export type RunContractErrorCode =
   | "COUNT_OUT_OF_RANGE"
   | "BUDGET_UNPROVABLE"
   | "BUDGET_EXCEEDED"
+  | "ASSEMBLY_PLAN_INVALID"
   | "SEEDANCE_VIDEO_REFERENCE_REQUIRED"
 
 export class RunContractError extends Error {

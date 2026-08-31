@@ -41,6 +41,7 @@ export type {
 } from "../reference-planning/index.js"
 export { PlanningIdentity } from "./types.js"
 export type {
+  AssemblyPlan,
   CanonicalRunRequest,
   LinkedRunRelationship,
   PlannedRun,

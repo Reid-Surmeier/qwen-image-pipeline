@@ -4,6 +4,7 @@ import { Effect } from "effect"
 
 import {
   PlanningIdentity,
+  type AssemblyPlan,
   type CanonicalRunRequest,
   type LinkedRunRelationship,
   type PlannedRun,
@@ -234,6 +235,94 @@ const decodeLinkedRun = (objective: JsonRecord): LinkedRunRelationship | undefin
   return { parentRunId, parentFailureEventSha256, relation }
 }
 
+const assemblyPlanError = (message: string): RunContractError =>
+  new RunContractError("ASSEMBLY_PLAN_INVALID", message)
+
+const decodeAssemblyPlan = (
+  value: unknown,
+  mode: "qwen-image" | "seedance-video",
+  references: CanonicalRunRequest["references"],
+): AssemblyPlan | undefined => {
+  if (value === undefined) return undefined
+  if (mode !== "qwen-image" || value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw assemblyPlanError("Assembly plans are supported only for Qwen Image objectives.")
+  }
+  const plan = value as JsonRecord
+  if (plan.required !== true) {
+    throw assemblyPlanError("Assembly plan required must be true.")
+  }
+  const baselineReferenceSlot = plan.baselineReferenceSlot
+  if (typeof baselineReferenceSlot !== "string" || baselineReferenceSlot.length === 0) {
+    throw assemblyPlanError("Assembly plan baselineReferenceSlot must be a non-empty string.")
+  }
+  const baseline = references.find((reference) =>
+    reference.slot === baselineReferenceSlot && reference.kind === "image")
+  if (baseline === undefined) {
+    throw assemblyPlanError("Assembly plan baselineReferenceSlot must name a locked image reference.")
+  }
+  if (plan.ownedRegion === null || typeof plan.ownedRegion !== "object" || Array.isArray(plan.ownedRegion)) {
+    throw assemblyPlanError("Assembly plan ownedRegion must be an object.")
+  }
+  const region = plan.ownedRegion as JsonRecord
+  const { x, y, width, height } = region
+  if (
+    ![x, y, width, height].every((coordinate) =>
+      typeof coordinate === "number" && Number.isSafeInteger(coordinate)) ||
+    (x as number) < 0 || (y as number) < 0 ||
+    (width as number) < 1 || (height as number) < 1
+  ) {
+    throw assemblyPlanError("Assembly plan ownedRegion must contain non-negative integer coordinates and positive integer dimensions.")
+  }
+  const ownedRegion: AssemblyPlan["ownedRegion"] = {
+    x: x as number,
+    y: y as number,
+    width: width as number,
+    height: height as number,
+  }
+  if (
+    ownedRegion.x + ownedRegion.width > baseline.inspectedMedia.width ||
+    ownedRegion.y + ownedRegion.height > baseline.inspectedMedia.height
+  ) {
+    throw assemblyPlanError("Assembly plan ownedRegion must remain inside the inspected baseline dimensions.")
+  }
+  if (!Array.isArray(plan.exactCopy) || plan.exactCopy.length === 0) {
+    throw assemblyPlanError("Assembly plan exactCopy must contain at least one pixel.")
+  }
+  const exactCopy: AssemblyPlan["exactCopy"] = plan.exactCopy.map((value) => {
+    if (value === null || typeof value !== "object" || Array.isArray(value)) {
+      throw assemblyPlanError("Every Exact Copy pixel must be an object.")
+    }
+    const pixel = value as JsonRecord
+    const x = pixel.x
+    const y = pixel.y
+    const rgba = pixel.rgba
+    const pixelSha256 = pixel.sha256
+    if (
+      typeof x !== "number" || !Number.isSafeInteger(x) || x < 0 ||
+      typeof y !== "number" || !Number.isSafeInteger(y) || y < 0 ||
+      !Array.isArray(rgba) || rgba.length !== 4 ||
+      rgba.some((channel) => typeof channel !== "number" || !Number.isInteger(channel) || channel < 0 || channel > 255) ||
+      typeof pixelSha256 !== "string" || !/^[a-f0-9]{64}$/.test(pixelSha256)
+    ) {
+      throw assemblyPlanError("Exact Copy coordinates, RGBA channels, and SHA-256 must be well formed.")
+    }
+    const normalizedRgba = rgba as unknown as readonly [number, number, number, number]
+    const canonicalPixel = { x, y, rgba: normalizedRgba }
+    if (createHash("sha256").update(JSON.stringify(canonicalPixel)).digest("hex") !== pixelSha256) {
+      throw assemblyPlanError("Exact Copy SHA-256 must bind its canonical coordinates and RGBA channels.")
+    }
+    if (
+      x < ownedRegion.x || y < ownedRegion.y ||
+      x >= ownedRegion.x + ownedRegion.width ||
+      y >= ownedRegion.y + ownedRegion.height
+    ) {
+      throw assemblyPlanError("Every Exact Copy pixel must remain inside the owned Assembly region.")
+    }
+    return { ...canonicalPixel, sha256: pixelSha256 }
+  })
+  return { required: true, baselineReferenceSlot, ownedRegion, exactCopy }
+}
+
 export const compileDocuments = (
   input: RawPlanningDocuments,
 ): Effect.Effect<
@@ -325,6 +414,7 @@ export const compileDocuments = (
         estimatedCost,
         objectiveBudget,
         linkedRun: decodeLinkedRun(objective),
+        assemblyPlan: objective.assemblyPlan,
         requirements: decodeRequirements(procedure),
         candidates: decodeCandidates(objective),
       }
@@ -350,6 +440,13 @@ export const compileDocuments = (
     ))
   }
 
+  const assemblyPlan = yield* Effect.try({
+    try: () => decodeAssemblyPlan(decoded.assemblyPlan, decoded.mode, referencePlan.references),
+    catch: (error) => error instanceof RunContractError
+      ? error
+      : assemblyPlanError("Assembly plan could not be decoded."),
+  })
+
   const request: CanonicalRunRequest = deepFreeze({
     schemaVersion: lock.runSchemaVersion,
     applicationId: decoded.applicationId,
@@ -365,6 +462,7 @@ export const compileDocuments = (
     budgetCeilingUsd: formatCents(decoded.objectiveBudget),
     outputRoot: decoded.outputRoot,
     ...(decoded.linkedRun === undefined ? {} : { linkedRun: decoded.linkedRun }),
+    ...(assemblyPlan === undefined ? {} : { assemblyPlan }),
     references: referencePlan.references,
     tool: lock,
   })

@@ -30,7 +30,7 @@ type RunEvent = Readonly<{
   operationId: string
   runId: string
   timestamp: string
-  kind: "attempt_reserved" | "submission_may_have_started" | "provider_evidence_received" | "definitive_pre_submit_failure"
+  kind: "attempt_reserved" | "submission_may_have_started" | "provider_evidence_received" | "generated_output_persisted" | "donor_choice_opened" | "donor_selected" | "assembly_persisted" | "checks_persisted" | "definitive_pre_submit_failure"
   previousEventSha256: string | null
   payload: Readonly<Record<string, JsonValue>>
   eventSha256: string
@@ -165,6 +165,14 @@ const numberPayload = (payload: Readonly<Record<string, JsonValue>>, key: string
   return value
 }
 
+const stringArrayPayload = (payload: Readonly<Record<string, JsonValue>>, key: string): ReadonlyArray<string> => {
+  const value = payload[key]
+  if (!Array.isArray(value) || value.length === 0 || value.some((item) => typeof item !== "string")) {
+    throw new RunRecordError("EVENT_CHAIN_BROKEN", `The ${key} event field is invalid.`, "repair-evidence")
+  }
+  return value as ReadonlyArray<string>
+}
+
 const linkPayload = (payload: Readonly<Record<string, JsonValue>>): RunLink | undefined => {
   const value = payload.linkedFrom
   if (value === null || value === undefined) return undefined
@@ -183,6 +191,46 @@ const linkPayload = (payload: Readonly<Record<string, JsonValue>>): RunLink | un
     throw new RunRecordError("EVENT_CHAIN_BROKEN", "The linked Run evidence is incomplete.", "repair-evidence")
   }
   return { parentRunId, parentFailureEventSha256, relation }
+}
+
+const expectedCheckNames = [
+  "integrity",
+  "media",
+  "outside-region-preservation",
+  "donor-equality-inside-region",
+] as const
+
+const validateChecksDocument = (document: unknown, expectedCandidateSha256: string): void => {
+  if (document === null || typeof document !== "object" || Array.isArray(document)) {
+    throw new RunRecordError("CHECKS_NOT_PASSED", "Checks evidence must be a JSON object.", "repair-evidence")
+  }
+  const record = document as Readonly<Record<string, unknown>>
+  const checks = record.checks
+  if (
+    Object.keys(record).sort().join(",") !== "candidateSha256,checks,classification" ||
+    record.candidateSha256 !== expectedCandidateSha256 ||
+    record.classification !== "verified-candidate" ||
+    !Array.isArray(checks) ||
+    checks.length !== expectedCheckNames.length
+  ) {
+    throw new RunRecordError("CHECKS_NOT_PASSED", "Checks evidence does not classify the assembled output.", "repair-evidence")
+  }
+  for (const [index, expectedName] of expectedCheckNames.entries()) {
+    const check = checks[index]
+    if (
+      check === null || typeof check !== "object" || Array.isArray(check) ||
+      Object.keys(check).sort().join(",") !== "measured,name,passed"
+    ) {
+      throw new RunRecordError("CHECKS_NOT_PASSED", "Checks evidence is malformed.", "repair-evidence")
+    }
+    const item = check as Readonly<Record<string, unknown>>
+    if (
+      item.name !== expectedName || item.passed !== true ||
+      typeof item.measured !== "number" || !Number.isSafeInteger(item.measured) || item.measured < 0
+    ) {
+      throw new RunRecordError("CHECKS_NOT_PASSED", "Every Fidelity Check must pass in the mandatory order.", "repair-evidence")
+    }
+  }
 }
 
 const replay = (
@@ -244,6 +292,12 @@ const replay = (
   let spendState: RunRecordView["spendState"] = "not_spent"
   let retryState: RunRecordView["retryState"] = "same-run-submission-available"
   const evidence: Array<RunRecordView["evidence"][number]> = []
+  let donorCandidateSha256s: ReadonlyArray<string> | undefined
+  let selectedDonorSha256: string | undefined
+  let assemblyOutputSha256: string | undefined
+  let assemblyReportSha256: string | undefined
+  let checksSha256: string | undefined
+  let classification: "verified_candidate" | undefined
   for (const event of events.slice(1)) {
     if (event.kind === "submission_may_have_started") {
       if (phase !== "reserved" || stringPayload(event.payload, "attemptId") !== base.attemptId) {
@@ -275,6 +329,153 @@ const replay = (
       retryState = "never-resubmit"
       continue
     }
+    if (event.kind === "generated_output_persisted") {
+      if (phase !== "provider_evidence_received" && phase !== "generated_outputs_received") {
+        throw new RunRecordError("ILLEGAL_TRANSITION", "Generated output evidence was recorded before provider evidence.")
+      }
+      const applicationPath = stringPayload(event.payload, "applicationPath")
+      const evidenceSha256 = stringPayload(event.payload, "sha256")
+      const byteLength = numberPayload(event.payload, "byteLength")
+      const mediaType = stringPayload(event.payload, "mediaType")
+      const storedEvidence = evidenceBytes[applicationPath]
+      if (evidence.filter((item) => item.applicationPath.startsWith("outputs/")).length >= base.maximumCount) {
+        throw new RunRecordError("RESERVATION_OUTSIDE_PLAN", "Generated output evidence exceeds the reserved maximum count.", "repair-evidence")
+      }
+      if (storedEvidence === undefined) {
+        throw new RunRecordError("EVIDENCE_MISSING", `${applicationPath} is named by the journal but missing.`, "repair-evidence")
+      }
+      if (storedEvidence.byteLength !== byteLength || sha256(storedEvidence) !== evidenceSha256) {
+        throw new RunRecordError("EVIDENCE_HASH_MISMATCH", `${applicationPath} no longer matches its event receipt.`, "repair-evidence")
+      }
+      evidence.push({ applicationPath, sha256: evidenceSha256, byteLength, mediaType })
+      phase = "generated_outputs_received"
+      continue
+    }
+    if (event.kind === "donor_choice_opened") {
+      if (phase !== "generated_outputs_received") {
+        throw new RunRecordError("ILLEGAL_TRANSITION", "A donor choice was opened before generated outputs were persisted.")
+      }
+      const candidates = stringArrayPayload(event.payload, "candidateSha256s")
+      if (
+        new Set(candidates).size !== candidates.length ||
+        candidates.some((candidate) => !evidence.some((item) =>
+          item.applicationPath.startsWith("outputs/") && item.sha256 === candidate))
+      ) {
+        throw new RunRecordError("DONOR_NOT_PERSISTED", "The donor checkpoint names output evidence that is not persisted on this Run.", "repair-evidence")
+      }
+      donorCandidateSha256s = [...candidates]
+      phase = "awaiting_donor_choice"
+      continue
+    }
+    if (event.kind === "donor_selected") {
+      if (phase !== "awaiting_donor_choice" || donorCandidateSha256s === undefined) {
+        throw new RunRecordError("ILLEGAL_TRANSITION", "A donor was selected without an open donor-choice checkpoint.")
+      }
+      const selected = stringPayload(event.payload, "selectedSha256")
+      if (!donorCandidateSha256s.includes(selected) || !evidence.some((item) =>
+        item.applicationPath.startsWith("outputs/") && item.sha256 === selected)) {
+        throw new RunRecordError("DONOR_NOT_PERSISTED", "The selected donor is not persisted checkpoint evidence on this Run.", "repair-evidence")
+      }
+      selectedDonorSha256 = selected
+      phase = "donor_selected"
+      continue
+    }
+    if (event.kind === "assembly_persisted") {
+      if (phase !== "donor_selected" || selectedDonorSha256 === undefined) {
+        throw new RunRecordError("ILLEGAL_TRANSITION", "Assembly evidence was recorded before donor selection.")
+      }
+      const outputPath = stringPayload(event.payload, "outputPath")
+      const outputSha256 = stringPayload(event.payload, "outputSha256")
+      const outputByteLength = numberPayload(event.payload, "outputByteLength")
+      const outputMediaType = stringPayload(event.payload, "outputMediaType")
+      const reportPath = stringPayload(event.payload, "reportPath")
+      const reportSha256 = stringPayload(event.payload, "reportSha256")
+      const reportByteLength = numberPayload(event.payload, "reportByteLength")
+      const outputBytes = evidenceBytes[outputPath]
+      const reportBytes = evidenceBytes[reportPath]
+      if (evidence.some((item) => item.applicationPath === outputPath || item.applicationPath === reportPath)) {
+        throw new RunRecordError("EVIDENCE_REWRITE", "Assembly must create new evidence destinations.", "repair-evidence")
+      }
+      if (outputBytes === undefined || reportBytes === undefined) {
+        throw new RunRecordError("EVIDENCE_MISSING", "Assembly output or report evidence is missing.", "repair-evidence")
+      }
+      if (
+        outputBytes.byteLength !== outputByteLength || sha256(outputBytes) !== outputSha256 ||
+        reportBytes.byteLength !== reportByteLength || sha256(reportBytes) !== reportSha256
+      ) {
+        throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Assembly output or report no longer matches its event receipt.", "repair-evidence")
+      }
+      let report: unknown
+      try {
+        report = JSON.parse(Buffer.from(reportBytes).toString("utf8"))
+      } catch {
+        throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "The Assembly report is not valid JSON.", "repair-evidence")
+      }
+      if (
+        report === null || typeof report !== "object" || Array.isArray(report) ||
+        canonicalJson(report as JsonValue) !== Buffer.from(reportBytes).toString("utf8")
+      ) {
+        throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "The Assembly report is not canonical JSON.", "repair-evidence")
+      }
+      const reportDocument = report as Readonly<Record<string, JsonValue>>
+      const reportKeys = Object.keys(reportDocument).sort().join(",")
+      if (
+        reportKeys !== "baselineSha256,donorSha256,exactCopySha256,outputSha256,regionSha256" ||
+        !["baselineSha256", "donorSha256", "regionSha256", "exactCopySha256", "outputSha256"]
+          .every((key) => typeof reportDocument[key] === "string" && isSha256(reportDocument[key] as string)) ||
+        reportDocument.donorSha256 !== selectedDonorSha256 ||
+        reportDocument.outputSha256 !== outputSha256
+      ) {
+        throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "The Assembly report does not bind its hash-locked inputs, selected donor, and output.", "repair-evidence")
+      }
+      evidence.push(
+        { applicationPath: outputPath, sha256: outputSha256, byteLength: outputByteLength, mediaType: outputMediaType },
+        { applicationPath: reportPath, sha256: reportSha256, byteLength: reportByteLength, mediaType: "application/json" },
+      )
+      assemblyOutputSha256 = outputSha256
+      assemblyReportSha256 = reportSha256
+      phase = "assembly_completed"
+      continue
+    }
+    if (event.kind === "checks_persisted") {
+      if (phase !== "assembly_completed" || assemblyOutputSha256 === undefined) {
+        throw new RunRecordError("ILLEGAL_TRANSITION", "Checks were recorded before Assembly completed.")
+      }
+      const applicationPath = stringPayload(event.payload, "applicationPath")
+      const evidenceSha256 = stringPayload(event.payload, "sha256")
+      const byteLength = numberPayload(event.payload, "byteLength")
+      const candidateSha256 = stringPayload(event.payload, "candidateSha256")
+      const storedEvidence = evidenceBytes[applicationPath]
+      if (storedEvidence === undefined) {
+        throw new RunRecordError("EVIDENCE_MISSING", `${applicationPath} is named by the journal but missing.`, "repair-evidence")
+      }
+      if (
+        storedEvidence.byteLength !== byteLength || sha256(storedEvidence) !== evidenceSha256 ||
+        candidateSha256 !== assemblyOutputSha256
+      ) {
+        throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Checks evidence no longer matches its assembled candidate receipt.", "repair-evidence")
+      }
+      let document: unknown
+      try {
+        document = JSON.parse(Buffer.from(storedEvidence).toString("utf8"))
+      } catch {
+        throw new RunRecordError("CHECKS_NOT_PASSED", "Checks evidence is not valid JSON.", "repair-evidence")
+      }
+      if (canonicalJson(document as JsonValue) !== Buffer.from(storedEvidence).toString("utf8")) {
+        throw new RunRecordError("CHECKS_NOT_PASSED", "Checks evidence is not canonical JSON.", "repair-evidence")
+      }
+      validateChecksDocument(document, assemblyOutputSha256)
+      evidence.push({
+        applicationPath,
+        sha256: evidenceSha256,
+        byteLength,
+        mediaType: "application/json",
+      })
+      checksSha256 = evidenceSha256
+      classification = "verified_candidate"
+      phase = "verified_candidate"
+      continue
+    }
     if (event.kind === "definitive_pre_submit_failure") {
       if (phase !== "reserved") {
         throw new RunRecordError("ILLEGAL_TRANSITION", "A definitive pre-submit failure was recorded after submission uncertainty.")
@@ -294,6 +495,12 @@ const replay = (
     phase,
     spendState,
     retryState,
+    ...(donorCandidateSha256s === undefined ? {} : { donorCandidateSha256s }),
+    ...(selectedDonorSha256 === undefined ? {} : { selectedDonorSha256 }),
+    ...(assemblyOutputSha256 === undefined ? {} : { assemblyOutputSha256 }),
+    ...(assemblyReportSha256 === undefined ? {} : { assemblyReportSha256 }),
+    ...(checksSha256 === undefined ? {} : { checksSha256 }),
+    ...(classification === undefined ? {} : { classification }),
   })
 }
 
@@ -484,7 +691,17 @@ export const recordOperation = (
     ? "submission_may_have_started"
     : operation._tag === "CommitProviderEvidence"
       ? "provider_evidence_received"
-      : "definitive_pre_submit_failure"
+      : operation._tag === "CommitGeneratedOutput"
+        ? "generated_output_persisted"
+        : operation._tag === "OpenDonorChoice"
+          ? "donor_choice_opened"
+          : operation._tag === "SelectDonor"
+            ? "donor_selected"
+            : operation._tag === "CommitAssembly"
+              ? "assembly_persisted"
+              : operation._tag === "CommitChecks"
+                ? "checks_persisted"
+                : "definitive_pre_submit_failure"
   const replayed = events.find((event) => event.operationId === operation.operationId)
   if (replayed !== undefined) {
     if (replayed.kind !== expectedKind) {
@@ -495,6 +712,53 @@ export const recordOperation = (
       stringPayload(replayed.payload, "sha256") !== operation.evidence.sha256
     ) {
       return yield* Effect.fail(new RunRecordError("IDEMPOTENCY_CONFLICT", "The operation identity was replayed with different provider evidence."))
+    }
+    if (
+      operation._tag === "CommitGeneratedOutput" &&
+      (
+        stringPayload(replayed.payload, "applicationPath") !== operation.output.applicationPath ||
+        stringPayload(replayed.payload, "sha256") !== operation.output.sha256 ||
+        stringPayload(replayed.payload, "mediaType") !== operation.output.mediaType
+      )
+    ) {
+      return yield* Effect.fail(new RunRecordError("IDEMPOTENCY_CONFLICT", "The operation identity was replayed with different generated output evidence."))
+    }
+    if (
+      operation._tag === "OpenDonorChoice" &&
+      canonicalJson(stringArrayPayload(replayed.payload, "candidateSha256s")) !==
+        canonicalJson(operation.candidateSha256s as ReadonlyArray<JsonValue>)
+    ) {
+      return yield* Effect.fail(new RunRecordError("IDEMPOTENCY_CONFLICT", "The operation identity was replayed with different donor candidates."))
+    }
+    if (
+      operation._tag === "SelectDonor" &&
+      stringPayload(replayed.payload, "selectedSha256") !== operation.selectedSha256
+    ) {
+      return yield* Effect.fail(new RunRecordError("IDEMPOTENCY_CONFLICT", "The operation identity was replayed with a different selected donor."))
+    }
+    if (operation._tag === "CommitAssembly") {
+      const reportSha256 = sha256(canonicalJson(operation.report as unknown as JsonValue))
+      if (
+        stringPayload(replayed.payload, "outputPath") !== operation.output.applicationPath ||
+        stringPayload(replayed.payload, "outputSha256") !== operation.output.sha256 ||
+        stringPayload(replayed.payload, "outputMediaType") !== operation.output.mediaType ||
+        stringPayload(replayed.payload, "reportSha256") !== reportSha256
+      ) {
+        return yield* Effect.fail(new RunRecordError("IDEMPOTENCY_CONFLICT", "The operation identity was replayed with different Assembly evidence."))
+      }
+    }
+    if (operation._tag === "CommitChecks") {
+      const checksBytes = bytes(canonicalJson({
+        candidateSha256: operation.candidateSha256,
+        checks: operation.checks,
+        classification: operation.classification,
+      } as unknown as JsonValue))
+      if (
+        stringPayload(replayed.payload, "candidateSha256") !== operation.candidateSha256 ||
+        stringPayload(replayed.payload, "sha256") !== sha256(checksBytes)
+      ) {
+        return yield* Effect.fail(new RunRecordError("IDEMPOTENCY_CONFLICT", "The operation identity was replayed with different checks evidence."))
+      }
     }
     if (
       operation._tag === "DefinitivePreSubmitFailure" &&
@@ -540,6 +804,205 @@ export const recordOperation = (
     const next = replay(operation.runId, stored.request, [...events, event], {
       ...stored.evidence,
       [applicationPath]: operation.evidence.body,
+    })
+    yield* store.writeState(operation.runId, encodeView(next))
+    return { _tag: "Recorded" as const, view: next }
+  }
+  if (operation._tag === "CommitGeneratedOutput") {
+    if (current.phase !== "provider_evidence_received" && current.phase !== "generated_outputs_received") {
+      return yield* Effect.fail(new RunRecordError("ILLEGAL_TRANSITION", "Generated output evidence requires provider evidence."))
+    }
+    if (
+      current.evidence.filter((item) => item.applicationPath.startsWith("outputs/")).length >= current.maximumCount
+    ) {
+      return yield* Effect.fail(new RunRecordError("RESERVATION_OUTSIDE_PLAN", "Generated output evidence exceeds the reserved maximum count."))
+    }
+    if (
+      !/^outputs\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(operation.output.applicationPath) ||
+      operation.output.applicationPath.includes("..") ||
+      operation.output.mediaType.trim().length === 0 ||
+      current.evidence.some((item) => item.applicationPath === operation.output.applicationPath) ||
+      !isSha256(operation.output.sha256) ||
+      sha256(operation.output.body) !== operation.output.sha256
+    ) {
+      return yield* Effect.fail(new RunRecordError("EVIDENCE_HASH_MISMATCH", "Generated output evidence is unsafe or does not match its declared SHA-256.", "repair-evidence"))
+    }
+    yield* store.writeEvidence(operation.runId, operation.output.applicationPath, operation.output.body)
+    const clock = yield* RunRecordClock
+    const timestamp = yield* clock.now()
+    const event = makeEvent({
+      schemaVersion: "1",
+      sequence: events.length + 1,
+      operationId: operation.operationId,
+      runId: operation.runId,
+      timestamp,
+      kind: "generated_output_persisted",
+      previousEventSha256: current.chainHeadSha256,
+      payload: {
+        applicationPath: operation.output.applicationPath,
+        sha256: operation.output.sha256,
+        byteLength: operation.output.body.byteLength,
+        mediaType: operation.output.mediaType,
+      },
+    })
+    yield* store.appendEvent(operation.runId, current.chainHeadSha256, encodeEvent(event))
+    const next = replay(operation.runId, stored.request, [...events, event], {
+      ...stored.evidence,
+      [operation.output.applicationPath]: operation.output.body,
+    })
+    yield* store.writeState(operation.runId, encodeView(next))
+    return { _tag: "Recorded" as const, view: next }
+  }
+  if (operation._tag === "OpenDonorChoice") {
+    if (current.phase !== "generated_outputs_received") {
+      return yield* Effect.fail(new RunRecordError("ILLEGAL_TRANSITION", "A donor choice requires persisted generated output evidence."))
+    }
+    if (
+      operation.candidateSha256s.length === 0 ||
+      new Set(operation.candidateSha256s).size !== operation.candidateSha256s.length ||
+      operation.candidateSha256s.some((candidate) =>
+        !isSha256(candidate) || !current.evidence.some((item) =>
+          item.applicationPath.startsWith("outputs/") && item.sha256 === candidate))
+    ) {
+      return yield* Effect.fail(new RunRecordError("DONOR_NOT_PERSISTED", "Every donor candidate must name persisted generated output evidence on this Run."))
+    }
+    const clock = yield* RunRecordClock
+    const timestamp = yield* clock.now()
+    const event = makeEvent({
+      schemaVersion: "1",
+      sequence: events.length + 1,
+      operationId: operation.operationId,
+      runId: operation.runId,
+      timestamp,
+      kind: "donor_choice_opened",
+      previousEventSha256: current.chainHeadSha256,
+      payload: { candidateSha256s: operation.candidateSha256s },
+    })
+    yield* store.appendEvent(operation.runId, current.chainHeadSha256, encodeEvent(event))
+    const next = replay(operation.runId, stored.request, [...events, event], stored.evidence)
+    yield* store.writeState(operation.runId, encodeView(next))
+    return { _tag: "Recorded" as const, view: next }
+  }
+  if (operation._tag === "SelectDonor") {
+    if (current.phase !== "awaiting_donor_choice") {
+      return yield* Effect.fail(new RunRecordError("ILLEGAL_TRANSITION", "A donor selection requires an open donor-choice checkpoint."))
+    }
+    if (
+      !isSha256(operation.selectedSha256) ||
+      !current.donorCandidateSha256s?.includes(operation.selectedSha256) ||
+      !current.evidence.some((item) => item.applicationPath.startsWith("outputs/") && item.sha256 === operation.selectedSha256)
+    ) {
+      return yield* Effect.fail(new RunRecordError("DONOR_NOT_PERSISTED", "The selected donor must name persisted checkpoint evidence on this Run."))
+    }
+    const clock = yield* RunRecordClock
+    const timestamp = yield* clock.now()
+    const event = makeEvent({
+      schemaVersion: "1",
+      sequence: events.length + 1,
+      operationId: operation.operationId,
+      runId: operation.runId,
+      timestamp,
+      kind: "donor_selected",
+      previousEventSha256: current.chainHeadSha256,
+      payload: { selectedSha256: operation.selectedSha256 },
+    })
+    yield* store.appendEvent(operation.runId, current.chainHeadSha256, encodeEvent(event))
+    const next = replay(operation.runId, stored.request, [...events, event], stored.evidence)
+    yield* store.writeState(operation.runId, encodeView(next))
+    return { _tag: "Recorded" as const, view: next }
+  }
+  if (operation._tag === "CommitAssembly") {
+    if (current.phase !== "donor_selected" || current.selectedDonorSha256 === undefined) {
+      return yield* Effect.fail(new RunRecordError("ILLEGAL_TRANSITION", "Assembly evidence requires a selected donor."))
+    }
+    const reportDocument = operation.report as unknown as Readonly<Record<string, unknown>>
+    if (
+      !/^outputs\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(operation.output.applicationPath) ||
+      operation.output.applicationPath.includes("..") ||
+      operation.output.mediaType.trim().length === 0 ||
+      !isSha256(operation.output.sha256) ||
+      sha256(operation.output.body) !== operation.output.sha256 ||
+      Object.keys(reportDocument).sort().join(",") !== "baselineSha256,donorSha256,exactCopySha256,outputSha256,regionSha256" ||
+      !Object.values(reportDocument).every((value) => typeof value === "string" && isSha256(value)) ||
+      operation.report.donorSha256 !== current.selectedDonorSha256 ||
+      operation.report.outputSha256 !== operation.output.sha256
+    ) {
+      return yield* Effect.fail(new RunRecordError("EVIDENCE_HASH_MISMATCH", "Assembly evidence must bind hash-locked inputs, the selected donor, and its output.", "repair-evidence"))
+    }
+    const reportBytes = bytes(canonicalJson(operation.report as unknown as JsonValue))
+    const reportSha256 = sha256(reportBytes)
+    const reportPath = "assembly-report.json"
+    yield* store.writeEvidence(operation.runId, operation.output.applicationPath, operation.output.body)
+    yield* store.writeEvidence(operation.runId, reportPath, reportBytes)
+    const clock = yield* RunRecordClock
+    const timestamp = yield* clock.now()
+    const event = makeEvent({
+      schemaVersion: "1",
+      sequence: events.length + 1,
+      operationId: operation.operationId,
+      runId: operation.runId,
+      timestamp,
+      kind: "assembly_persisted",
+      previousEventSha256: current.chainHeadSha256,
+      payload: {
+        outputPath: operation.output.applicationPath,
+        outputSha256: operation.output.sha256,
+        outputByteLength: operation.output.body.byteLength,
+        outputMediaType: operation.output.mediaType,
+        reportPath,
+        reportSha256,
+        reportByteLength: reportBytes.byteLength,
+      },
+    })
+    yield* store.appendEvent(operation.runId, current.chainHeadSha256, encodeEvent(event))
+    const next = replay(operation.runId, stored.request, [...events, event], {
+      ...stored.evidence,
+      [operation.output.applicationPath]: operation.output.body,
+      [reportPath]: reportBytes,
+    })
+    yield* store.writeState(operation.runId, encodeView(next))
+    return { _tag: "Recorded" as const, view: next }
+  }
+  if (operation._tag === "CommitChecks") {
+    if (current.phase !== "assembly_completed" || current.assemblyOutputSha256 === undefined) {
+      return yield* Effect.fail(new RunRecordError("ILLEGAL_TRANSITION", "Checks require persisted Assembly evidence."))
+    }
+    const document = {
+      candidateSha256: operation.candidateSha256,
+      checks: operation.checks,
+      classification: operation.classification,
+    }
+    yield* Effect.try({
+      try: () => validateChecksDocument(document, current.assemblyOutputSha256!),
+      catch: (error) => error instanceof RunRecordError
+        ? error
+        : new RunRecordError("CHECKS_NOT_PASSED", "Checks evidence could not be validated.", "repair-evidence"),
+    })
+    const checksBytes = bytes(canonicalJson(document as unknown as JsonValue))
+    const evidenceSha256 = sha256(checksBytes)
+    const applicationPath = "checks.json"
+    yield* store.writeEvidence(operation.runId, applicationPath, checksBytes)
+    const clock = yield* RunRecordClock
+    const timestamp = yield* clock.now()
+    const event = makeEvent({
+      schemaVersion: "1",
+      sequence: events.length + 1,
+      operationId: operation.operationId,
+      runId: operation.runId,
+      timestamp,
+      kind: "checks_persisted",
+      previousEventSha256: current.chainHeadSha256,
+      payload: {
+        applicationPath,
+        sha256: evidenceSha256,
+        byteLength: checksBytes.byteLength,
+        candidateSha256: operation.candidateSha256,
+      },
+    })
+    yield* store.appendEvent(operation.runId, current.chainHeadSha256, encodeEvent(event))
+    const next = replay(operation.runId, stored.request, [...events, event], {
+      ...stored.evidence,
+      [applicationPath]: checksBytes,
     })
     yield* store.writeState(operation.runId, encodeView(next))
     return { _tag: "Recorded" as const, view: next }
@@ -670,4 +1133,38 @@ export const loadRun = (
     yield* store.writeState(runId, encodeView(view))
   }
   return view
+})
+
+export const readRunEvidence = (
+  runId: string,
+  applicationPath: string,
+): Effect.Effect<Uint8Array, RunRecordError, RunRecordStoreService> => Effect.gen(function*() {
+  const store = yield* RunRecordStore
+  const stored = yield* store.read(runId)
+  const events = yield* Effect.try({
+    try: () => parseEvents(stored.events),
+    catch: (error) => error instanceof RunRecordError
+      ? error
+      : new RunRecordError("EVENT_CHAIN_BROKEN", "The event journal could not be decoded.", "repair-evidence"),
+  })
+  const view = yield* Effect.try({
+    try: () => replay(runId, stored.request, events, stored.evidence),
+    catch: (error) => error instanceof RunRecordError
+      ? error
+      : new RunRecordError("EVENT_CHAIN_BROKEN", "The event journal could not be replayed.", "repair-evidence"),
+  })
+  yield* Effect.try({
+    try: () => assertDerivedViewConsistent(stored, events, view),
+    catch: (error) => error instanceof RunRecordError
+      ? error
+      : new RunRecordError("DERIVED_VIEW_CONTRADICTION", "The derived state view could not be read.", "repair-evidence"),
+  })
+  if (!view.evidence.some((item) => item.applicationPath === applicationPath)) {
+    return yield* Effect.fail(new RunRecordError("EVIDENCE_MISSING", `${applicationPath} is not named by the verified Run journal.`, "repair-evidence"))
+  }
+  const value = stored.evidence[applicationPath]
+  if (value === undefined) {
+    return yield* Effect.fail(new RunRecordError("EVIDENCE_MISSING", `${applicationPath} is missing.`, "repair-evidence"))
+  }
+  return Uint8Array.from(value)
 })

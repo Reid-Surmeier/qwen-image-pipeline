@@ -16,6 +16,27 @@ export type ProviderEvidenceInput = Readonly<{
   sha256: string
 }>
 
+export type GeneratedOutputEvidenceInput = Readonly<{
+  applicationPath: `outputs/${string}`
+  mediaType: string
+  body: Uint8Array
+  sha256: string
+}>
+
+export type AssemblyReportInput = Readonly<{
+  baselineSha256: string
+  donorSha256: string
+  regionSha256: string
+  exactCopySha256: string
+  outputSha256: string
+}>
+
+export type FidelityCheckInput = Readonly<{
+  name: "integrity" | "media" | "outside-region-preservation" | "donor-equality-inside-region"
+  passed: boolean
+  measured: number
+}>
+
 export type RecordOperation =
   | Readonly<{
       _tag: "SubmissionMayHaveStarted"
@@ -29,6 +50,39 @@ export type RecordOperation =
       evidence: ProviderEvidenceInput
     }>
   | Readonly<{
+      _tag: "CommitGeneratedOutput"
+      runId: string
+      operationId: string
+      output: GeneratedOutputEvidenceInput
+    }>
+  | Readonly<{
+      _tag: "OpenDonorChoice"
+      runId: string
+      operationId: string
+      candidateSha256s: ReadonlyArray<string>
+    }>
+  | Readonly<{
+      _tag: "SelectDonor"
+      runId: string
+      operationId: string
+      selectedSha256: string
+    }>
+  | Readonly<{
+      _tag: "CommitAssembly"
+      runId: string
+      operationId: string
+      output: GeneratedOutputEvidenceInput
+      report: AssemblyReportInput
+    }>
+  | Readonly<{
+      _tag: "CommitChecks"
+      runId: string
+      operationId: string
+      candidateSha256: string
+      classification: "verified-candidate"
+      checks: ReadonlyArray<FidelityCheckInput>
+    }>
+  | Readonly<{
       _tag: "DefinitivePreSubmitFailure"
       runId: string
       operationId: string
@@ -40,6 +94,11 @@ export type RunRecordPhase =
   | "definitive_pre_submit_failure"
   | "submission_may_have_started"
   | "provider_evidence_received"
+  | "generated_outputs_received"
+  | "awaiting_donor_choice"
+  | "donor_selected"
+  | "assembly_completed"
+  | "verified_candidate"
 
 export type RunRecordView = Readonly<{
   runId: string
@@ -59,6 +118,12 @@ export type RunRecordView = Readonly<{
     byteLength: number
     mediaType: string
   }>>
+  donorCandidateSha256s?: ReadonlyArray<string>
+  selectedDonorSha256?: string
+  assemblyOutputSha256?: string
+  assemblyReportSha256?: string
+  checksSha256?: string
+  classification?: "verified_candidate"
   linkedFrom?: RunLink
 }>
 

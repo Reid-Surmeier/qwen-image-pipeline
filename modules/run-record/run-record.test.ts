@@ -22,6 +22,7 @@ import {
   load,
   makeFileRunRecordHarness,
   makeMemoryRunRecordHarness,
+  readEvidence,
   record,
   reserve,
   type MemoryRunRecordHarness,
@@ -49,10 +50,14 @@ const reservationFor = (planned: PlannedRun) => ({
   payloadSha256: planned.requestSha256,
 })
 
-const plannedRun = async (linkedRun?: RunLink): Promise<PlannedRun> => {
-  const fixture = makeFixture("qwen-image", linkedRun === undefined
-    ? {}
-    : { objective: (objective) => { objective.linkedRun = linkedRun } })
+const plannedRun = async (linkedRun?: RunLink, requestedCount = 1): Promise<PlannedRun> => {
+  const fixture = makeFixture("qwen-image", {
+    objective: (objective) => {
+      if (linkedRun !== undefined) objective.linkedRun = linkedRun
+      objective.requestedCount = requestedCount
+      if (requestedCount > 1) objective.budgetCeilingUsd = "0.20"
+    },
+  })
   return Effect.runPromise(
     compilePlannedRun(fixture.documents).pipe(
       Effect.provideService(ApplicationFiles, fixture.files),
@@ -865,4 +870,394 @@ test("tampered requests, event chains, evidence, and illegal rewrites fail by na
     ),
   ))
   assert.equal(illegalRewrite.code, "EVIDENCE_HASH_MISMATCH")
+})
+
+test("persists generated output evidence and reads only its verified bytes", async () => {
+  const planned = await plannedRun()
+  const memory = await memoryHarness()
+  const provide = <Success, Error>(
+    effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
+  ): Effect.Effect<Success, Error> => effect.pipe(
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, clock),
+  )
+  const reserved = await Effect.runPromise(provide(reserve(reservationFor(planned))))
+  await Effect.runPromise(provide(record({
+    _tag: "SubmissionMayHaveStarted",
+    runId: reserved.runId,
+    operationId: "output-submit",
+  })))
+  const providerBody = Buffer.from('{"request_id":"output-fixture","status":"succeeded"}', "utf8")
+  await Effect.runPromise(provide(record({
+    _tag: "CommitProviderEvidence",
+    runId: reserved.runId,
+    operationId: "output-provider-evidence",
+    evidence: {
+      mediaType: "application/json",
+      body: providerBody,
+      sha256: createHash("sha256").update(providerBody).digest("hex"),
+    },
+  })))
+  const output = Buffer.from("fake-png-output", "utf8")
+  const outputSha256 = createHash("sha256").update(output).digest("hex")
+  const committed = await Effect.runPromise(provide(record({
+    _tag: "CommitGeneratedOutput",
+    runId: reserved.runId,
+    operationId: "output-one",
+    output: {
+      applicationPath: "outputs/candidate-001.png",
+      mediaType: "image/png",
+      body: output,
+      sha256: outputSha256,
+    },
+  })))
+  assert.equal(committed.view.phase, "generated_outputs_received")
+  assert.deepEqual(
+    Buffer.from(await Effect.runPromise(readEvidence(reserved.runId, "outputs/candidate-001.png").pipe(
+      Effect.provide(memory.layer),
+    ))),
+    output,
+  )
+})
+
+test("records a donor-choice checkpoint and selects only a persisted output on the same Run", async () => {
+  const planned = await plannedRun(undefined, 2)
+  const memory = await memoryHarness()
+  const provide = <Success, Error>(
+    effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
+  ): Effect.Effect<Success, Error> => effect.pipe(
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, clock),
+  )
+  const reserved = await Effect.runPromise(provide(reserve(reservationFor(planned))))
+  await Effect.runPromise(provide(record({ _tag: "SubmissionMayHaveStarted", runId: reserved.runId, operationId: "donor-submit" })))
+  const providerBody = Buffer.from('{"request_id":"donor-fixture","status":"succeeded"}', "utf8")
+  await Effect.runPromise(provide(record({
+    _tag: "CommitProviderEvidence",
+    runId: reserved.runId,
+    operationId: "donor-provider-evidence",
+    evidence: {
+      mediaType: "application/json",
+      body: providerBody,
+      sha256: createHash("sha256").update(providerBody).digest("hex"),
+    },
+  })))
+  const output = Buffer.from("candidate-for-donor", "utf8")
+  const outputSha256 = createHash("sha256").update(output).digest("hex")
+  await Effect.runPromise(provide(record({
+    _tag: "CommitGeneratedOutput",
+    runId: reserved.runId,
+    operationId: "donor-output",
+    output: {
+      applicationPath: "outputs/donor.png",
+      mediaType: "image/png",
+      body: output,
+      sha256: outputSha256,
+    },
+  })))
+  const alternativeOutput = Buffer.from("alternative-donor-candidate", "utf8")
+  const alternativeSha256 = createHash("sha256").update(alternativeOutput).digest("hex")
+  await Effect.runPromise(provide(record({
+    _tag: "CommitGeneratedOutput",
+    runId: reserved.runId,
+    operationId: "donor-output-alternative",
+    output: {
+      applicationPath: "outputs/donor-alternative.png",
+      mediaType: "image/png",
+      body: alternativeOutput,
+      sha256: alternativeSha256,
+    },
+  })))
+  const overCount = await Effect.runPromise(Effect.flip(provide(record({
+    _tag: "CommitGeneratedOutput",
+    runId: reserved.runId,
+    operationId: "donor-output-over-count",
+    output: {
+      applicationPath: "outputs/donor-over-count.png",
+      mediaType: "image/png",
+      body: Buffer.from("third-donor", "utf8"),
+      sha256: createHash("sha256").update("third-donor").digest("hex"),
+    },
+  }))))
+  assert.equal(overCount.code, "RESERVATION_OUTSIDE_PLAN")
+
+  const prematureSelection = await Effect.runPromise(Effect.flip(provide(record({
+    _tag: "SelectDonor",
+    runId: reserved.runId,
+    operationId: "selection-before-checkpoint",
+    selectedSha256: outputSha256,
+  }))))
+  assert.equal(prematureSelection.code, "ILLEGAL_TRANSITION")
+
+  const checkpoint = await Effect.runPromise(provide(record({
+    _tag: "OpenDonorChoice",
+    runId: reserved.runId,
+    operationId: "donor-choice-required",
+    candidateSha256s: [outputSha256, alternativeSha256],
+  })))
+  assert.equal(checkpoint.view.phase, "awaiting_donor_choice")
+  const unknown = await Effect.runPromise(Effect.flip(provide(record({
+    _tag: "SelectDonor",
+    runId: reserved.runId,
+    operationId: "unknown-donor",
+    selectedSha256: "0".repeat(64),
+  }))))
+  assert.equal(unknown.code, "DONOR_NOT_PERSISTED")
+
+  const selected = await Effect.runPromise(provide(record({
+    _tag: "SelectDonor",
+    runId: reserved.runId,
+    operationId: "selected-donor",
+    selectedSha256: alternativeSha256,
+  })))
+  assert.equal(selected.view.phase, "donor_selected")
+  assert.equal(selected.view.selectedDonorSha256, alternativeSha256)
+  assert.equal(selected.view.runId, reserved.runId)
+})
+
+test("persists separately hashed assembled output and canonical Assembly report", async () => {
+  const planned = await plannedRun()
+  const memory = await memoryHarness()
+  const provide = <Success, Error>(
+    effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
+  ): Effect.Effect<Success, Error> => effect.pipe(
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, clock),
+  )
+  const reserved = await Effect.runPromise(provide(reserve(reservationFor(planned))))
+  await Effect.runPromise(provide(record({ _tag: "SubmissionMayHaveStarted", runId: reserved.runId, operationId: "assembly-submit" })))
+  const providerBody = Buffer.from('{"request_id":"assembly-fixture","status":"succeeded"}', "utf8")
+  await Effect.runPromise(provide(record({
+    _tag: "CommitProviderEvidence",
+    runId: reserved.runId,
+    operationId: "assembly-provider",
+    evidence: { mediaType: "application/json", body: providerBody, sha256: createHash("sha256").update(providerBody).digest("hex") },
+  })))
+  const donor = Buffer.from("assembly-donor", "utf8")
+  const donorSha256 = createHash("sha256").update(donor).digest("hex")
+  await Effect.runPromise(provide(record({
+    _tag: "CommitGeneratedOutput",
+    runId: reserved.runId,
+    operationId: "assembly-donor-output",
+    output: { applicationPath: "outputs/donor.png", mediaType: "image/png", body: donor, sha256: donorSha256 },
+  })))
+  await Effect.runPromise(provide(record({
+    _tag: "OpenDonorChoice",
+    runId: reserved.runId,
+    operationId: "assembly-choice",
+    candidateSha256s: [donorSha256],
+  })))
+  await Effect.runPromise(provide(record({
+    _tag: "SelectDonor",
+    runId: reserved.runId,
+    operationId: "assembly-select",
+    selectedSha256: donorSha256,
+  })))
+
+  const assembled = Buffer.from("deterministically-assembled-output", "utf8")
+  const assembledSha256 = createHash("sha256").update(assembled).digest("hex")
+  const report = {
+    baselineSha256: "1".repeat(64),
+    donorSha256,
+    regionSha256: "2".repeat(64),
+    exactCopySha256: "3".repeat(64),
+    outputSha256: assembledSha256,
+  }
+  const committed = await Effect.runPromise(provide(record({
+    _tag: "CommitAssembly",
+    runId: reserved.runId,
+    operationId: "assembly-persist",
+    output: {
+      applicationPath: "outputs/assembled.rgba.json",
+      mediaType: "application/vnd.qwen.rgba+json",
+      body: assembled,
+      sha256: assembledSha256,
+    },
+    report,
+  })))
+
+  assert.equal(committed.view.phase, "assembly_completed")
+  assert.equal(committed.view.assemblyOutputSha256, assembledSha256)
+  assert.match(committed.view.assemblyReportSha256 ?? "", /^[a-f0-9]{64}$/)
+  const reportBytes = await Effect.runPromise(readEvidence(reserved.runId, "assembly-report.json").pipe(
+    Effect.provide(memory.layer),
+  ))
+  assert.deepEqual(JSON.parse(Buffer.from(reportBytes).toString("utf8")), report)
+  assert.notEqual(committed.view.assemblyOutputSha256, committed.view.assemblyReportSha256)
+
+  const checks = [
+    { name: "integrity", passed: true, measured: 0 },
+    { name: "media", passed: true, measured: 0 },
+    { name: "outside-region-preservation", passed: true, measured: 0 },
+    { name: "donor-equality-inside-region", passed: true, measured: 0 },
+  ] as const
+  const failedChecks = await Effect.runPromise(Effect.flip(provide(record({
+    _tag: "CommitChecks",
+    runId: reserved.runId,
+    operationId: "checks-failed",
+    candidateSha256: assembledSha256,
+    classification: "verified-candidate",
+    checks: checks.map((check, index) => index === 2 ? { ...check, passed: false } : check),
+  }))))
+  assert.equal(failedChecks.code, "CHECKS_NOT_PASSED")
+
+  const verified = await Effect.runPromise(provide(record({
+    _tag: "CommitChecks",
+    runId: reserved.runId,
+    operationId: "checks-passed",
+    candidateSha256: assembledSha256,
+    classification: "verified-candidate",
+    checks,
+  })))
+  assert.equal(verified.view.phase, "verified_candidate")
+  assert.equal(verified.view.classification, "verified_candidate")
+  assert.match(verified.view.checksSha256 ?? "", /^[a-f0-9]{64}$/)
+  const checksBytes = await Effect.runPromise(readEvidence(reserved.runId, "checks.json").pipe(
+    Effect.provide(memory.layer),
+  ))
+  assert.deepEqual(JSON.parse(Buffer.from(checksBytes).toString("utf8")), {
+    candidateSha256: assembledSha256,
+    checks,
+    classification: "verified-candidate",
+  })
+  const replayedChecks = await Effect.runPromise(provide(record({
+    _tag: "CommitChecks",
+    runId: reserved.runId,
+    operationId: "checks-passed",
+    candidateSha256: assembledSha256,
+    classification: "verified-candidate",
+    checks,
+  })))
+  assert.equal(replayedChecks._tag, "ReplayObserved")
+  assert.deepEqual(await Effect.runPromise(load(reserved.runId).pipe(Effect.provide(memory.layer))), verified.view)
+
+  const changedReplay = await Effect.runPromise(Effect.flip(provide(record({
+    _tag: "CommitChecks",
+    runId: reserved.runId,
+    operationId: "checks-passed",
+    candidateSha256: assembledSha256,
+    classification: "verified-candidate",
+    checks: checks.map((check, index) => index === 3 ? { ...check, measured: 1 } : check),
+  }))))
+  assert.equal(changedReplay.code, "IDEMPOTENCY_CONFLICT")
+
+  for (const path of [
+    "outputs/donor.png",
+    "outputs/assembled.rgba.json",
+    "assembly-report.json",
+    "checks.json",
+  ]) {
+    await Effect.runPromise(memory.mutate(reserved.runId, (stored) => {
+      const persisted = stored.evidence[path]
+      if (persisted === undefined || persisted[0] === undefined) throw new Error(`${path} fixture missing`)
+      persisted[0] ^= 1
+    }))
+    const tampered = await Effect.runPromise(Effect.flip(
+      load(reserved.runId).pipe(Effect.provide(memory.layer)),
+    ))
+    assert.equal(tampered.code, "EVIDENCE_HASH_MISMATCH")
+    await Effect.runPromise(memory.mutate(reserved.runId, (stored) => {
+      const persisted = stored.evidence[path]
+      if (persisted === undefined || persisted[0] === undefined) throw new Error(`${path} fixture missing`)
+      persisted[0] ^= 1
+    }))
+  }
+})
+
+test("a fresh filesystem adapter replays the completed Assembly Run and reads verified evidence", async (context) => {
+  const applicationRoot = await mkdtemp(join(tmpdir(), "qwen-run-record-assembly-"))
+  context.after(async () => rm(applicationRoot, { recursive: true, force: true }))
+  const artifactRoot = "artifacts/qwen-pipeline"
+  const layer = await Effect.runPromise(fileRunRecordLayer(applicationRoot, artifactRoot))
+  const provide = <Success, Error>(
+    effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
+  ) => effect.pipe(
+    Effect.provide(layer),
+    Effect.provideService(RunRecordClock, clock),
+  )
+  const planned = await plannedRun()
+  const reserved = await Effect.runPromise(provide(reserve(reservationFor(planned))))
+  await Effect.runPromise(provide(record({ _tag: "SubmissionMayHaveStarted", runId: reserved.runId, operationId: "fs-assembly-submit" })))
+  const providerBody = Buffer.from('{"request_id":"fs-assembly","status":"succeeded"}', "utf8")
+  await Effect.runPromise(provide(record({
+    _tag: "CommitProviderEvidence",
+    runId: reserved.runId,
+    operationId: "fs-assembly-provider",
+    evidence: { mediaType: "application/json", body: providerBody, sha256: createHash("sha256").update(providerBody).digest("hex") },
+  })))
+  const donor = Buffer.from("filesystem-donor", "utf8")
+  const donorSha256 = createHash("sha256").update(donor).digest("hex")
+  await Effect.runPromise(provide(record({
+    _tag: "CommitGeneratedOutput",
+    runId: reserved.runId,
+    operationId: "fs-donor-output",
+    output: { applicationPath: "outputs/donor.png", mediaType: "image/png", body: donor, sha256: donorSha256 },
+  })))
+  await Effect.runPromise(provide(record({
+    _tag: "OpenDonorChoice",
+    runId: reserved.runId,
+    operationId: "fs-donor-choice",
+    candidateSha256s: [donorSha256],
+  })))
+  await Effect.runPromise(provide(record({
+    _tag: "SelectDonor",
+    runId: reserved.runId,
+    operationId: "fs-donor-selected",
+    selectedSha256: donorSha256,
+  })))
+  const assembled = Buffer.from("filesystem-assembled", "utf8")
+  const assembledSha256 = createHash("sha256").update(assembled).digest("hex")
+  await Effect.runPromise(provide(record({
+    _tag: "CommitAssembly",
+    runId: reserved.runId,
+    operationId: "fs-assembly-persisted",
+    output: {
+      applicationPath: "outputs/assembled.rgba.json",
+      mediaType: "application/vnd.qwen.rgba+json",
+      body: assembled,
+      sha256: assembledSha256,
+    },
+    report: {
+      baselineSha256: "1".repeat(64),
+      donorSha256,
+      regionSha256: "2".repeat(64),
+      exactCopySha256: "3".repeat(64),
+      outputSha256: assembledSha256,
+    },
+  })))
+  await Effect.runPromise(provide(record({
+    _tag: "CommitChecks",
+    runId: reserved.runId,
+    operationId: "fs-checks-persisted",
+    candidateSha256: assembledSha256,
+    classification: "verified-candidate",
+    checks: [
+      { name: "integrity", passed: true, measured: 0 },
+      { name: "media", passed: true, measured: 0 },
+      { name: "outside-region-preservation", passed: true, measured: 0 },
+      { name: "donor-equality-inside-region", passed: true, measured: 0 },
+    ],
+  })))
+
+  const freshLayer = await Effect.runPromise(fileRunRecordLayer(applicationRoot, artifactRoot))
+  const reloaded = await Effect.runPromise(load(reserved.runId).pipe(Effect.provide(freshLayer)))
+  assert.equal(reloaded.phase, "verified_candidate")
+  assert.equal(reloaded.selectedDonorSha256, donorSha256)
+  assert.deepEqual(
+    Buffer.from(await Effect.runPromise(readEvidence(reserved.runId, "outputs/assembled.rgba.json").pipe(
+      Effect.provide(freshLayer),
+    ))),
+    assembled,
+  )
+  const runDirectory = join(applicationRoot, artifactRoot, "runs", reserved.runId)
+  assert.deepEqual(await readdir(runDirectory), [
+    ".event-frames",
+    "assembly-report.json",
+    "checks.json",
+    "events.jsonl",
+    "outputs",
+    "provider-response.json",
+    "request.json",
+    "state.json",
+  ])
 })

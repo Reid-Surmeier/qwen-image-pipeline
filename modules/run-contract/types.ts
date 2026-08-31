@@ -29,6 +29,23 @@ export type LinkedRunRelationship = Readonly<{
   relation: "retry-after-definitive-pre-submit-failure"
 }>
 
+export type AssemblyPlan = Readonly<{
+  required: true
+  baselineReferenceSlot: string
+  ownedRegion: Readonly<{
+    x: number
+    y: number
+    width: number
+    height: number
+  }>
+  exactCopy: ReadonlyArray<Readonly<{
+    x: number
+    y: number
+    rgba: readonly [number, number, number, number]
+    sha256: string
+  }>>
+}>
+
 export type CanonicalRunRequest = Readonly<{
   schemaVersion: string
   applicationId: string
@@ -44,6 +61,7 @@ export type CanonicalRunRequest = Readonly<{
   budgetCeilingUsd: string
   outputRoot: string
   linkedRun?: LinkedRunRelationship
+  assemblyPlan?: AssemblyPlan
   references: ReadonlyArray<{
     slot: string
     applicationPath: string
