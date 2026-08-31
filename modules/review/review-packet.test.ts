@@ -90,6 +90,14 @@ test("a changed application commit invalidates without a caller-supplied revisio
     (error: unknown) => error instanceof Error && "code" in error && error.code === "ReviewPacketInvalid")
 })
 
+test("a 40-hex ref without an existing commit object cannot brand an application revision", async (t) => {
+  const fixture = await makeVerifiedReviewFixture()
+  t.after(fixture.cleanup)
+  fixture.pointToMissingCommit()
+  await assert.rejects(Effect.runPromise(fileReviewApplication(fixture.applicationRoot)),
+    (error: unknown) => error instanceof Error && "code" in error && error.code === "ReviewPacketInvalid")
+})
+
 test("a deliberate reference mutation issues counterevidence bound to the Run, rule, seam, and packet", async (t) => {
   const fixture = await makeVerifiedReviewFixture()
   t.after(fixture.cleanup)
@@ -100,9 +108,27 @@ test("a deliberate reference mutation issues counterevidence bound to the Run, r
   const evidence = await Effect.runPromise(fixture.provide(catchReviewCounterexample(packet, learningCounterexample)))
   assert.equal(evidence.sourceRunId, packet.run.runId)
   assert.equal(evidence.sourcePacketSha256, packet.packetSha256)
-  assert.equal(evidence.affectedSeam, learningCounterexample.affectedSeam)
+  assert.equal(evidence.counterexampleKind, "reference-identity-drift")
+  assert.equal(evidence.supportedRule, "Invalidate review when a hash-locked reference changes.")
+  assert.equal(evidence.affectedSeam, "Review.validateReviewPacket")
   assert.equal(evidence.caughtBy, "Review")
   assert.match(evidence.evidenceSha256, /^[a-f0-9]{64}$/)
+})
+
+test("caller prose cannot assign a rule or seam to a Review-owned counterexample", async (t) => {
+  const fixture = await makeVerifiedReviewFixture()
+  t.after(fixture.cleanup)
+  const packet = await Effect.runPromise(fixture.provide(prepareReviewPacket(fixture.input)))
+  fixture.mutateReference()
+  const callerAuthored = {
+    kind: "reference-identity-drift",
+    proposedRule: "Approve every candidate.",
+    affectedSeam: "Procedure",
+  }
+  await assert.rejects(
+    Effect.runPromise(fixture.provide(catchReviewCounterexample(packet, callerAuthored as never))),
+    (error: unknown) => error instanceof Error && "code" in error && error.code === "ReviewPacketInvalid",
+  )
 })
 
 test("a forged candidate packet cannot mint Review counterevidence even with a recomputed hash", async (t) => {

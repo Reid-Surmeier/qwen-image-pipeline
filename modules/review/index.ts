@@ -20,6 +20,13 @@ const projectContractPath = ".qwen-pipeline/project-contract.json"
 const sha256Pattern = /^[a-f0-9]{64}$/
 const commitPattern = /^[a-f0-9]{40}$/
 const issuedInvalidations = new WeakSet<object>()
+const referenceIdentityDrift = Object.freeze({
+  kind: "reference-identity-drift" as const,
+  supportedRule: "Invalidate review when a hash-locked reference changes." as const,
+  affectedSeam: "Review.validateReviewPacket" as const,
+  mutationDescription: "Replace the exact reference bytes after packet creation." as const,
+  findingCode: "ReferenceIdentityChanged" as const,
+})
 
 const sha256 = (value: Uint8Array | string): string => createHash("sha256").update(value).digest("hex")
 const canonical = (value: unknown): string => {
@@ -280,8 +287,12 @@ export const catchReviewCounterexample = (
   packet: ReviewPacket,
   counterexample: ReviewCounterexample,
 ): Effect.Effect<ReviewInvalidationEvidence, ReviewPacketError, ReviewApplicationService | RunRecordStoreService> => Effect.gen(function*() {
-  if (![counterexample.proposedRule, counterexample.affectedSeam, counterexample.mutationDescription].every(nonempty)) {
-    return yield* Effect.fail(new ReviewPacketError("ReviewPacketInvalid", "The deliberate counterexample is not fully described."))
+  if (
+    counterexample === null || typeof counterexample !== "object" ||
+    Object.keys(counterexample).join(",") !== "kind" ||
+    counterexample.kind !== referenceIdentityDrift.kind
+  ) {
+    return yield* Effect.fail(new ReviewPacketError("ReviewPacketInvalid", "The deliberate counterexample kind is not owned by Review."))
   }
   const authority = yield* authenticatePacket(packet)
   const mismatch = authority.referenceMismatch
@@ -290,15 +301,17 @@ export const catchReviewCounterexample = (
   }
   const body = {
     name: "reference-changed" as const,
+    counterexampleKind: referenceIdentityDrift.kind,
     sourceRunId: packet.run.runId,
     sourcePacketSha256: packet.packetSha256,
-    proposedRuleSha256: sha256(counterexample.proposedRule),
-    affectedSeam: counterexample.affectedSeam,
-    mutationDescription: counterexample.mutationDescription,
+    supportedRule: referenceIdentityDrift.supportedRule,
+    proposedRuleSha256: sha256(referenceIdentityDrift.supportedRule),
+    affectedSeam: referenceIdentityDrift.affectedSeam,
+    mutationDescription: referenceIdentityDrift.mutationDescription,
     expectedSha256: mismatch.expectedSha256,
     mutationSha256: mismatch.actualSha256,
     caughtBy: "Review" as const,
-    findingCode: mismatch.code,
+    findingCode: referenceIdentityDrift.findingCode,
   }
   const evidence = freeze({ ...body, evidenceSha256: sha256(canonical(body)) })
   issuedInvalidations.add(evidence)

@@ -40,12 +40,14 @@ const nonempty = (value: string): boolean => value.trim().length > 0
 const validProposalShape = (proposal: LearningProposal): boolean => {
   const { proposalSha256, ...body } = proposal
   return proposal.schemaVersion === "1" && proposal.state === "proposed" &&
-    nonempty(proposal.sourceRunId) && validIdentity(proposal.sourceRequest) && validIdentity(proposal.candidate) &&
+    nonempty(proposal.sourceRunId) && validIdentity(proposal.sourceRequest) && commitPattern.test(proposal.exactToolCommit) &&
+    validIdentity(proposal.candidate) &&
     proposal.provenance.provider === "openrouter" && nonempty(proposal.provenance.model) &&
     validIdentity(proposal.provenance.providerReceipt) && proposal.supportingEvidence.length > 0 &&
     proposal.supportingEvidence.every(validIdentity) && proposal.counterevidence.length > 0 &&
     proposal.counterevidence.every((item) => isIssuedReviewInvalidation(item) &&
-      item.sourceRunId === proposal.sourceRunId && item.proposedRuleSha256 === sha256(proposal.proposedRule) &&
+      item.counterexampleKind === "reference-identity-drift" && item.sourceRunId === proposal.sourceRunId &&
+      item.supportedRule === proposal.proposedRule && item.proposedRuleSha256 === sha256(proposal.proposedRule) &&
       item.affectedSeam === proposal.affectedSeam && nonempty(item.mutationDescription)) &&
     [proposal.proposedRule, proposal.scope, proposal.affectedSeam, proposal.compatibilityRisk, proposal.excludedApplicationDetail].every(nonempty) &&
     sha256(canonical(body)) === proposalSha256
@@ -63,7 +65,8 @@ export const promoteLearning = (
   ) return yield* Effect.fail(new LearningPromotionError("LEARNING_EVIDENCE_INCOMPLETE", "Positive evidence and generalized proposal fields are required."))
   if (
     evidence.knownBadCases.length === 0 || !evidence.knownBadCases.every((item) =>
-      isIssuedReviewInvalidation(item) && item.sourceRunId === evidence.runId &&
+      isIssuedReviewInvalidation(item) && item.counterexampleKind === "reference-identity-drift" &&
+      item.sourceRunId === evidence.runId && item.supportedRule === evidence.proposedRule &&
       item.proposedRuleSha256 === sha256(evidence.proposedRule) && item.affectedSeam === evidence.affectedSeam &&
       nonempty(item.mutationDescription))
   ) return yield* Effect.fail(new LearningPromotionError(
@@ -82,10 +85,13 @@ export const promoteLearning = (
   catch { return yield* Effect.fail(new LearningPromotionError("LEARNING_EVIDENCE_INCOMPLETE", "The source Run request is invalid.")) }
   if (
     request === null || typeof request !== "object" || Array.isArray(request) ||
-    request.provider !== "openrouter" || typeof request.model !== "string" || !nonempty(request.model)
+    request.provider !== "openrouter" || typeof request.model !== "string" || !nonempty(request.model) ||
+    request.tool === null || typeof request.tool !== "object" || Array.isArray(request.tool) ||
+    !commitPattern.test(String((request.tool as Readonly<Record<string, unknown>>).commit ?? ""))
   ) {
-    return yield* Effect.fail(new LearningPromotionError("LEARNING_PROVENANCE_MISSING", "The source Run is not exact OpenRouter provenance."))
+    return yield* Effect.fail(new LearningPromotionError("LEARNING_PROVENANCE_MISSING", "The source Run is not exact OpenRouter and installed-tool provenance."))
   }
+  const exactToolCommit = String((request.tool as Readonly<Record<string, unknown>>).commit)
   const candidateEntry = request.mode === "qwen-image" && diagnostics.view.assemblyOutputSha256 !== undefined
     ? diagnostics.view.evidence.find((item) => item.applicationPath === "outputs/assembled.rgba.json" && item.sha256 === diagnostics.view.assemblyOutputSha256)
     : request.mode === "seedance-video"
@@ -124,6 +130,7 @@ export const promoteLearning = (
     state: "proposed" as const,
     sourceRunId: evidence.runId,
     sourceRequest,
+    exactToolCommit,
     candidate: { ...evidence.candidate },
     proposedRule: evidence.proposedRule,
     scope: evidence.scope,
@@ -145,17 +152,16 @@ export const promoteLearning = (
 
 export const openLearningDecision = (
   proposal: LearningProposal,
-  exactToolCommit: string,
 ): Effect.Effect<LearningDecisionDraft, LearningPromotionError> => Effect.try({
   try: () => {
-    if (!issuedProposals.has(proposal) || !validProposalShape(proposal) || !commitPattern.test(exactToolCommit)) {
+    if (!issuedProposals.has(proposal) || !validProposalShape(proposal)) {
       throw new LearningPromotionError("LEARNING_PROPOSAL_INVALID", "Only the exact issued complete proposal can open review.")
     }
     return freeze({
       state: "review_required" as const,
       proposalSha256: proposal.proposalSha256,
       affectedSeam: proposal.affectedSeam,
-      exactToolCommit,
+      exactToolCommit: proposal.exactToolCommit,
       permittedAction: "review-proposal" as const,
       prohibitedMutations: ["Procedure", "interface", "errors", "tests", "application-lock"] as const,
     })

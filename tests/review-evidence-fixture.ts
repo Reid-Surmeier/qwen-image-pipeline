@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
+import { deflateSync } from "node:zlib"
 
 import { Effect } from "effect"
 
@@ -26,12 +27,17 @@ import {
 import { makeFixture } from "./control-plane-fixture.js"
 
 const hash = (value: Uint8Array | string): string => createHash("sha256").update(value).digest("hex")
+const writeCommitObject = (applicationRoot: string, body: string): string => {
+  const bodyBytes = Buffer.from(body)
+  const object = Buffer.concat([Buffer.from(`commit ${bodyBytes.byteLength}\0`), bodyBytes])
+  const commit = createHash("sha1").update(object).digest("hex")
+  writeApplicationFile(applicationRoot, `.git/objects/${commit.slice(0, 2)}/${commit.slice(2)}`, deflateSync(object))
+  return commit
+}
 const clock: RunRecordClockService = { now: () => Effect.succeed("2026-08-31T21:00:00.000Z") }
 
 export const learningCounterexample: ReviewCounterexample = Object.freeze({
-  proposedRule: "Invalidate review when a hash-locked reference changes.",
-  affectedSeam: "Review.validateReviewPacket",
-  mutationDescription: "Replace the exact reference bytes after packet creation.",
+  kind: "reference-identity-drift",
 })
 
 const writeApplicationFile = (applicationRoot: string, applicationPath: string, bytes: Uint8Array): void => {
@@ -104,7 +110,7 @@ export const makeVerifiedReviewFixture = async () => {
   }
   const headPath = join(applicationRoot, ".git/refs/heads/main")
   writeApplicationFile(applicationRoot, ".git/HEAD", Buffer.from("ref: refs/heads/main\n"))
-  writeApplicationFile(applicationRoot, ".git/refs/heads/main", Buffer.from(`${"a".repeat(40)}\n`))
+  writeApplicationFile(applicationRoot, ".git/refs/heads/main", Buffer.from(`${writeCommitObject(applicationRoot, "fixture commit 0\n")}\n`))
   const reviewApplication = await Effect.runPromise(fileReviewApplication(applicationRoot))
   const reference = planned.run.request.references[0]!
   const input: ReviewPacketInput = {
@@ -134,8 +140,9 @@ export const makeVerifiedReviewFixture = async () => {
     commitApplicationChange: () => {
       revision += 1
       writeApplicationFile(applicationRoot, "revision-marker.txt", Buffer.from(String(revision)))
-      writeFileSync(headPath, `${hash(`revision ${revision}`).slice(0, 40)}\n`)
+      writeFileSync(headPath, `${writeCommitObject(applicationRoot, `fixture commit ${revision}\n`)}\n`)
     },
+    pointToMissingCommit: () => writeFileSync(headPath, `${"f".repeat(40)}\n`),
     cleanup: () => rmSync(applicationRoot, { recursive: true, force: true }),
   }
 }

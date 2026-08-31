@@ -55,18 +55,18 @@ export type ReviewApplicationSnapshot = Readonly<{
 }>
 
 export type ReviewCounterexample = Readonly<{
-  proposedRule: string
-  affectedSeam: string
-  mutationDescription: string
+  kind: "reference-identity-drift"
 }>
 
 export type ReviewInvalidationEvidence = Readonly<{
   name: "candidate-changed" | "reference-changed"
+  counterexampleKind: "reference-identity-drift"
   sourceRunId: string
   sourcePacketSha256: string
+  supportedRule: "Invalidate review when a hash-locked reference changes."
   proposedRuleSha256: string
-  affectedSeam: string
-  mutationDescription: string
+  affectedSeam: "Review.validateReviewPacket"
+  mutationDescription: "Replace the exact reference bytes after packet creation."
   expectedSha256: string
   mutationSha256: string
   caughtBy: "Review"

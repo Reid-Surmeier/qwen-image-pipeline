@@ -22,6 +22,7 @@ export type LearningProposal = Readonly<{
   state: "proposed"
   sourceRunId: string
   sourceRequest: EvidenceIdentity
+  exactToolCommit: string
   candidate: EvidenceIdentity
   proposedRule: string
   scope: string

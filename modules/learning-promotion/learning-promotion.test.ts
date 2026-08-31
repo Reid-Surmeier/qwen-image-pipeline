@@ -4,7 +4,7 @@ import test from "node:test"
 import { Effect } from "effect"
 
 import type { ReviewInvalidationEvidence } from "../review/index.js"
-import { issueReferenceInvalidation, learningCounterexample } from "../../tests/review-evidence-fixture.js"
+import { issueReferenceInvalidation } from "../../tests/review-evidence-fixture.js"
 import { openLearningDecision, promoteLearning, type CompletedLearningEvidence } from "./index.js"
 
 const setup = async () => {
@@ -21,9 +21,9 @@ const setup = async () => {
     provenance: { providerReceipt: { applicationPath: providerReceipt.applicationPath, sha256: providerReceipt.sha256 } },
     supportingEvidence: [{ applicationPath: checks.applicationPath, sha256: checks.sha256 }],
     knownBadCases: [proof],
-    proposedRule: learningCounterexample.proposedRule,
+    proposedRule: issued.evidence.supportedRule,
     scope: "hash-locked application review packets",
-    affectedSeam: learningCounterexample.affectedSeam,
+    affectedSeam: issued.evidence.affectedSeam,
     compatibilityRisk: "Review packets with changed reference bytes will be invalidated.",
     excludedApplicationDetail: "No application names, prompts, art, or paths are generalized.",
   })
@@ -55,11 +55,13 @@ test("creates one complete Run-authenticated proposal and only that issued propo
   assert.equal(proposal.provenance.provider, "openrouter")
   assert.equal(proposal.provenance.model, fixture.fixture.planned.run.request.model)
   assert.equal(proposal.sourceRequest.sha256, fixture.fixture.planned.run.requestSha256)
+  assert.equal(proposal.exactToolCommit, fixture.fixture.planned.run.request.tool.commit)
   assert.match(proposal.proposalSha256, /^[a-f0-9]{64}$/)
   assert.equal(Object.isFrozen(proposal), true)
-  const decision = await Effect.runPromise(openLearningDecision(proposal, "a".repeat(40)))
+  const decision = await Effect.runPromise(openLearningDecision(proposal))
+  assert.equal(decision.exactToolCommit, fixture.fixture.planned.run.request.tool.commit)
   assert.deepEqual(decision.prohibitedMutations, ["Procedure", "interface", "errors", "tests", "application-lock"])
   assert.equal(decision.permittedAction, "review-proposal")
-  await assert.rejects(Effect.runPromise(openLearningDecision({ ...proposal }, "a".repeat(40))),
+  await assert.rejects(Effect.runPromise(openLearningDecision({ ...proposal })),
     (error: unknown) => error instanceof Error && "code" in error && error.code === "LEARNING_PROPOSAL_INVALID")
 })
