@@ -1,7 +1,7 @@
 import type { Effect } from "effect"
 
 import type { RunRecordError } from "./errors.js"
-import { loadRun, readRunDiagnostics, readRunEvidence, recordOperation, reserveRun } from "./run-record.js"
+import { consumeSubmissionPermit, loadRun, readRunDiagnostics, readRunEvidence, recordOperation, reserveRun } from "./run-record.js"
 import type {
   RecordOperation,
   RecordResult,
@@ -30,6 +30,8 @@ export const readEvidence: (
 
 export const readDiagnostics = readRunDiagnostics
 
+export const consumeSubmission = consumeSubmissionPermit
+
 export { RunRecordError } from "./errors.js"
 export { fileRunRecordLayer, makeFileRunRecordHarness } from "./file-store.js"
 export type { FileRunRecordFault, FileRunRecordHarness } from "./file-store.js"
@@ -53,4 +55,5 @@ export type {
   RunRecordView,
   RunRecordDiagnostics,
   SubmissionPermit,
+  SubmissionBinding,
 } from "./types.js"

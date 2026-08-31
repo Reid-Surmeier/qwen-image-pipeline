@@ -13,17 +13,49 @@ import type {
   RunLink,
   RunRecordStoreService,
   RunRecordView,
+  SubmissionBinding,
+  SubmissionPermit,
   StoredRunRecord,
 } from "./types.js"
 import {
   RunRecordClock,
   RunRecordStore,
-  submissionPermitBrand,
 } from "./types.js"
 
 type JsonValue = null | boolean | number | string | ReadonlyArray<JsonValue> | {
   readonly [key: string]: JsonValue
 }
+
+interface SubmissionPermitConsumer {
+  readonly use: <Success, Error, Requirements>(
+    binding: SubmissionBinding,
+    submission: Effect.Effect<Success, Error, Requirements>,
+  ) => Effect.Effect<Success, Error | RunRecordError, Requirements>
+}
+
+const submissionPermitConsumers = new WeakMap<SubmissionPermit, SubmissionPermitConsumer>()
+
+export const consumeSubmissionPermit = <Success, Error, Requirements>(
+  permit: SubmissionPermit,
+  binding: SubmissionBinding,
+  submission: Effect.Effect<Success, Error, Requirements>,
+): Effect.Effect<Success, Error | RunRecordError, Requirements> => Effect.suspend(() => {
+  if (permit === null || typeof permit !== "object") {
+    return Effect.fail(new RunRecordError(
+      "SUBMISSION_PERMIT_INVALID",
+      "The Submission Permit was not issued by this Run Record process.",
+      "reconcile",
+    ))
+  }
+  const consumer = submissionPermitConsumers.get(permit)
+  return consumer === undefined
+    ? Effect.fail(new RunRecordError(
+      "SUBMISSION_PERMIT_INVALID",
+      "The Submission Permit was not issued by this Run Record process.",
+      "reconcile",
+    ))
+    : consumer.use(binding, submission)
+})
 
 type RunEvent = Readonly<{
   schemaVersion: "1"
@@ -1296,7 +1328,7 @@ export const recordOperation = (
   const next = replay(operation.runId, stored.request, [...events, event])
   let consumed = false
   const usePermit = <Success, Error, Requirements>(
-    binding: Readonly<{ requestSha256: string; payloadSha256: string }>,
+    binding: SubmissionBinding,
     submission: Effect.Effect<Success, Error, Requirements>,
   ): Effect.Effect<Success, Error | RunRecordError, Requirements> => Effect.suspend<
     Success,
@@ -1323,16 +1355,16 @@ export const recordOperation = (
     consumed = true
     return submission
   })
+  const permit = immutable({
+    runId: operation.runId,
+    attemptId: next.attemptId,
+    requestSha256: next.requestSha256,
+    payloadSha256: next.payloadSha256,
+  })
+  submissionPermitConsumers.set(permit, { use: usePermit })
   return {
     _tag: "SubmissionPermitIssued" as const,
-    permit: immutable({
-      runId: operation.runId,
-      attemptId: next.attemptId,
-      requestSha256: next.requestSha256,
-      payloadSha256: next.payloadSha256,
-      use: usePermit,
-      [submissionPermitBrand]: true as const,
-    }),
+    permit,
     view: next,
   }
 })

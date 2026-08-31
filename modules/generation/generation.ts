@@ -3,7 +3,7 @@ import { createHash } from "node:crypto"
 import { Effect } from "effect"
 
 import type { CanonicalRunRequest } from "../run-contract/index.js"
-import type { SubmissionPermit } from "../run-record/index.js"
+import { consumeSubmission, type SubmissionPermit } from "../run-record/index.js"
 import { GenerationError } from "./errors.js"
 import {
   GenerationAdapter,
@@ -72,6 +72,89 @@ const normalizeAdapterResult = (value: unknown): GenerationResult | undefined =>
     outputs,
   }
 }
+
+const referencesFromPreparedPayload = (
+  prepared: PreparedGeneration,
+): ReadonlyArray<GenerationReference> => {
+  const inputReferences = prepared.payload.input_references
+  if (
+    !Array.isArray(inputReferences) ||
+    inputReferences.length !== prepared.request.references.length ||
+    Array.from({ length: inputReferences.length }, (_, index) => inputReferences[index])
+      .some((entry) => entry === undefined)
+  ) {
+    throw new GenerationError(
+      "ADAPTER_RESULT_INVALID",
+      "The prepared provider payload does not contain every locked reference.",
+    )
+  }
+  return prepared.request.references.map((locked) => {
+    const match = /^\/input_references\/(\d+)\/(image_url|video_url)\/url$/.exec(locked.payloadDestination)
+    const index = match === null ? Number.NaN : Number(match[1])
+    const entry = Number.isSafeInteger(index) ? objectRecord(inputReferences[index]) : undefined
+    const destination = match === null || entry === undefined
+      ? undefined
+      : objectRecord(entry[match[2]!])
+    const url = destination === undefined ? undefined : objectRecord(destination.url)
+    if (
+      url === undefined ||
+      typeof url.applicationPath !== "string" ||
+      typeof url.sha256 !== "string" ||
+      typeof url.mediaType !== "string" ||
+      typeof url.bytesBase64 !== "string"
+    ) {
+      throw new GenerationError(
+        "ADAPTER_RESULT_INVALID",
+        `The prepared provider payload is missing exact evidence for ${locked.slot}.`,
+      )
+    }
+    const bytes = Buffer.from(url.bytesBase64, "base64")
+    if (bytes.toString("base64") !== url.bytesBase64) {
+      throw new GenerationError(
+        "ADAPTER_RESULT_INVALID",
+        `The prepared provider payload has invalid encoded evidence for ${locked.slot}.`,
+      )
+    }
+    return {
+      slot: locked.slot,
+      applicationPath: url.applicationPath,
+      sha256: url.sha256,
+      payloadDestination: locked.payloadDestination,
+      mediaType: url.mediaType as GenerationReference["mediaType"],
+      bytes,
+    }
+  })
+}
+
+const validatePreparedGeneration = (
+  prepared: PreparedGeneration,
+): Effect.Effect<PreparedGeneration, GenerationError> => Effect.gen(function*() {
+  const references = yield* Effect.try({
+    try: () => referencesFromPreparedPayload(prepared),
+    catch: (error) => error instanceof GenerationError
+      ? error
+      : new GenerationError("ADAPTER_RESULT_INVALID", "The prepared provider payload is malformed."),
+  })
+  const reconstructed = yield* prepareGeneration(prepared.request, references)
+  const matchesReconstruction = yield* Effect.try({
+    try: () =>
+      prepared.requestSha256 === reconstructed.requestSha256 &&
+      prepared.payloadSha256 === reconstructed.payloadSha256 &&
+      Buffer.from(prepared.payloadBytes).equals(Buffer.from(reconstructed.payloadBytes)) &&
+      canonicalize(prepared.payload) === canonicalize(reconstructed.payload),
+    catch: () => new GenerationError(
+      "ADAPTER_RESULT_INVALID",
+      "The prepared provider payload could not be compared with its reconstruction.",
+    ),
+  })
+  if (!matchesReconstruction) {
+    return yield* Effect.fail(new GenerationError(
+      "ADAPTER_RESULT_INVALID",
+      "The prepared immutable Run or provider payload failed reconstruction from its locked references.",
+    ))
+  }
+  return reconstructed
+})
 
 export const prepareGeneration = (
   request: CanonicalRunRequest,
@@ -153,21 +236,11 @@ export const invokeGeneration = (
   permit: SubmissionPermit,
 ): Effect.Effect<GenerationResult, GenerationError | import("../run-record/index.js").RunRecordError, GenerationAdapterService> =>
   Effect.gen(function*() {
+    const validatedPrepared = yield* validatePreparedGeneration(prepared)
     const adapter = yield* GenerationAdapter
     const submission = Effect.gen(function*() {
-      const canonicalPayloadBytes = Buffer.from(canonicalize(prepared.payload), "utf8")
-      if (
-        prepared.requestSha256 !== sha256(canonicalize(prepared.request)) ||
-        prepared.payloadSha256 !== sha256(prepared.payloadBytes) ||
-        !Buffer.from(prepared.payloadBytes).equals(canonicalPayloadBytes)
-      ) {
-        return yield* Effect.fail(new GenerationError(
-          "ADAPTER_RESULT_INVALID",
-          "The prepared immutable Run or provider payload failed its digest binding.",
-        ))
-      }
       const adapterEffect: unknown = yield* Effect.try({
-        try: () => adapter.invoke(prepared) as unknown,
+        try: () => adapter.invoke(validatedPrepared) as unknown,
         catch: () => new GenerationError("ADAPTER_RESULT_INVALID", "The adapter threw before returning its Effect."),
       })
       if (!Effect.isEffect(adapterEffect)) {
@@ -183,9 +256,9 @@ export const invokeGeneration = (
         ))),
       )
     })
-    const untrustedResult: unknown = yield* permit.use({
-      requestSha256: prepared.requestSha256,
-      payloadSha256: prepared.payloadSha256,
+    const untrustedResult: unknown = yield* consumeSubmission(permit, {
+      requestSha256: validatedPrepared.requestSha256,
+      payloadSha256: validatedPrepared.payloadSha256,
     }, submission)
     const result = yield* Effect.try({
       try: () => normalizeAdapterResult(untrustedResult),
@@ -194,10 +267,10 @@ export const invokeGeneration = (
     if (result === undefined) {
       return yield* Effect.fail(new GenerationError("ADAPTER_RESULT_INVALID", "The adapter returned a malformed result."))
     }
-    if (result.provider !== prepared.request.provider || result.model !== prepared.request.model) {
+    if (result.provider !== validatedPrepared.request.provider || result.model !== validatedPrepared.request.model) {
       return yield* Effect.fail(new GenerationError("PROVIDER_SUBSTITUTION", "The adapter substituted provider or model."))
     }
-    if (result.outputs.length !== prepared.request.requestedCount) {
+    if (result.outputs.length !== validatedPrepared.request.requestedCount) {
       return yield* Effect.fail(new GenerationError("OUTPUT_COUNT_MISMATCH", "The adapter returned the wrong output count."))
     }
     if (

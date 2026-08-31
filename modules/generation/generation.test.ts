@@ -12,6 +12,7 @@ import {
   RunRecordClock,
   type RecordResult,
   type RunRecordView,
+  type SubmissionPermit,
 } from "../run-record/index.js"
 import { makeFixture } from "../../tests/control-plane-fixture.js"
 import {
@@ -146,7 +147,11 @@ test("requires reference media type to match its exact payload destination", asy
 test("a Submission Permit refuses a different Run and a changed payload before adapter invocation", async () => {
   const firstFixture = makeFixture("qwen-image")
   const secondFixture = makeFixture("qwen-image", {
-    objective: (objective) => { objective.summary = "A distinct immutable Run objective." },
+    objective: (objective) => {
+      objective.summary = "A distinct immutable Run objective."
+      objective.requestedCount = 2
+      objective.budgetCeilingUsd = "0.10"
+    },
   })
   const planFixture = (fixture: ReturnType<typeof makeFixture>) => Effect.runPromise(
     plan({ objectivePath: fixture.objectivePath }).pipe(
@@ -196,12 +201,12 @@ test("a Submission Permit refuses a different Run and a changed payload before a
       }
     }),
   }
-  const issuePermit = async () => {
+  const issuePermit = async (payloadSha256 = firstPrepared.payloadSha256) => {
     const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
     const clock = { now: () => Effect.succeed("2026-08-30T12:00:00.000Z") }
     const reserved: RunRecordView = await Effect.runPromise(reserve({
       plannedRun: firstDecision.run,
-      payloadSha256: firstPrepared.payloadSha256,
+      payloadSha256,
     }).pipe(Effect.provide(memory.layer), Effect.provideService(RunRecordClock, clock)))
     const marked = await Effect.runPromise(record({
       _tag: "SubmissionMayHaveStarted",
@@ -227,7 +232,7 @@ test("a Submission Permit refuses a different Run and a changed payload before a
   const payloadError = await Effect.runPromise(Effect.flip(
     invoke(changedPayload, await issuePermit()).pipe(Effect.provideService(GenerationAdapter, adapter)),
   ))
-  assert.equal(payloadError.code, "SUBMISSION_BINDING_MISMATCH")
+  assert.equal(payloadError.code, "ADAPTER_RESULT_INVALID")
 
   const forgedPreparedDigest = {
     ...firstPrepared,
@@ -237,6 +242,37 @@ test("a Submission Permit refuses a different Run and a changed payload before a
     invoke(forgedPreparedDigest, await issuePermit()).pipe(Effect.provideService(GenerationAdapter, adapter)),
   ))
   assert.equal(integrityError.code, "ADAPTER_RESULT_INVALID")
+
+  const structurallyForgedPermit = {
+    runId: "run-000000000000000000000000",
+    attemptId: "attempt-000000000000000000000000-1",
+    requestSha256: firstPrepared.requestSha256,
+    payloadSha256: firstPrepared.payloadSha256,
+  } as SubmissionPermit
+  const forgedPermitError = await Effect.runPromise(Effect.flip(
+    invoke(firstPrepared, structurallyForgedPermit).pipe(Effect.provideService(GenerationAdapter, adapter)),
+  ))
+  assert.equal(forgedPermitError.code, "SUBMISSION_PERMIT_INVALID")
+
+  const missingReferencePayload = {
+    input_references: [],
+    model: firstPrepared.request.model,
+    provider: firstPrepared.request.provider,
+    requested_count: firstPrepared.request.requestedCount,
+  }
+  const missingReferenceBytes = Buffer.from(JSON.stringify(missingReferencePayload), "utf8")
+  const forgedPreparedPayload = {
+    ...firstPrepared,
+    payload: missingReferencePayload,
+    payloadBytes: missingReferenceBytes,
+    payloadSha256: sha256(missingReferenceBytes),
+  }
+  const forgedPayloadError = await Effect.runPromise(Effect.flip(
+    invoke(forgedPreparedPayload, await issuePermit(forgedPreparedPayload.payloadSha256)).pipe(
+      Effect.provideService(GenerationAdapter, adapter),
+    ),
+  ))
+  assert.equal(forgedPayloadError.code, "ADAPTER_RESULT_INVALID")
   assert.equal(adapterCalls, 0)
 })
 

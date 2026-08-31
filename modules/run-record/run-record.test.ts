@@ -18,6 +18,7 @@ import {
 import { makeFixture } from "../../tests/control-plane-fixture.js"
 import {
   RunRecordClock,
+  consumeSubmission,
   fileRunRecordLayer,
   load,
   makeFileRunRecordHarness,
@@ -167,7 +168,7 @@ test("persists submission uncertainty before issuing one non-replayable permit",
   if (marked._tag !== "SubmissionPermitIssued") return
 
   let adapterCalls = 0
-  const fakeAdapter = (permit: typeof marked.permit) => permit.use({
+  const fakeAdapter = (permit: typeof marked.permit) => consumeSubmission(permit, {
     requestSha256: permit.requestSha256,
     payloadSha256: permit.payloadSha256,
   }, Effect.gen(function*() {
@@ -534,7 +535,7 @@ test("interruption at every persistence and network seam never creates a second 
   let submissionCalls = 0
   const ambiguousFakeAdapter = () => {
     if (networkPermit._tag !== "SubmissionPermitIssued") throw new Error("fixture permit missing")
-    return networkPermit.permit.use({
+    return consumeSubmission(networkPermit.permit, {
       requestSha256: networkPermit.permit.requestSha256,
       payloadSha256: networkPermit.permit.payloadSha256,
     }, Effect.sync(() => {
