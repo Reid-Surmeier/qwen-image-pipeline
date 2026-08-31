@@ -4,7 +4,12 @@ import test from "node:test"
 
 import { Effect } from "effect"
 
-import { makeFixture } from "../../tests/control-plane-fixture.js"
+import {
+  forgedNonDecodableMp4,
+  malformedAudioTrack,
+  makeFixture,
+  zeroVideoTimingSampleCount,
+} from "../../tests/control-plane-fixture.js"
 import { verifyVideo, type VerifyVideoInput } from "./index.js"
 
 const hash = (bytes: Uint8Array): string =>
@@ -151,4 +156,55 @@ test("rejects an invalid runtime cost state as typed evidence failure", async ()
   const failure = await Effect.runPromise(Effect.flip(verifyVideo(forged)))
 
   assert.equal(failure.code, "VIDEO_EVIDENCE_INVALID")
+})
+
+test("rejects a box-consistent MP4 whose declared video stream cannot decode", async () => {
+  const body = forgedNonDecodableMp4()
+  const failure = await Effect.runPromise(Effect.flip(verifyVideo({
+    outputs: [{
+      applicationPath: "outputs/non-decodable.mp4",
+      mediaType: "video/mp4",
+      body,
+      sha256: hash(body),
+    }],
+    expected: { width: 64, height: 48, durationSeconds: 0.2, audioExpected: false },
+    requestedCount: 1,
+    completedCount: 1,
+    cost: { state: "unknown", estimatedMaximumCostUsd: "0.20" },
+  })))
+  assert.equal(failure.code, "VIDEO_MEDIA_INVALID")
+})
+
+test("rejects MP4 timing tables with zero declared video samples", async () => {
+  const body = zeroVideoTimingSampleCount(await fixtureVideo())
+  const failure = await Effect.runPromise(Effect.flip(verifyVideo({
+    outputs: [{
+      applicationPath: "outputs/zero-timing-samples.mp4",
+      mediaType: "video/mp4",
+      body,
+      sha256: hash(body),
+    }],
+    expected: { width: 64, height: 48, durationSeconds: 0.2, audioExpected: false },
+    requestedCount: 1,
+    completedCount: 1,
+    cost: { state: "unknown", estimatedMaximumCostUsd: "0.20" },
+  })))
+  assert.equal(failure.code, "VIDEO_MEDIA_INVALID")
+})
+
+test("rejects a malformed declared audio track instead of treating it as no audio", async () => {
+  const body = malformedAudioTrack(await fixtureVideo())
+  const failure = await Effect.runPromise(Effect.flip(verifyVideo({
+    outputs: [{
+      applicationPath: "outputs/malformed-audio.mp4",
+      mediaType: "video/mp4",
+      body,
+      sha256: hash(body),
+    }],
+    expected: { width: 64, height: 48, durationSeconds: 0.2, audioExpected: false },
+    requestedCount: 1,
+    completedCount: 1,
+    cost: { state: "unknown", estimatedMaximumCostUsd: "0.20" },
+  })))
+  assert.equal(failure.code, "VIDEO_MEDIA_INVALID")
 })

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { spawnSync } from "node:child_process"
 
 import { Effect } from "effect"
 
@@ -157,6 +158,15 @@ const validVideoSampleTable = (
   const sampleSize = readUint32(bytes, stsz.contentStart + 4)
   const sampleCount = readUint32(bytes, stsz.contentStart + 8)
   if (sampleCount < 1) return false
+  let timingSampleCount = 0
+  for (let index = 0; index < timingCount; index += 1) {
+    const entryOffset = stts.contentStart + 8 + index * 8
+    const entrySamples = readUint32(bytes, entryOffset)
+    const sampleDelta = readUint32(bytes, entryOffset + 4)
+    if (entrySamples < 1 || sampleDelta < 1) return false
+    timingSampleCount += entrySamples
+  }
+  if (!Number.isSafeInteger(timingSampleCount) || timingSampleCount !== sampleCount) return false
   let sampleBytes = sampleSize * sampleCount
   if (sampleSize === 0) {
     if (stsz.contentStart + 12 + sampleCount * 4 > stsz.end) return false
@@ -171,6 +181,25 @@ const validVideoSampleTable = (
   const totalMediaBytes = mediaData.reduce((total, box) => total + box.end - box.contentStart, 0)
   return chunkOffsets.every((offset) => mediaData.some((box) => offset >= box.contentStart && offset < box.end)) &&
     Number.isSafeInteger(sampleBytes) && sampleBytes > 0 && sampleBytes <= totalMediaBytes
+}
+
+const requireDecodableVideo = (bytes: Uint8Array): void => {
+  const result = spawnSync(
+    "/usr/bin/ffmpeg",
+    [
+      "-nostdin", "-hide_banner", "-loglevel", "error", "-xerror", "-threads", "1",
+      "-protocol_whitelist", "pipe", "-i", "pipe:0", "-map", "0:v:0", "-map", "0:a?",
+      "-f", "null", "-",
+    ],
+    {
+      input: bytes,
+      timeout: 15_000,
+      maxBuffer: 1_048_576,
+      env: { LANG: "C", LC_ALL: "C", PATH: "/usr/bin:/bin" },
+      windowsHide: true,
+    },
+  )
+  if (result.error !== undefined || result.status !== 0) throw new MediaInspectionError("MALFORMED_MEDIA")
 }
 
 const inspectVideoBytes = (
@@ -223,6 +252,7 @@ const inspectVideoBytes = (
     !Number.isSafeInteger(dimensions.width) || dimensions.width < 1 ||
     !Number.isSafeInteger(dimensions.height) || dimensions.height < 1
   ) throw new MediaInspectionError("MALFORMED_MEDIA")
+  requireDecodableVideo(bytes)
   return { ...dimensions, durationSeconds: duration / timescale }
 }
 

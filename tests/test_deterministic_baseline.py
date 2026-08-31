@@ -8,9 +8,11 @@ import unittest
 from pathlib import Path
 
 from scripts.run_deterministic_command import (
+    TRUSTED_FFMPEG_MAJOR,
     TRUSTED_NODE_MAJOR,
     _toolcache_node_candidates,
     _trusted_node,
+    _trusted_ffmpeg,
     build_environment,
     validate_command,
 )
@@ -38,6 +40,10 @@ class DeterministicBaselineTests(unittest.TestCase):
             text=True,
             check=True,
         ).stdout)
+
+    def test_ffmpeg_resolution_is_pinned_to_the_supported_major(self) -> None:
+        self.assertEqual(_trusted_ffmpeg(), Path("/usr/bin/ffmpeg"))
+        self.assertEqual(TRUSTED_FFMPEG_MAJOR, 6)
 
     def test_only_the_documented_baseline_commands_are_allowed(self) -> None:
         validate_command(("@python", "-m", "unittest", "discover", "-s", "tests"))
@@ -81,6 +87,7 @@ class DeterministicBaselineTests(unittest.TestCase):
         self.assertEqual(environment["QWEN_BASELINE_PYTHON"], "/usr/bin/python3.12")
         self.assertEqual(Path(environment["QWEN_BASELINE_NODE"]).name, "node")
         self.assertEqual(environment["QWEN_BASELINE_GIT"], "/usr/bin/git")
+        self.assertEqual(environment["QWEN_BASELINE_FFMPEG"], "/usr/bin/ffmpeg")
 
     def test_python_named_provider_is_not_accepted_as_the_interpreter(self) -> None:
         with self.assertRaisesRegex(ValueError, "not part of the deterministic baseline"):
@@ -228,6 +235,19 @@ class DeterministicBaselineTests(unittest.TestCase):
         self.assertIn("network access is disabled", network.stderr)
         self.assertEqual(descendant.returncode, 0, descendant.stderr)
         self.assertIn("descendant process is disabled", descendant.stdout)
+
+    def test_node_child_allows_only_the_exact_offline_ffmpeg_decode(self) -> None:
+        completed = subprocess.run(
+            ["node", "tests/baseline_guard/probe_node_ffmpeg.cjs"],
+            cwd=REPO_ROOT,
+            env=build_environment(os.environ, REPO_ROOT),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("exact offline decoder allowed; changed invocation blocked", completed.stdout)
 
 
 if __name__ == "__main__":

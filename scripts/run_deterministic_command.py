@@ -49,6 +49,8 @@ GIT_COMMANDS = {("diff", "--check")}
 TRUSTED_PYTHON = Path("/usr/bin/python3.12")
 TRUSTED_GIT = Path("/usr/bin/git")
 TRUSTED_COMPILER = Path("/usr/bin/cc")
+TRUSTED_FFMPEG = Path("/usr/bin/ffmpeg")
+TRUSTED_FFMPEG_MAJOR = 6
 TRUSTED_NODE_MAJOR = 22
 
 SAFE_CHILD_SCRIPTS = (
@@ -65,6 +67,7 @@ SAFE_CHILD_SCRIPTS = (
     "tests/baseline_guard/probe_node_network.cjs",
     "tests/baseline_guard/probe_node_udp.cjs",
     "tests/baseline_guard/probe_node_descendant.cjs",
+    "tests/baseline_guard/probe_node_ffmpeg.cjs",
 )
 
 
@@ -117,6 +120,30 @@ def _trusted_node() -> Path:
     raise RuntimeError(
         f"missing deterministic baseline tool: Node {TRUSTED_NODE_MAJOR}"
     )
+
+
+def _trusted_ffmpeg() -> Path:
+    if not TRUSTED_FFMPEG.is_file() or not os.access(TRUSTED_FFMPEG, os.X_OK):
+        raise RuntimeError(f"missing deterministic baseline tool: {TRUSTED_FFMPEG}")
+    if os.environ.get("QWEN_BASELINE_OFFLINE") == "1":
+        inherited = os.environ.get("QWEN_BASELINE_FFMPEG")
+        if inherited is None or Path(inherited).resolve() != TRUSTED_FFMPEG.resolve():
+            raise RuntimeError("deterministic baseline FFmpeg identity changed inside the guard")
+        return TRUSTED_FFMPEG.resolve()
+    completed = subprocess.run(
+        [TRUSTED_FFMPEG, "-version"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    first_line = completed.stdout.splitlines()[0] if completed.stdout else ""
+    version = first_line.removeprefix("ffmpeg version ").split(".", 1)[0]
+    if completed.returncode != 0 or version != str(TRUSTED_FFMPEG_MAJOR):
+        raise RuntimeError(
+            f"missing deterministic baseline tool: FFmpeg {TRUSTED_FFMPEG_MAJOR}"
+        )
+    return TRUSTED_FFMPEG.resolve()
 
 
 def _resolve_command(command: Sequence[str]) -> tuple[str, ...]:
@@ -189,6 +216,7 @@ def build_environment(source: Mapping[str, str], repository: Path) -> dict[str, 
             "QWEN_BASELINE_PYTHON": str(TRUSTED_PYTHON.resolve()),
             "QWEN_BASELINE_NODE": str(node),
             "QWEN_BASELINE_GIT": str(TRUSTED_GIT.resolve()),
+            "QWEN_BASELINE_FFMPEG": str(_trusted_ffmpeg()),
             "PATH": f"{node.parent}:/usr/bin:/bin",
             "QWEN_BASELINE_ALLOWED_SCRIPTS": os.pathsep.join(
                 str((repository / relative).resolve())

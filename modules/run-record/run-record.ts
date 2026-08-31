@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { spawnSync } from "node:child_process"
 
 import { Effect } from "effect"
 
@@ -593,6 +594,15 @@ const validReplaySampleTable = (
   const sampleSize = readReplayUint32(value, stsz.contentStart + 4)
   const sampleCount = readReplayUint32(value, stsz.contentStart + 8)
   if (sampleCount < 1) return false
+  let timingSampleCount = 0
+  for (let index = 0; index < timingCount; index += 1) {
+    const entryOffset = stts.contentStart + 8 + index * 8
+    const entrySamples = readReplayUint32(value, entryOffset)
+    const sampleDelta = readReplayUint32(value, entryOffset + 4)
+    if (entrySamples < 1 || sampleDelta < 1) return false
+    timingSampleCount += entrySamples
+  }
+  if (!Number.isSafeInteger(timingSampleCount) || timingSampleCount !== sampleCount) return false
   let sampleBytes = sampleSize * sampleCount
   if (sampleSize === 0) {
     if (stsz.contentStart + 12 + sampleCount * 4 > stsz.end) return false
@@ -607,6 +617,27 @@ const validReplaySampleTable = (
   const totalMediaBytes = mediaData.reduce((total, box) => total + box.end - box.contentStart, 0)
   return chunkOffsets.every((offset) => mediaData.some((box) => offset >= box.contentStart && offset < box.end)) &&
     Number.isSafeInteger(sampleBytes) && sampleBytes > 0 && sampleBytes <= totalMediaBytes
+}
+
+const requireReplayDecodableVideo = (value: Uint8Array): void => {
+  const result = spawnSync(
+    "/usr/bin/ffmpeg",
+    [
+      "-nostdin", "-hide_banner", "-loglevel", "error", "-xerror", "-threads", "1",
+      "-protocol_whitelist", "pipe", "-i", "pipe:0", "-map", "0:v:0", "-map", "0:a?",
+      "-f", "null", "-",
+    ],
+    {
+      input: value,
+      timeout: 15_000,
+      maxBuffer: 1_048_576,
+      env: { LANG: "C", LC_ALL: "C", PATH: "/usr/bin:/bin" },
+      windowsHide: true,
+    },
+  )
+  if (result.error !== undefined || result.status !== 0) {
+    throw new RunRecordError("CHECKS_NOT_PASSED", "The replayed MP4 video stream could not be decoded safely.", "repair-evidence")
+  }
 }
 
 const inspectVideoForReplay = (
@@ -652,7 +683,11 @@ const inspectVideoForReplay = (
     }
     const handler = Buffer.from(value.subarray(hdlr.contentStart + 8, hdlr.contentStart + 12)).toString("ascii")
     const stbl = requireReplayBox(replayBoxes(value, minf.contentStart, minf.end), "stbl")
-    if (!validReplaySampleTable(value, stbl, mediaData, handler)) continue
+    const sampleTableValid = validReplaySampleTable(value, stbl, mediaData, handler)
+    if ((handler === "vide" || handler === "soun") && !sampleTableValid) {
+      throw new RunRecordError("CHECKS_NOT_PASSED", "The replayed MP4 video or audio sample table is malformed.", "repair-evidence")
+    }
+    if (!sampleTableValid) continue
     if (handler === "vide") {
       videoTrack = {
         width: readReplayUint32(value, tkhd.end - 8) / 65_536,
@@ -673,6 +708,7 @@ const inspectVideoForReplay = (
   ) {
     throw new RunRecordError("CHECKS_NOT_PASSED", "The replayed MP4 dimensions or duration are invalid.", "repair-evidence")
   }
+  requireReplayDecodableVideo(value)
   return { width, height, durationSeconds: duration / timescale, hasAudio }
 }
 
@@ -1589,6 +1625,70 @@ export const recordOperation = (
     ) {
       return yield* Effect.fail(new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance poll evidence substituted its job identity or status.", "repair-evidence"))
     }
+    const applicationPath = `polls/poll-${String((current.pollCount ?? 0) + 1).padStart(4, "0")}.json`
+    const orphanedPollBody = stored.evidence[applicationPath]
+    const durablePollEvidence = orphanedPollBody === undefined
+      ? operation.evidence
+      : {
+          mediaType: "application/json" as const,
+          body: orphanedPollBody,
+          sha256: sha256(orphanedPollBody),
+        }
+    if (orphanedPollBody !== undefined) {
+      yield* Effect.try({
+        try: () => validateProviderEvidence({
+          _tag: "CommitProviderEvidence",
+          runId: operation.runId,
+          operationId: operation.operationId,
+          evidence: durablePollEvidence,
+        }),
+        catch: (error) => error instanceof RunRecordError
+          ? error
+          : new RunRecordError("EVIDENCE_HASH_MISMATCH", "Orphaned Seedance poll evidence could not be reconciled.", "repair-evidence"),
+      })
+      let orphanedDocument: unknown
+      try {
+        orphanedDocument = JSON.parse(Buffer.from(orphanedPollBody).toString("utf8"))
+      } catch {
+        return yield* Effect.fail(new RunRecordError("EVIDENCE_HASH_MISMATCH", "Orphaned Seedance poll evidence is not valid JSON.", "repair-evidence"))
+      }
+      const orphanedPoll = orphanedDocument as Readonly<Record<string, unknown>>
+      if (
+        orphanedDocument === null || typeof orphanedDocument !== "object" || Array.isArray(orphanedDocument) ||
+        orphanedPoll.job_id !== operation.jobId || orphanedPoll.status !== operation.status
+      ) {
+        return yield* Effect.fail(new RunRecordError("EVIDENCE_HASH_MISMATCH", "Orphaned Seedance evidence belongs to a different job or poll status.", "repair-evidence"))
+      }
+    }
+    const orphanedOutputPaths = Object.keys(stored.evidence).filter((path) =>
+      path.startsWith("outputs/") && !current.evidence.some((item) => item.applicationPath === path))
+    if (
+      operation.status === "completed" && operation.outputs.some((output) => {
+        const orphanedBody = stored.evidence[output.applicationPath]
+        return orphanedBody !== undefined && (
+          sha256(output.body) !== output.sha256 || sha256(orphanedBody) !== output.sha256
+        )
+      })
+    ) {
+      return yield* Effect.fail(new RunRecordError(
+        "EVIDENCE_HASH_MISMATCH",
+        "Retried Seedance output evidence contradicts the first durable output bytes.",
+        "repair-evidence",
+      ))
+    }
+    const durableOutputs = operation.status === "completed"
+      ? operation.outputs.map((output) => {
+          const orphanedBody = stored.evidence[output.applicationPath]
+          return orphanedBody === undefined
+            ? output
+            : { ...output, body: orphanedBody, sha256: sha256(orphanedBody) }
+        })
+      : []
+    if (
+      orphanedOutputPaths.some((path) => !durableOutputs.some((output) => output.applicationPath === path))
+    ) {
+      return yield* Effect.fail(new RunRecordError("EVIDENCE_HASH_MISMATCH", "Orphaned Seedance outputs do not match the retried completion set.", "repair-evidence"))
+    }
     let outputReceipts: ReadonlyArray<Readonly<Record<string, JsonValue>>> | undefined
     if (operation.status === "completed") {
       if (
@@ -1603,7 +1703,7 @@ export const recordOperation = (
         return yield* Effect.fail(new RunRecordError("RESERVATION_OUTSIDE_PLAN", "Seedance completion contradicts the reserved count or cost contract."))
       }
       const paths = new Set<string>()
-      for (const output of operation.outputs) {
+      for (const output of durableOutputs) {
         if (
           !/^outputs\/[a-z0-9][a-z0-9._-]*\.mp4$/.test(output.applicationPath) ||
           paths.has(output.applicationPath) || output.mediaType !== "video/mp4" ||
@@ -1614,17 +1714,16 @@ export const recordOperation = (
         }
         paths.add(output.applicationPath)
       }
-      outputReceipts = operation.outputs.map((output) => ({
+      outputReceipts = durableOutputs.map((output) => ({
         applicationPath: output.applicationPath,
         sha256: output.sha256,
         byteLength: output.body.byteLength,
         mediaType: output.mediaType,
       }))
     }
-    const applicationPath = `polls/poll-${String((current.pollCount ?? 0) + 1).padStart(4, "0")}.json`
-    yield* store.writeEvidence(operation.runId, applicationPath, operation.evidence.body)
+    yield* store.writeEvidence(operation.runId, applicationPath, durablePollEvidence.body)
     if (operation.status === "completed") {
-      for (const output of operation.outputs) {
+      for (const output of durableOutputs) {
         yield* store.writeEvidence(operation.runId, output.applicationPath, output.body)
       }
     }
@@ -1640,9 +1739,9 @@ export const recordOperation = (
       previousEventSha256: current.chainHeadSha256,
       payload: {
         applicationPath,
-        sha256: operation.evidence.sha256,
-        byteLength: operation.evidence.body.byteLength,
-        mediaType: operation.evidence.mediaType,
+        sha256: durablePollEvidence.sha256,
+        byteLength: durablePollEvidence.body.byteLength,
+        mediaType: durablePollEvidence.mediaType,
         jobId: operation.jobId,
         status: operation.status,
         ...(operation.status === "pending"
@@ -1658,10 +1757,10 @@ export const recordOperation = (
     yield* store.appendEvent(operation.runId, current.chainHeadSha256, encodeEvent(event))
     const nextEvidence = {
       ...stored.evidence,
-      [applicationPath]: operation.evidence.body,
+      [applicationPath]: durablePollEvidence.body,
       ...(operation.status === "pending"
         ? {}
-        : Object.fromEntries(operation.outputs.map((output) => [output.applicationPath, output.body]))),
+        : Object.fromEntries(durableOutputs.map((output) => [output.applicationPath, output.body]))),
     }
     const next = replay(operation.runId, stored.request, [...events, event], nextEvidence)
     yield* store.writeState(operation.runId, encodeView(next))

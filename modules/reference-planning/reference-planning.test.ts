@@ -10,7 +10,13 @@ import {
   byteMediaInspector,
   planReferences,
 } from "./index.js"
-import { makeFixture, sha256 } from "../../tests/control-plane-fixture.js"
+import {
+  forgedNonDecodableMp4,
+  malformedAudioTrack,
+  makeFixture,
+  sha256,
+  zeroVideoTimingSampleCount,
+} from "../../tests/control-plane-fixture.js"
 
 const markerOnlyMp4 = (): Uint8Array => {
   const body = Buffer.alloc(76)
@@ -46,6 +52,40 @@ test("refuses MP4 marker bytes without a structural playable video track", async
     applicationPath: "references/forged.mp4",
     bytes: forged,
     sha256: sha256(forged),
+  }))
+  assert.equal(result._tag, "Failure")
+})
+
+test("refuses a box-consistent MP4 whose declared video stream cannot decode", async () => {
+  const forged = forgedNonDecodableMp4()
+  const result = await Effect.runPromiseExit(byteMediaInspector.inspect({
+    applicationPath: "references/non-decodable.mp4",
+    bytes: forged,
+    sha256: sha256(forged),
+  }))
+  assert.equal(result._tag, "Failure")
+})
+
+test("refuses MP4 timing tables with zero declared video samples", async () => {
+  const fixture = makeFixture("seedance-video")
+  const snapshot = await Effect.runPromise(fixture.files.read("references/neutral.mp4"))
+  const malformed = zeroVideoTimingSampleCount(snapshot.bytes)
+  const result = await Effect.runPromiseExit(byteMediaInspector.inspect({
+    applicationPath: snapshot.applicationPath,
+    bytes: malformed,
+    sha256: sha256(malformed),
+  }))
+  assert.equal(result._tag, "Failure")
+})
+
+test("refuses a malformed declared audio track instead of treating it as no audio", async () => {
+  const fixture = makeFixture("seedance-video")
+  const snapshot = await Effect.runPromise(fixture.files.read("references/neutral.mp4"))
+  const malformed = malformedAudioTrack(snapshot.bytes)
+  const result = await Effect.runPromiseExit(byteMediaInspector.inspect({
+    applicationPath: snapshot.applicationPath,
+    bytes: malformed,
+    sha256: sha256(malformed),
   }))
   assert.equal(result._tag, "Failure")
 })

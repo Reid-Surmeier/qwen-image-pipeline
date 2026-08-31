@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto"
+import { spawnSync } from "node:child_process"
 
 import { Effect } from "effect"
 
@@ -117,6 +118,15 @@ const validSampleTable = (
   const sampleSize = readUint32(bytes, stsz.contentStart + 4)
   const sampleCount = readUint32(bytes, stsz.contentStart + 8)
   if (sampleCount < 1) return false
+  let timingSampleCount = 0
+  for (let index = 0; index < timingCount; index += 1) {
+    const entryOffset = stts.contentStart + 8 + index * 8
+    const entrySamples = readUint32(bytes, entryOffset)
+    const sampleDelta = readUint32(bytes, entryOffset + 4)
+    if (entrySamples < 1 || sampleDelta < 1) return false
+    timingSampleCount += entrySamples
+  }
+  if (!Number.isSafeInteger(timingSampleCount) || timingSampleCount !== sampleCount) return false
   let sampleBytes = sampleSize * sampleCount
   if (sampleSize === 0) {
     if (stsz.contentStart + 12 + sampleCount * 4 > stsz.end) return false
@@ -132,6 +142,27 @@ const validSampleTable = (
     mediaData.some((box) => offset >= box.contentStart && offset < box.end))
   const totalMediaBytes = mediaData.reduce((total, box) => total + box.end - box.contentStart, 0)
   return Number.isSafeInteger(sampleBytes) && everyChunkIsInMedia && sampleBytes > 0 && sampleBytes <= totalMediaBytes
+}
+
+const requireDecodableVideo = (bytes: Uint8Array): void => {
+  const result = spawnSync(
+    "/usr/bin/ffmpeg",
+    [
+      "-nostdin", "-hide_banner", "-loglevel", "error", "-xerror", "-threads", "1",
+      "-protocol_whitelist", "pipe", "-i", "pipe:0", "-map", "0:v:0", "-map", "0:a?",
+      "-f", "null", "-",
+    ],
+    {
+      input: bytes,
+      timeout: 15_000,
+      maxBuffer: 1_048_576,
+      env: { LANG: "C", LC_ALL: "C", PATH: "/usr/bin:/bin" },
+      windowsHide: true,
+    },
+  )
+  if (result.error !== undefined || result.status !== 0) {
+    throw new VideoVerificationError("VIDEO_MEDIA_INVALID", "The MP4 video stream could not be decoded safely.")
+  }
 }
 
 const inspectMp4 = (
@@ -178,7 +209,11 @@ const inspectMp4 = (
     const handler = Buffer.from(bytes.subarray(hdlr.contentStart + 8, hdlr.contentStart + 12)).toString("ascii")
     const mediaInformation = parseBoxes(bytes, minf.contentStart, minf.end)
     const stbl = requireBox(mediaInformation, "stbl")
-    if (!validSampleTable(bytes, stbl, mediaData, handler)) continue
+    const sampleTableValid = validSampleTable(bytes, stbl, mediaData, handler)
+    if ((handler === "vide" || handler === "soun") && !sampleTableValid) {
+      throw new VideoVerificationError("VIDEO_MEDIA_INVALID", "The MP4 video or audio sample table is malformed.")
+    }
+    if (!sampleTableValid) continue
     if (handler === "vide") {
       videoTrack = {
         width: readUint32(bytes, tkhd.end - 8) / 65_536,
@@ -199,6 +234,7 @@ const inspectMp4 = (
   ) {
     throw new VideoVerificationError("VIDEO_MEDIA_INVALID", "The MP4 dimensions or duration are invalid.")
   }
+  requireDecodableVideo(bytes)
   return { width, height, durationSeconds: duration / timescale, hasAudio }
 }
 

@@ -1,0 +1,24 @@
+# ADR 0007: Decode Seedance evidence locally
+
+- Status: Accepted
+- Date: 2026-08-30
+- Governing specification: GitHub Issue #23
+
+## Context
+
+A structurally consistent MP4 can still declare media samples that no decoder can read. A crafted 237-byte file passed the first hierarchy and sample-table checks even though both FFmpeg and FFprobe rejected it. Treating container markers as playable evidence would let Reference Planning admit a false video or let Video Verification and Run Record classify an unusable output.
+
+## Decision
+
+Keep the three structural inspectors independent, reconcile timing sample counts with sample-size counts, and require each inspector to decode the exact MP4 bytes through FFmpeg 6 at `/usr/bin/ffmpeg` before accepting them.
+
+The decoder receives bytes only through standard input. Its fixed argument vector disables standard input interaction, allows only the `pipe` protocol, maps the required video stream and any declared audio stream, turns decode errors into failure, uses one thread, emits no output file, and has bounded time and diagnostic buffers. No shell is involved and the child environment contains only `LANG`, `LC_ALL`, and `PATH`. Absence, timeout, or any decoder error fails closed through the owning module's typed error.
+
+The deterministic baseline pins the supported FFmpeg major and permits only this exact decoder invocation. A changed executable, arguments, or environment remains blocked, and the inherited native seccomp filter continues to deny network syscalls in the decoder process.
+
+## Consequences
+
+- Reference intake, output verification, and replay all reject box-consistent but undecodable video.
+- A malformed declared audio track is an error rather than evidence that audio is absent.
+- The baseline now requires FFmpeg 6 at the fixed system path; another host must satisfy that prerequisite before the procedure can verify Seedance evidence.
+- The three modules retain separate container parsers so one planning assertion cannot grade its own output, while all use the same host decoder requirement.

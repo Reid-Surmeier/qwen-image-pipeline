@@ -20,6 +20,7 @@ static int guard_active = 0;
 static char pinned_python[PATH_MAX];
 static char pinned_node[PATH_MAX];
 static char pinned_git[PATH_MAX];
+static char pinned_ffmpeg[PATH_MAX];
 static char pinned_repository[PATH_MAX];
 static char pinned_ld_preload[PATH_MAX];
 static char pinned_pythonpath[PATH_MAX];
@@ -77,6 +78,7 @@ __attribute__((constructor)) static void initialize_guard(void) {
     copy_resolved_environment("QWEN_BASELINE_PYTHON", pinned_python);
     copy_resolved_environment("QWEN_BASELINE_NODE", pinned_node);
     copy_resolved_environment("QWEN_BASELINE_GIT", pinned_git);
+    copy_resolved_environment("QWEN_BASELINE_FFMPEG", pinned_ffmpeg);
     copy_resolved_environment("QWEN_BASELINE_REPOSITORY", pinned_repository);
     copy_environment("LD_PRELOAD", pinned_ld_preload, sizeof(pinned_ld_preload));
     copy_environment("PYTHONPATH", pinned_pythonpath, sizeof(pinned_pythonpath));
@@ -161,6 +163,23 @@ static int approved_git_arguments(char *const argv[]) {
         || strcmp(argv[3], "show") == 0;
 }
 
+static int approved_ffmpeg_arguments(char *const argv[]) {
+    static const char *expected[] = {
+        "-nostdin", "-hide_banner", "-loglevel", "error", "-xerror", "-threads", "1",
+        "-protocol_whitelist", "pipe", "-i", "pipe:0", "-map", "0:v:0", "-map", "0:a?",
+        "-f", "null", "-", NULL,
+    };
+    if (argv == NULL) {
+        return 0;
+    }
+    for (size_t index = 0; expected[index] != NULL; index++) {
+        if (argv[index + 1] == NULL || strcmp(argv[index + 1], expected[index]) != 0) {
+            return 0;
+        }
+    }
+    return argv[19] == NULL;
+}
+
 static const char *environment_value(char *const envp[], const char *name) {
     if (envp == NULL) {
         return NULL;
@@ -189,6 +208,7 @@ static int environment_preserves_guard(char *const envp[]) {
         && environment_matches(envp, "QWEN_BASELINE_PYTHON", pinned_python)
         && environment_matches(envp, "QWEN_BASELINE_NODE", pinned_node)
         && environment_matches(envp, "QWEN_BASELINE_GIT", pinned_git)
+        && environment_matches(envp, "QWEN_BASELINE_FFMPEG", pinned_ffmpeg)
         && environment_matches(
             envp,
             "QWEN_BASELINE_ALLOWED_SCRIPTS",
@@ -198,6 +218,28 @@ static int environment_preserves_guard(char *const envp[]) {
         && environment_matches(envp, "PYTHONPATH", pinned_pythonpath)
         && environment_matches(envp, "NODE_OPTIONS", pinned_node_options)
         && environment_matches(envp, "PATH", pinned_path);
+}
+
+static int decoder_environment_is_sanitized(char *const envp[]) {
+    if (envp == NULL) {
+        return 0;
+    }
+    size_t count = 0;
+    while (envp[count] != NULL) {
+        count++;
+    }
+    return count == 3
+        && environment_matches(envp, "LANG", "C")
+        && environment_matches(envp, "LC_ALL", "C")
+        && environment_matches(envp, "PATH", "/usr/bin:/bin");
+}
+
+static int approved_ffmpeg_exec(const char *path, char *const argv[]) {
+    char resolved[PATH_MAX];
+    return pinned_ffmpeg[0] != '\0'
+        && resolve_executable(path, resolved)
+        && strcmp(resolved, pinned_ffmpeg) == 0
+        && approved_ffmpeg_arguments(argv);
 }
 
 static int approved_exec(const char *path, char *const argv[]) {
@@ -275,10 +317,11 @@ int execve(const char *path, char *const argv[], char *const envp[]) {
     if (real_execve == NULL) {
         real_execve = dlsym(RTLD_NEXT, "execve");
     }
-    if (
-        guard_active
-        && (!approved_exec(path, argv) || !environment_preserves_guard(envp))
-    ) {
+    int ffmpeg = guard_active && approved_ffmpeg_exec(path, argv);
+    if (guard_active && (
+        ffmpeg ? !decoder_environment_is_sanitized(envp)
+               : (!approved_exec(path, argv) || !environment_preserves_guard(envp))
+    )) {
         errno = EPERM;
         return -1;
     }
@@ -297,10 +340,11 @@ int posix_spawn(
     if (real_posix_spawn == NULL) {
         real_posix_spawn = dlsym(RTLD_NEXT, "posix_spawn");
     }
-    if (
-        guard_active
-        && (!approved_exec(path, argv) || !environment_preserves_guard(envp))
-    ) {
+    int ffmpeg = guard_active && approved_ffmpeg_exec(path, argv);
+    if (guard_active && (
+        ffmpeg ? !decoder_environment_is_sanitized(envp)
+               : (!approved_exec(path, argv) || !environment_preserves_guard(envp))
+    )) {
         return EPERM;
     }
     return real_posix_spawn(pid, path, actions, attributes, argv, envp);
@@ -318,10 +362,11 @@ int posix_spawnp(
     if (real_posix_spawnp == NULL) {
         real_posix_spawnp = dlsym(RTLD_NEXT, "posix_spawnp");
     }
-    if (
-        guard_active
-        && (!approved_exec(path, argv) || !environment_preserves_guard(envp))
-    ) {
+    int ffmpeg = guard_active && approved_ffmpeg_exec(path, argv);
+    if (guard_active && (
+        ffmpeg ? !decoder_environment_is_sanitized(envp)
+               : (!approved_exec(path, argv) || !environment_preserves_guard(envp))
+    )) {
         return EPERM;
     }
     return real_posix_spawnp(pid, path, actions, attributes, argv, envp);
