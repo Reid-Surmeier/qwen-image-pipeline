@@ -1423,7 +1423,21 @@ export const reserveRun = (
         ) {
           return Effect.fail(new RunRecordError("RUN_ID_CONFLICT", "The existing Run identity belongs to different immutable evidence."))
         }
-        return Effect.succeed(existing)
+        if (existing.phase !== "submission_may_have_started") return Effect.succeed(existing)
+        return store.read(runId).pipe(Effect.flatMap((stored) => {
+          const orphanedProviderBody = stored.evidence["provider-response.json"]
+          if (orphanedProviderBody === undefined) return Effect.succeed(existing)
+          return recordOperation({
+            _tag: "CommitProviderEvidence",
+            runId,
+            operationId: "recover-provider-evidence",
+            evidence: {
+              mediaType: "application/json",
+              body: orphanedProviderBody,
+              sha256: sha256(orphanedProviderBody),
+            },
+          }).pipe(Effect.map((result) => result.view))
+        }))
       }))
     }),
   )
@@ -1464,7 +1478,8 @@ const valueHasSecret = (value: unknown, key?: string, embeddedDepth = 0): boolea
       /https?:\/\/[^/\s:@]+:[^/\s@]+@/i.test(value) ||
       /"(?:credential|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|authorization|password|secret|(?:access|refresh|id)[_-]?token)"\s*:/i.test(value)
     ) return true
-    if (embeddedDepth < 4 && /^\s*[\[{]/.test(value)) {
+    if (/^\s*[\[{]/.test(value)) {
+      if (embeddedDepth >= 4) return true
       try {
         if (hasDuplicateJsonKeys(value)) return true
         if (valueHasSecret(JSON.parse(value), key, embeddedDepth + 1)) return true

@@ -122,9 +122,39 @@ def validate_repository(root: Path) -> list[str]:
                 len(workflow_lines),
             )
             verify_lines = workflow_lines[verify_start:verify_end]
-        if "build/**" not in workflow_text:
+        expected_push = [
+            "  push:",
+            "    branches:",
+            "      - main",
+            '      - "build/**"',
+        ]
+        try:
+            push_start = workflow_lines.index(expected_push[0])
+        except ValueError:
+            push_valid = False
+        else:
+            push_valid = workflow_lines[push_start:push_start + len(expected_push)] == expected_push
+        if not push_valid:
             problems.append("Verify workflow does not run on build branches")
-        if "scripts/verify.sh" not in workflow_text:
+        expected_baseline_step = [
+            "      - name: Run the canonical repository baseline",
+            "        run: /usr/bin/env -i /bin/bash --noprofile --norc scripts/verify.sh",
+        ]
+        baseline_step_valid = False
+        for index, line in enumerate(verify_lines):
+            if line != expected_baseline_step[0]:
+                continue
+            end = next(
+                (
+                    candidate
+                    for candidate in range(index + 1, len(verify_lines))
+                    if verify_lines[candidate].startswith("      - ")
+                ),
+                len(verify_lines),
+            )
+            baseline_step_valid = [item for item in verify_lines[index:end] if item.strip()] == expected_baseline_step
+            break
+        if not baseline_step_valid:
             problems.append("Verify workflow does not call the canonical baseline")
         if verify_lines.count("    runs-on: ubuntu-24.04") != 1:
             problems.append("Verify workflow does not pin the FFmpeg 6 runner image")

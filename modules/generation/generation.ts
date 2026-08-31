@@ -102,7 +102,8 @@ const hasSecretMaterial = (value: unknown, parentKey = "", embeddedDepth = 0): b
       /https?:\/\/[^/\s:@]+:[^/\s@]+@/i.test(value) ||
       /"(?:credential|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|authorization|password|secret|(?:access|refresh|id)[_-]?token)"\s*:/i.test(value)
     ) return true
-    if (embeddedDepth < 4 && /^\s*[\[{]/.test(value)) {
+    if (/^\s*[\[{]/.test(value)) {
+      if (embeddedDepth >= 4) return true
       try {
         if (hasDuplicateJsonKeys(value)) return true
         if (hasSecretMaterial(JSON.parse(value), parentKey, embeddedDepth + 1)) return true

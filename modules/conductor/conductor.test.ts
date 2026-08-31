@@ -531,4 +531,58 @@ test("advances one Seedance Run by submitting once and polling the same job to v
   assert.equal(submitCalls, 1)
   assert.equal(pollCalls, 3)
   assert.match(completed.normalView.evidence, /video.*checks/i)
+
+  const stranded = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const locked = plannedDecision.run.request.references[0]!
+  const prepared = await Effect.runPromise(prepare(plannedDecision.run.request, [{
+    slot: locked.slot,
+    applicationPath: locked.applicationPath,
+    sha256: locked.sha256,
+    payloadDestination: locked.payloadDestination,
+    mediaType: locked.mediaType,
+    bytes: videoBody,
+  }]))
+  const reservation = await Effect.runPromise(reserve({
+    plannedRun: plannedDecision.run,
+    payloadSha256: prepared.payloadSha256,
+  }).pipe(Effect.provide(stranded.layer), Effect.provideService(RunRecordClock, clock)))
+  await Effect.runPromise(record({
+    _tag: "SubmissionMayHaveStarted",
+    runId: reservation.runId,
+    operationId: "stranded-seedance-submission",
+  }).pipe(Effect.provide(stranded.layer), Effect.provideService(RunRecordClock, clock)))
+  await Effect.runPromise(stranded.mutate(reservation.runId, (stored) => {
+    stored.evidence["provider-response.json"] = submissionBody
+  }))
+  const submitsBeforeRecovery = submitCalls
+  let recoveryPollCalls = 0
+  const recoveryAdapter: GenerationAdapterService = {
+    invoke: () => Effect.die("orphan recovery must not resubmit"),
+    submitSeedance: () => Effect.die("orphan recovery must not resubmit"),
+    pollSeedance: (_prepared, jobId, evidence) => Effect.sync(() => {
+      recoveryPollCalls += 1
+      assert.equal(jobId, "seedance-job-1")
+      assert.equal(evidence.sha256, hash(submissionBody))
+      return {
+        status: "pending" as const,
+        provider: "openrouter" as const,
+        model: plannedDecision.run.request.model,
+        jobId,
+        providerEvidence: {
+          mediaType: "application/json" as const,
+          body: pendingBody,
+          sha256: hash(pendingBody),
+        },
+      }
+    }),
+  }
+  const recoveredSubmission = await Effect.runPromise(advance({ run: plannedDecision.run }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(GenerationAdapter, recoveryAdapter),
+    Effect.provide(stranded.layer),
+    Effect.provideService(RunRecordClock, clock),
+  ))
+  assert.equal(recoveredSubmission._tag, "ProviderPending")
+  assert.equal(submitCalls, submitsBeforeRecovery)
+  assert.equal(recoveryPollCalls, 1)
 })

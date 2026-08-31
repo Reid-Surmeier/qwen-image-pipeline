@@ -79,6 +79,40 @@ class SuccessorGovernanceTests(unittest.TestCase):
         self.assertIn("Verify workflow does not pin the FFmpeg 6 runner image", problems)
         self.assertIn("Verify workflow does not install the FFmpeg 6 prerequisite", problems)
 
+    def test_comments_cannot_disguise_missing_build_trigger_or_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "repository"
+            for relative in (
+                "AGENTS.md",
+                "README.md",
+                ".github/pull_request_template.md",
+                ".github/workflows/verify.yml",
+                ".sandcastle/sweep.json",
+                "docs/agents/issue-tracker.md",
+                "docs/agents/repository-workflow.md",
+                "docs/agents/triage-labels.md",
+                "scripts/verify.sh",
+            ):
+                source = REPO_ROOT / relative
+                destination = candidate / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(source.read_bytes())
+            workflow = candidate / ".github/workflows/verify.yml"
+            text = workflow.read_text(encoding="utf-8")
+            text = text.replace(
+                '      - "build/**"',
+                '      - "experimental/**"\n      # - "build/**"',
+            ).replace(
+                "        run: /usr/bin/env -i /bin/bash --noprofile --norc scripts/verify.sh",
+                "        run: true\n        # run: /usr/bin/env -i /bin/bash --noprofile --norc scripts/verify.sh",
+            )
+            workflow.write_text(text, encoding="utf-8")
+
+            problems = validate_repository(candidate)
+
+        self.assertIn("Verify workflow does not run on build branches", problems)
+        self.assertIn("Verify workflow does not call the canonical baseline", problems)
+
 
 if __name__ == "__main__":
     unittest.main()

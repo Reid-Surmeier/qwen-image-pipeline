@@ -1,4 +1,28 @@
 export const EMBEDDED_PROVIDER_SECRET_CASES = [
   ["nested-json-secret", '{"debug":"{\\"api_key\\":\\"actual-private-value\\"}","status":"accepted"}'],
   ["nested-json-duplicate-secret", '{"debug":"{\\"note\\":\\"sk-private-value-123456\\",\\"note\\":\\"redacted\\"}","status":"accepted"}'],
+  ["deeply-nested-json-secret", JSON.stringify({
+    debug: JSON.stringify({
+      debug: JSON.stringify({
+        debug: JSON.stringify({
+          debug: JSON.stringify({
+            debug: JSON.stringify({ api_key: "actual-private-value" }),
+          }),
+        }),
+      }),
+    }),
+    status: "accepted",
+  })],
+  ["deeply-nested-unicode-secret", JSON.stringify({
+    debug: JSON.stringify({
+      debug: JSON.stringify({
+        debug: JSON.stringify({
+          debug: JSON.stringify({
+            debug: '{"\\u0061pi_key":"actual-private-value"}',
+          }),
+        }),
+      }),
+    }),
+    status: "accepted",
+  })],
 ] as const

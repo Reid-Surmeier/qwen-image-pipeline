@@ -5,6 +5,8 @@
 - Errors: `modules/conductor/errors.ts`
 - Acceptance: `modules/conductor/conductor.test.ts`
 
+If a sanitized Seedance submission response became write-once durable before its journal event, the next advance lets Run Record reconcile it during reservation reload and continues from the recovered job identity without another submission.
+
 `plan` discovers the fixed Project Contract and Tool Lock, reads one application-relative Objective, delegates evidence and contract proof, and returns either a Planned Run or a refusal. Both results contain the five-question Normal View. Planning has no Generation, credential, network, Run Record writer, attempt reservation, clock, or randomness capability.
 
 `advance` is the single execution interface for both tracer bullets. For Qwen Assembly it prepares the exact locked reference payload, reserves and marks one Run, spends its one-use Submission Permit through Generation, persists provider and donor evidence, and always stops at a genuine donor-choice decision; a selection supplied before that checkpoint exists is deliberately ignored. If persistence stops after the provider receipt or after only part of the reserved output set, a later call passes that exact receipt through Generation recovery, replays already-written output operations, writes only the missing evidence, and never submits again. A later call supplying the selected persisted SHA-256 resumes that same Run without Generation, reads verified baseline and donor evidence, performs deterministic Assembly, runs the ordered Fidelity Checks, persists their evidence, and returns a Verified Candidate.
