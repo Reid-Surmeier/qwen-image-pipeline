@@ -121,6 +121,21 @@ const stringHasCredentialField = (value: string): boolean => {
       return true
     }
   }
+  const looseFieldIsCredential = (encoded: string): boolean => {
+    if (!encoded.includes("\\")) return credentialFieldName(encoded)
+    try {
+      const decoded = JSON.parse(`"${encoded}"`) as unknown
+      return typeof decoded !== "string" || credentialFieldName(decoded)
+    } catch {
+      return true
+    }
+  }
+  for (const match of value.matchAll(/'((?:\\.|[^'\\])*)'\s*[:=]/g)) {
+    if (looseFieldIsCredential(match[1] ?? "")) return true
+  }
+  for (const match of value.matchAll(/([\\\p{L}\p{N}_-]+)\s*[:=]/gu)) {
+    if (looseFieldIsCredential(match[1] ?? "")) return true
+  }
   return false
 }
 
