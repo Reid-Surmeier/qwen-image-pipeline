@@ -138,7 +138,13 @@ const snapshotProviderEvidence = (value: unknown): ProviderEvidenceSnapshot | un
     const mediaType = evidence.mediaType
     const body = evidence.body
     const digest = evidence.sha256
-    if (mediaType !== "application/json" || !(body instanceof Uint8Array) || typeof digest !== "string") {
+    if (
+      Reflect.ownKeys(evidence).length !== 3 ||
+      !Object.hasOwn(evidence, "mediaType") ||
+      !Object.hasOwn(evidence, "body") ||
+      !Object.hasOwn(evidence, "sha256") ||
+      mediaType !== "application/json" || !(body instanceof Uint8Array) || typeof digest !== "string"
+    ) {
       return undefined
     }
     return {

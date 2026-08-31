@@ -228,7 +228,10 @@ const objectRecord = (value: unknown): Readonly<Record<string, unknown>> | undef
 const hasExactKeys = (
   value: Readonly<Record<string, unknown>>,
   keys: ReadonlyArray<string>,
-): boolean => Reflect.ownKeys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key))
+): boolean => Reflect.ownKeys(value).length === keys.length && keys.every((key) => {
+  const descriptor = Object.getOwnPropertyDescriptor(value, key)
+  return descriptor !== undefined && Object.hasOwn(descriptor, "value")
+})
 
 const safeIdentifier = (value: unknown): value is string =>
   typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)
@@ -284,7 +287,8 @@ const denseClosedArray = (value: ReadonlyArray<unknown>): boolean => {
   const keys = Reflect.ownKeys(value)
   if (keys.length !== value.length + 1 || !keys.includes("length")) return false
   for (let index = 0; index < value.length; index += 1) {
-    if (!Object.hasOwn(value, index)) return false
+    const descriptor = Object.getOwnPropertyDescriptor(value, index)
+    if (descriptor === undefined || !Object.hasOwn(descriptor, "value")) return false
   }
   return keys.every((key) => key === "length" || (
     typeof key === "string" && /^(?:0|[1-9]\d*)$/.test(key) &&

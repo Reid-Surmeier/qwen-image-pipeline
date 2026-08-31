@@ -11,6 +11,7 @@ import {
 import { RunRecordError } from "./errors.js"
 import type { CanonicalRunRequest } from "../run-contract/index.js"
 import type {
+  GeneratedOutputEvidenceInput,
   ProviderEvidenceInput,
   RecordOperation,
   RecordResult,
@@ -20,6 +21,7 @@ import type {
   RunLink,
   RunRecordStoreService,
   RunRecordView,
+  SeedanceCostInput,
   SubmissionBinding,
   SubmissionPermit,
   StoredRunRecord,
@@ -1030,8 +1032,12 @@ const replay = (
         throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance poll evidence is missing, out of order, or changed.", "repair-evidence")
       }
       let pollDocument: unknown
+      const pollSource = Buffer.from(pollEvidence).toString("utf8")
+      if (hasDuplicateJsonKeys(pollSource)) {
+        throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance poll evidence contains duplicate JSON keys.", "repair-evidence")
+      }
       try {
-        pollDocument = JSON.parse(Buffer.from(pollEvidence).toString("utf8"))
+        pollDocument = JSON.parse(pollSource)
       } catch {
         throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance poll evidence is not valid JSON.", "repair-evidence")
       }
@@ -1554,7 +1560,13 @@ const snapshotProviderEvidence = (value: unknown): ProviderEvidenceInput | undef
   const mediaType = evidence.mediaType
   const body = evidence.body
   const digest = evidence.sha256
-  if (mediaType !== "application/json" || !(body instanceof Uint8Array) || typeof digest !== "string") {
+  if (
+    Reflect.ownKeys(evidence).length !== 3 ||
+    !Object.hasOwn(evidence, "mediaType") ||
+    !Object.hasOwn(evidence, "body") ||
+    !Object.hasOwn(evidence, "sha256") ||
+    mediaType !== "application/json" || !(body instanceof Uint8Array) || typeof digest !== "string"
+  ) {
     return undefined
   }
   return {
@@ -1562,6 +1574,72 @@ const snapshotProviderEvidence = (value: unknown): ProviderEvidenceInput | undef
     body: Buffer.isBuffer(body) ? Buffer.from(body) : Uint8Array.from(body),
     sha256: digest,
   }
+}
+
+const exactOwnKeys = (value: object, keys: ReadonlyArray<string>): boolean => {
+  const ownKeys = Reflect.ownKeys(value)
+  return ownKeys.length === keys.length && keys.every((key) => Object.hasOwn(value, key))
+}
+
+const snapshotGeneratedOutput = (value: unknown): GeneratedOutputEvidenceInput | undefined => {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined
+  const output = value as Readonly<Record<string, unknown>>
+  const prototype = Object.getPrototypeOf(output)
+  const keys = ["applicationPath", "mediaType", "body", "sha256"]
+  if ((prototype !== Object.prototype && prototype !== null) || !exactOwnKeys(output, keys)) return undefined
+  const applicationPath = output.applicationPath
+  const mediaType = output.mediaType
+  const body = output.body
+  const digest = output.sha256
+  if (
+    !exactOwnKeys(output, keys) ||
+    typeof applicationPath !== "string" || !applicationPath.startsWith("outputs/") ||
+    typeof mediaType !== "string" || !(body instanceof Uint8Array) || typeof digest !== "string"
+  ) return undefined
+  return {
+    applicationPath: applicationPath as `outputs/${string}`,
+    mediaType,
+    body: Buffer.isBuffer(body) ? Buffer.from(body) : Uint8Array.from(body),
+    sha256: digest,
+  }
+}
+
+const snapshotGeneratedOutputs = (
+  value: unknown,
+): ReadonlyArray<GeneratedOutputEvidenceInput> | undefined => {
+  if (!Array.isArray(value)) return undefined
+  const keys = ["length", ...Array.from({ length: value.length }, (_, index) => String(index))]
+  if (!exactOwnKeys(value, keys)) return undefined
+  const outputs: GeneratedOutputEvidenceInput[] = []
+  for (let index = 0; index < value.length; index += 1) {
+    if (!Object.hasOwn(value, index)) return undefined
+    const output = snapshotGeneratedOutput(value[index])
+    if (output === undefined) return undefined
+    outputs.push(output)
+  }
+  return exactOwnKeys(value, keys) ? outputs : undefined
+}
+
+const snapshotSeedanceCost = (value: unknown): SeedanceCostInput | undefined => {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined
+  const cost = value as Readonly<Record<string, unknown>>
+  const prototype = Object.getPrototypeOf(cost)
+  if (prototype !== Object.prototype && prototype !== null) return undefined
+  const initialKeys = Reflect.ownKeys(cost)
+  if (
+    initialKeys.length < 1 || initialKeys.length > 2 ||
+    !Object.hasOwn(cost, "state") ||
+    (initialKeys.length === 2 && !Object.hasOwn(cost, "actualCostUsd"))
+  ) return undefined
+  const state = cost.state
+  const actualCostUsd = cost.actualCostUsd
+  const expectedKeys = actualCostUsd === undefined ? ["state"] : ["state", "actualCostUsd"]
+  if (
+    !exactOwnKeys(cost, expectedKeys) ||
+    typeof state !== "string" ||
+    (actualCostUsd !== undefined && typeof actualCostUsd !== "string")
+  ) return undefined
+  return (actualCostUsd === undefined ? { state } : { state, actualCostUsd }) as SeedanceCostInput
 }
 
 const validateProviderEvidenceForRequest = (
@@ -1649,13 +1727,43 @@ export const recordOperation = (
   const runRequest = JSON.parse(Buffer.from(stored.request).toString("utf8")) as CanonicalRunRequest
   let stableProviderEvidence: ProviderEvidenceInput | undefined
   if (operation._tag === "CommitProviderEvidence" || operation._tag === "CommitSeedancePoll") {
+    const evidence = operation.evidence
     stableProviderEvidence = yield* Effect.try({
-      try: () => snapshotProviderEvidence(operation.evidence),
+      try: () => snapshotProviderEvidence(evidence),
       catch: () => new RunRecordError("EVIDENCE_HASH_MISMATCH", "Provider evidence could not be snapshotted safely.", "repair-evidence"),
     })
     if (stableProviderEvidence === undefined) {
       return yield* Effect.fail(new RunRecordError("EVIDENCE_HASH_MISMATCH", "Provider evidence must match its closed wrapper schema.", "repair-evidence"))
     }
+  }
+  let stableGeneratedOutput: GeneratedOutputEvidenceInput | undefined
+  if (operation._tag === "CommitGeneratedOutput") {
+    const output = operation.output
+    stableGeneratedOutput = yield* Effect.try({
+      try: () => snapshotGeneratedOutput(output),
+      catch: () => new RunRecordError("EVIDENCE_HASH_MISMATCH", "Generated output could not be snapshotted safely.", "repair-evidence"),
+    })
+    if (stableGeneratedOutput === undefined) {
+      return yield* Effect.fail(new RunRecordError("EVIDENCE_HASH_MISMATCH", "Generated output must match its closed evidence schema.", "repair-evidence"))
+    }
+  }
+  let stableSeedanceOutputs: ReadonlyArray<GeneratedOutputEvidenceInput> | undefined
+  let stableSeedanceCost: SeedanceCostInput | undefined
+  if (operation._tag === "CommitSeedancePoll" && operation.status === "completed") {
+    const outputs = operation.outputs
+    const cost = operation.cost
+    const snapshot = yield* Effect.try({
+      try: () => ({
+        outputs: snapshotGeneratedOutputs(outputs),
+        cost: snapshotSeedanceCost(cost),
+      }),
+      catch: () => new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance completion could not be snapshotted safely.", "repair-evidence"),
+    })
+    if (snapshot.outputs === undefined || snapshot.cost === undefined) {
+      return yield* Effect.fail(new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance completion must match its closed output and cost schemas.", "repair-evidence"))
+    }
+    stableSeedanceOutputs = snapshot.outputs
+    stableSeedanceCost = snapshot.cost
   }
   const expectedKind = operation._tag === "SubmissionMayHaveStarted"
     ? "submission_may_have_started"
@@ -1693,10 +1801,10 @@ export const recordOperation = (
     if (
       operation._tag === "CommitGeneratedOutput" &&
       (
-        stringPayload(replayed.payload, "applicationPath") !== operation.output.applicationPath ||
-        stringPayload(replayed.payload, "sha256") !== operation.output.sha256 ||
-        stringPayload(replayed.payload, "mediaType") !== operation.output.mediaType ||
-        sha256(operation.output.body) !== operation.output.sha256
+        stringPayload(replayed.payload, "applicationPath") !== stableGeneratedOutput!.applicationPath ||
+        stringPayload(replayed.payload, "sha256") !== stableGeneratedOutput!.sha256 ||
+        stringPayload(replayed.payload, "mediaType") !== stableGeneratedOutput!.mediaType ||
+        sha256(stableGeneratedOutput!.body) !== stableGeneratedOutput!.sha256
       )
     ) {
       return yield* Effect.fail(new RunRecordError("IDEMPOTENCY_CONFLICT", "The operation identity was replayed with different generated output evidence."))
@@ -1704,7 +1812,7 @@ export const recordOperation = (
     if (operation._tag === "CommitSeedancePoll") {
       const replayedOutputs = replayed.payload.outputs
       const operationOutputs = operation.status === "completed"
-        ? operation.outputs.map((output) => ({
+        ? stableSeedanceOutputs!.map((output) => ({
             applicationPath: output.applicationPath,
             sha256: output.sha256,
             byteLength: output.body.byteLength,
@@ -1718,10 +1826,10 @@ export const recordOperation = (
         sha256(stableProviderEvidence!.body) !== stableProviderEvidence!.sha256 ||
         canonicalJson((replayedOutputs ?? null) as JsonValue) !== canonicalJson((operationOutputs ?? null) as JsonValue) ||
         (operation.status === "completed" && (
-          operation.outputs.some((output) => sha256(output.body) !== output.sha256) ||
+          stableSeedanceOutputs!.some((output) => sha256(output.body) !== output.sha256) ||
           numberPayload(replayed.payload, "completedCount") !== operation.completedCount ||
-          stringPayload(replayed.payload, "costState") !== operation.cost.state ||
-          (replayed.payload.actualCostUsd ?? null) !== (operation.cost.actualCostUsd ?? null)
+          stringPayload(replayed.payload, "costState") !== stableSeedanceCost!.state ||
+          (replayed.payload.actualCostUsd ?? null) !== (stableSeedanceCost!.actualCostUsd ?? null)
         ))
       ) {
         return yield* Effect.fail(new RunRecordError("IDEMPOTENCY_CONFLICT", "The operation identity was replayed with different Seedance poll evidence."))
@@ -1868,16 +1976,16 @@ export const recordOperation = (
       return yield* Effect.fail(new RunRecordError("RESERVATION_OUTSIDE_PLAN", "Generated output evidence exceeds the reserved maximum count."))
     }
     if (
-      !/^outputs\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(operation.output.applicationPath) ||
-      operation.output.applicationPath.includes("..") ||
-      operation.output.mediaType.trim().length === 0 ||
-      current.evidence.some((item) => item.applicationPath === operation.output.applicationPath) ||
-      !isSha256(operation.output.sha256) ||
-      sha256(operation.output.body) !== operation.output.sha256
+      !/^outputs\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(stableGeneratedOutput!.applicationPath) ||
+      stableGeneratedOutput!.applicationPath.includes("..") ||
+      stableGeneratedOutput!.mediaType.trim().length === 0 ||
+      current.evidence.some((item) => item.applicationPath === stableGeneratedOutput!.applicationPath) ||
+      !isSha256(stableGeneratedOutput!.sha256) ||
+      sha256(stableGeneratedOutput!.body) !== stableGeneratedOutput!.sha256
     ) {
       return yield* Effect.fail(new RunRecordError("EVIDENCE_HASH_MISMATCH", "Generated output evidence is unsafe or does not match its declared SHA-256.", "repair-evidence"))
     }
-    yield* store.writeEvidence(operation.runId, operation.output.applicationPath, operation.output.body)
+    yield* store.writeEvidence(operation.runId, stableGeneratedOutput!.applicationPath, stableGeneratedOutput!.body)
     const clock = yield* RunRecordClock
     const timestamp = yield* clock.now()
     const event = makeEvent({
@@ -1889,16 +1997,16 @@ export const recordOperation = (
       kind: "generated_output_persisted",
       previousEventSha256: current.chainHeadSha256,
       payload: {
-        applicationPath: operation.output.applicationPath,
-        sha256: operation.output.sha256,
-        byteLength: operation.output.body.byteLength,
-        mediaType: operation.output.mediaType,
+        applicationPath: stableGeneratedOutput!.applicationPath,
+        sha256: stableGeneratedOutput!.sha256,
+        byteLength: stableGeneratedOutput!.body.byteLength,
+        mediaType: stableGeneratedOutput!.mediaType,
       },
     })
     yield* store.appendEvent(operation.runId, current.chainHeadSha256, encodeEvent(event))
     const next = replay(operation.runId, stored.request, [...events, event], {
       ...stored.evidence,
-      [operation.output.applicationPath]: operation.output.body,
+      [stableGeneratedOutput!.applicationPath]: stableGeneratedOutput!.body,
     })
     yield* store.writeState(operation.runId, encodeView(next))
     return { _tag: "Recorded" as const, view: next }
@@ -1913,11 +2021,11 @@ export const recordOperation = (
     if (operation.status === "completed" && (
       !Number.isSafeInteger(operation.completedCount) ||
       operation.completedCount !== current.maximumCount ||
-      operation.outputs.length !== operation.completedCount ||
-      (operation.cost.state !== "actual" && operation.cost.state !== "estimated-only" && operation.cost.state !== "unknown") ||
-      (operation.cost.state !== "actual" && operation.cost.actualCostUsd !== undefined) ||
-      (operation.cost.state === "actual" &&
-        (operation.cost.actualCostUsd === undefined || !/^(?:0|[1-9]\d*)\.\d{2,6}$/.test(operation.cost.actualCostUsd)))
+      stableSeedanceOutputs!.length !== operation.completedCount ||
+      (stableSeedanceCost!.state !== "actual" && stableSeedanceCost!.state !== "estimated-only" && stableSeedanceCost!.state !== "unknown") ||
+      (stableSeedanceCost!.state !== "actual" && stableSeedanceCost!.actualCostUsd !== undefined) ||
+      (stableSeedanceCost!.state === "actual" &&
+        (stableSeedanceCost!.actualCostUsd === undefined || !/^(?:0|[1-9]\d*)\.\d{2,6}$/.test(stableSeedanceCost!.actualCostUsd)))
     )) {
       return yield* Effect.fail(new RunRecordError("RESERVATION_OUTSIDE_PLAN", "Seedance completion contradicts the reserved count or cost contract."))
     }
@@ -1946,7 +2054,11 @@ export const recordOperation = (
     ) {
       return yield* Effect.fail(new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance poll evidence substituted its job identity or status.", "repair-evidence"))
     }
-    if (operation.status === "completed" && !completedPollMatchesOperation(poll, operation)) {
+    if (operation.status === "completed" && !completedPollMatchesOperation(poll, {
+      ...operation,
+      outputs: stableSeedanceOutputs!,
+      cost: stableSeedanceCost!,
+    })) {
       return yield* Effect.fail(new RunRecordError(
         "EVIDENCE_HASH_MISMATCH",
         "Completed Seedance poll evidence does not bind its exact output, count, and cost receipts.",
@@ -2016,7 +2128,11 @@ export const recordOperation = (
         yield* store.writeState(operation.runId, encodeView(recovered))
         return { _tag: "Recorded" as const, view: recovered }
       }
-      if (operation.status === "completed" && !completedPollMatchesOperation(orphanedPoll, operation)) {
+      if (operation.status === "completed" && !completedPollMatchesOperation(orphanedPoll, {
+        ...operation,
+        outputs: stableSeedanceOutputs!,
+        cost: stableSeedanceCost!,
+      })) {
         return yield* Effect.fail(new RunRecordError(
           "EVIDENCE_HASH_MISMATCH",
           "Orphaned Seedance poll evidence contradicts the retried output, count, or cost receipts.",
@@ -2027,7 +2143,7 @@ export const recordOperation = (
     const orphanedOutputPaths = Object.keys(stored.evidence).filter((path) =>
       path.startsWith("outputs/") && !current.evidence.some((item) => item.applicationPath === path))
     if (
-      operation.status === "completed" && operation.outputs.some((output) => {
+      operation.status === "completed" && stableSeedanceOutputs!.some((output) => {
         const orphanedBody = stored.evidence[output.applicationPath]
         return orphanedBody !== undefined && (
           sha256(output.body) !== output.sha256 || sha256(orphanedBody) !== output.sha256
@@ -2041,7 +2157,7 @@ export const recordOperation = (
       ))
     }
     const durableOutputs = operation.status === "completed"
-      ? operation.outputs.map((output) => {
+      ? stableSeedanceOutputs!.map((output) => {
           const orphanedBody = stored.evidence[output.applicationPath]
           return orphanedBody === undefined
             ? output
@@ -2102,8 +2218,8 @@ export const recordOperation = (
           : {
               outputs: outputReceipts!,
               completedCount: operation.completedCount,
-              costState: operation.cost.state,
-              ...(operation.cost.actualCostUsd === undefined ? {} : { actualCostUsd: operation.cost.actualCostUsd }),
+              costState: stableSeedanceCost!.state,
+              ...(stableSeedanceCost!.actualCostUsd === undefined ? {} : { actualCostUsd: stableSeedanceCost!.actualCostUsd }),
             }),
       },
     })

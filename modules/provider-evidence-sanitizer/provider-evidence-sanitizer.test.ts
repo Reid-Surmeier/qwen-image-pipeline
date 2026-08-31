@@ -125,6 +125,17 @@ test("accepts only the exact persisted schemas for each provider stage", () => {
     get: () => { throw new Error("hostile accessor") },
   })
   assert.doesNotThrow(() => assert.equal(isSanitizedProviderDocument("qwen", throwingField), false))
+
+  const mutatingField = { status: "completed" } as { status: string; id?: string; debug?: string }
+  Object.defineProperty(mutatingField, "id", {
+    enumerable: true,
+    get: () => {
+      mutatingField.debug = "statefully introduced unknown field"
+      return "fake-qwen-1"
+    },
+  })
+  assert.equal(isSanitizedProviderDocument("qwen", mutatingField), false)
+  assert.equal(mutatingField.debug, undefined)
 })
 
 test("preserves ordinary provider usage metadata", () => {

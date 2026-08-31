@@ -684,6 +684,184 @@ test("freezes Seedance poll bytes before validation and durable persistence", as
   assert.deepEqual(Buffer.from(durable!), safeBody)
 })
 
+test("freezes Qwen generated output bytes before validation and durable persistence", async () => {
+  const planned = await plannedRun()
+  const memory = await memoryHarness()
+  const provide = <Success, Error>(
+    effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
+  ): Effect.Effect<Success, Error> => effect.pipe(
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, clock),
+  )
+  const reserved = await Effect.runPromise(provide(reserve(reservationFor(planned))))
+  await Effect.runPromise(provide(record({
+    _tag: "SubmissionMayHaveStarted",
+    runId: reserved.runId,
+    operationId: "stateful-qwen-output-marker",
+  })))
+  const providerBody = Buffer.from('{"id":"stateful-output","status":"completed"}')
+  await Effect.runPromise(provide(record({
+    _tag: "CommitProviderEvidence",
+    runId: reserved.runId,
+    operationId: "stateful-qwen-output-provider",
+    evidence: {
+      mediaType: "application/json",
+      body: providerBody,
+      sha256: createHash("sha256").update(providerBody).digest("hex"),
+    },
+  })))
+  const safeBody = Buffer.from("safe")
+  const unsafeBody = Buffer.from("evil")
+  let reads = 0
+  const output = {
+    applicationPath: "outputs/stateful.rgba.json" as const,
+    mediaType: "application/vnd.qwen.rgba+json",
+    sha256: createHash("sha256").update(safeBody).digest("hex"),
+  } as unknown as { applicationPath: `outputs/${string}`; mediaType: string; body: Uint8Array; sha256: string }
+  Object.defineProperty(output, "body", {
+    enumerable: true,
+    get: () => (++reads === 1 ? safeBody : unsafeBody),
+  })
+  await Effect.runPromise(provide(record({
+    _tag: "CommitGeneratedOutput",
+    runId: reserved.runId,
+    operationId: "stateful-qwen-output",
+    output,
+  })))
+  assert.deepEqual(Buffer.from(await Effect.runPromise(
+    readEvidence(reserved.runId, output.applicationPath).pipe(Effect.provide(memory.layer)),
+  )), safeBody)
+  assert.equal((await Effect.runPromise(load(reserved.runId).pipe(Effect.provide(memory.layer)))).phase, "generated_outputs_received")
+})
+
+test("freezes Seedance completed output bytes before validation and durable persistence", async () => {
+  const { planned, body: safeBody } = await plannedSeedanceRun()
+  const memory = await memoryHarness()
+  const provide = <Success, Error>(
+    effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
+  ): Effect.Effect<Success, Error> => effect.pipe(
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, clock),
+  )
+  const reserved = await Effect.runPromise(provide(reserve(reservationFor(planned))))
+  await Effect.runPromise(provide(record({
+    _tag: "SubmissionMayHaveStarted",
+    runId: reserved.runId,
+    operationId: "stateful-seedance-output-marker",
+  })))
+  const submissionBody = Buffer.from('{"job_id":"stateful-output","status":"submitted"}')
+  await Effect.runPromise(provide(record({
+    _tag: "CommitProviderEvidence",
+    runId: reserved.runId,
+    operationId: "stateful-seedance-output-provider",
+    evidence: {
+      mediaType: "application/json",
+      body: submissionBody,
+      sha256: createHash("sha256").update(submissionBody).digest("hex"),
+    },
+  })))
+  const outputSha256 = createHash("sha256").update(safeBody).digest("hex")
+  const pollBody = completedPollBody("stateful-output", [{
+    applicationPath: "outputs/stateful.mp4",
+    mediaType: "video/mp4",
+    sha256: outputSha256,
+  }], 1, { state: "unknown" })
+  const unsafeBody = Uint8Array.from(safeBody)
+  unsafeBody[unsafeBody.length - 1] = (unsafeBody[unsafeBody.length - 1] ?? 0) ^ 1
+  let reads = 0
+  const output = {
+    applicationPath: "outputs/stateful.mp4" as const,
+    mediaType: "video/mp4" as const,
+    sha256: outputSha256,
+  } as unknown as { applicationPath: `outputs/${string}`; mediaType: string; body: Uint8Array; sha256: string }
+  Object.defineProperty(output, "body", {
+    enumerable: true,
+    get: () => (++reads === 1 ? safeBody : unsafeBody),
+  })
+  await Effect.runPromise(provide(record({
+    _tag: "CommitSeedancePoll",
+    runId: reserved.runId,
+    operationId: "stateful-seedance-output",
+    jobId: "stateful-output",
+    status: "completed",
+    evidence: {
+      mediaType: "application/json",
+      body: pollBody,
+      sha256: createHash("sha256").update(pollBody).digest("hex"),
+    },
+    outputs: [output],
+    completedCount: 1,
+    cost: { state: "unknown" },
+  })))
+  assert.deepEqual(Buffer.from(await Effect.runPromise(
+    readEvidence(reserved.runId, output.applicationPath).pipe(Effect.provide(memory.layer)),
+  )), Buffer.from(safeBody))
+  assert.equal((await Effect.runPromise(load(reserved.runId).pipe(Effect.provide(memory.layer)))).phase, "generated_outputs_received")
+})
+
+test("replay rejects duplicate JSON keys in persisted Seedance poll evidence", async () => {
+  const { planned } = await plannedSeedanceRun()
+  const memory = await memoryHarness()
+  const provide = <Success, Error>(
+    effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
+  ): Effect.Effect<Success, Error> => effect.pipe(
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, clock),
+  )
+  const reserved = await Effect.runPromise(provide(reserve(reservationFor(planned))))
+  await Effect.runPromise(provide(record({
+    _tag: "SubmissionMayHaveStarted",
+    runId: reserved.runId,
+    operationId: "duplicate-poll-marker",
+  })))
+  const submissionBody = Buffer.from('{"job_id":"duplicate-poll","status":"submitted"}')
+  await Effect.runPromise(provide(record({
+    _tag: "CommitProviderEvidence",
+    runId: reserved.runId,
+    operationId: "duplicate-poll-provider",
+    evidence: {
+      mediaType: "application/json",
+      body: submissionBody,
+      sha256: createHash("sha256").update(submissionBody).digest("hex"),
+    },
+  })))
+  const pendingBody = Buffer.from('{"job_id":"duplicate-poll","status":"pending"}')
+  await Effect.runPromise(provide(record({
+    _tag: "CommitSeedancePoll",
+    runId: reserved.runId,
+    operationId: "duplicate-poll-record",
+    jobId: "duplicate-poll",
+    status: "pending",
+    evidence: {
+      mediaType: "application/json",
+      body: pendingBody,
+      sha256: createHash("sha256").update(pendingBody).digest("hex"),
+    },
+  })))
+  const duplicateBody = Buffer.from('{"job_id":"attacker","job_id":"duplicate-poll","status":"pending"}')
+  await Effect.runPromise(memory.mutate(reserved.runId, (stored) => {
+    const events = Buffer.from(stored.events).toString("utf8").trim().split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+    const poll = events.find((event) => event.kind === "seedance_poll_persisted")!
+    const payload = poll.payload as Record<string, unknown>
+    payload.sha256 = createHash("sha256").update(duplicateBody).digest("hex")
+    payload.byteLength = duplicateBody.byteLength
+    const { eventSha256: _old, ...withoutDigest } = poll
+    poll.eventSha256 = createHash("sha256").update(Buffer.from(canonicalJson(withoutDigest))).digest("hex")
+    stored.events = Buffer.from(`${events.map(canonicalJson).join("\n")}\n`)
+    stored.evidence["polls/poll-0001.json"] = duplicateBody
+    const state = JSON.parse(Buffer.from(stored.state!).toString("utf8")) as Record<string, unknown>
+    state.chainHeadSha256 = poll.eventSha256
+    const receipt = (state.evidence as Array<Record<string, unknown>>)
+      .find((item) => item.applicationPath === "polls/poll-0001.json")!
+    receipt.sha256 = payload.sha256
+    receipt.byteLength = duplicateBody.byteLength
+    stored.state = Buffer.from(canonicalJson(state))
+  }))
+  const failure = await Effect.runPromise(Effect.flip(load(reserved.runId).pipe(Effect.provide(memory.layer))))
+  assert.equal(failure.code, "EVIDENCE_HASH_MISMATCH")
+})
+
 test("persists one Seedance job, polls only that identity, and records verified video evidence", async () => {
   const { planned, body: videoBody } = await plannedSeedanceRun()
   const memory = await memoryHarness()
