@@ -18,9 +18,12 @@ import { makeFixture } from "../../tests/control-plane-fixture.js"
 import {
   GenerationAdapter,
   invoke,
+  pollSeedance,
   prepare,
+  submitSeedance,
   type GenerationAdapterService,
   type GenerationResult,
+  type SeedancePollResult,
 } from "./index.js"
 
 const sha256 = (value: Uint8Array): string => createHash("sha256").update(value).digest("hex")
@@ -88,6 +91,186 @@ test("puts exact reference bytes and hash at the locked destination and invokes 
   )))
   assert.equal(duplicate.code, "DUPLICATE_SUBMISSION_BLOCKED")
   assert.equal(calls, 1)
+})
+
+test("submits exact Seedance video once and polls only the same sanitized job identity", async () => {
+  const fixture = makeFixture("seedance-video")
+  const decision = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(MediaInspector, byteMediaInspector),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+  ))
+  assert.equal(decision._tag, "Planned")
+  if (decision._tag !== "Planned") return
+  const locked = decision.run.request.references[0]!
+  const snapshot = await Effect.runPromise(fixture.files.read(locked.applicationPath))
+  const prepared = await Effect.runPromise(prepare(decision.run.request, [{
+    slot: locked.slot,
+    applicationPath: locked.applicationPath,
+    sha256: locked.sha256,
+    payloadDestination: locked.payloadDestination,
+    mediaType: locked.mediaType,
+    bytes: snapshot.bytes,
+  }]))
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const clock = { now: () => Effect.succeed("2026-08-30T12:00:00.000Z") }
+  const reserved = await Effect.runPromise(reserve({
+    plannedRun: decision.run,
+    payloadSha256: prepared.payloadSha256,
+  }).pipe(Effect.provide(memory.layer), Effect.provideService(RunRecordClock, clock)))
+  const marker = await Effect.runPromise(record({
+    _tag: "SubmissionMayHaveStarted",
+    runId: reserved.runId,
+    operationId: "seedance-submit",
+  }).pipe(Effect.provide(memory.layer), Effect.provideService(RunRecordClock, clock)))
+  assert.equal(marker._tag, "SubmissionPermitIssued")
+  if (marker._tag !== "SubmissionPermitIssued") return
+
+  const submissionBody = Buffer.from('{"job_id":"seedance-job-1","status":"submitted"}')
+  const pendingBody = Buffer.from('{"job_id":"seedance-job-1","status":"pending"}')
+  const completedBody = Buffer.from('{"job_id":"seedance-job-1","status":"completed"}')
+  let submitCalls = 0
+  let pollCalls = 0
+  const pollResults: SeedancePollResult[] = [
+    {
+      status: "pending",
+      provider: "openrouter",
+      model: decision.run.request.model,
+      jobId: "seedance-job-1",
+      providerEvidence: { mediaType: "application/json", body: pendingBody, sha256: sha256(pendingBody) },
+    },
+    {
+      status: "completed",
+      provider: "openrouter",
+      model: decision.run.request.model,
+      jobId: "seedance-job-1",
+      providerEvidence: { mediaType: "application/json", body: completedBody, sha256: sha256(completedBody) },
+      outputs: [{
+        applicationPath: "outputs/seedance-result.mp4",
+        mediaType: "video/mp4",
+        body: snapshot.bytes,
+        sha256: sha256(snapshot.bytes),
+      }],
+      completedCount: 1,
+      cost: { state: "estimated-only" },
+    },
+  ]
+  const adapter: GenerationAdapterService = {
+    invoke: () => Effect.die("Qwen invocation must not run"),
+    submitSeedance: (candidate) => Effect.sync(() => {
+      submitCalls += 1
+      const destination = (
+        candidate.payload.input_references as ReadonlyArray<{
+          video_url: { url: { applicationPath: string; bytesBase64: string; mediaType: string; sha256: string } }
+        }>
+      )[0]!.video_url.url
+      assert.equal(destination.applicationPath, locked.applicationPath)
+      assert.equal(destination.sha256, locked.sha256)
+      assert.equal(destination.mediaType, "video/mp4")
+      assert.deepEqual(Buffer.from(destination.bytesBase64, "base64"), Buffer.from(snapshot.bytes))
+      return {
+        provider: "openrouter" as const,
+        model: candidate.request.model,
+        jobId: "seedance-job-1",
+        providerEvidence: {
+          mediaType: "application/json" as const,
+          body: submissionBody,
+          sha256: sha256(submissionBody),
+        },
+      }
+    }),
+    pollSeedance: (_candidate, jobId, evidence) => Effect.sync(() => {
+      pollCalls += 1
+      assert.equal(jobId, "seedance-job-1")
+      assert.equal(evidence.sha256, sha256(submissionBody))
+      return pollResults[pollCalls - 1]!
+    }),
+  }
+  const submission = await Effect.runPromise(submitSeedance(prepared, marker.permit).pipe(
+    Effect.provideService(GenerationAdapter, adapter),
+  ))
+  assert.equal(submitCalls, 1)
+  assert.equal(submission.jobId, "seedance-job-1")
+  const pending = await Effect.runPromise(pollSeedance(
+    prepared,
+    submission.jobId,
+    submission.providerEvidence,
+  ).pipe(Effect.provideService(GenerationAdapter, adapter)))
+  assert.equal(pending.status, "pending")
+  const completed = await Effect.runPromise(pollSeedance(
+    prepared,
+    submission.jobId,
+    submission.providerEvidence,
+  ).pipe(Effect.provideService(GenerationAdapter, adapter)))
+  assert.equal(completed.status, "completed")
+  assert.equal(submitCalls, 1)
+  assert.equal(pollCalls, 2)
+
+  const duplicate = await Effect.runPromise(Effect.flip(submitSeedance(prepared, marker.permit).pipe(
+    Effect.provideService(GenerationAdapter, adapter),
+  )))
+  assert.equal(duplicate.code, "DUPLICATE_SUBMISSION_BLOCKED")
+  assert.equal(submitCalls, 1)
+})
+
+test("refuses a Seedance payload omission before consuming authority or calling the adapter", async () => {
+  const fixture = makeFixture("seedance-video")
+  const decision = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(MediaInspector, byteMediaInspector),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+  ))
+  assert.equal(decision._tag, "Planned")
+  if (decision._tag !== "Planned") return
+  const locked = decision.run.request.references[0]!
+  const snapshot = await Effect.runPromise(fixture.files.read(locked.applicationPath))
+  const prepared = await Effect.runPromise(prepare(decision.run.request, [{
+    slot: locked.slot,
+    applicationPath: locked.applicationPath,
+    sha256: locked.sha256,
+    payloadDestination: locked.payloadDestination,
+    mediaType: locked.mediaType,
+    bytes: snapshot.bytes,
+  }]))
+  const omittedPayload = {
+    input_references: [],
+    model: prepared.request.model,
+    provider: prepared.request.provider,
+    requested_count: prepared.request.requestedCount,
+  }
+  const omittedBytes = Buffer.from(JSON.stringify(omittedPayload))
+  const forged = {
+    ...prepared,
+    payload: omittedPayload,
+    payloadBytes: omittedBytes,
+    payloadSha256: sha256(omittedBytes),
+  }
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const clock = { now: () => Effect.succeed("2026-08-30T12:00:00.000Z") }
+  const reserved = await Effect.runPromise(reserve({
+    plannedRun: decision.run,
+    payloadSha256: forged.payloadSha256,
+  }).pipe(Effect.provide(memory.layer), Effect.provideService(RunRecordClock, clock)))
+  const marker = await Effect.runPromise(record({
+    _tag: "SubmissionMayHaveStarted",
+    runId: reserved.runId,
+    operationId: "seedance-omitted-payload",
+  }).pipe(Effect.provide(memory.layer), Effect.provideService(RunRecordClock, clock)))
+  assert.equal(marker._tag, "SubmissionPermitIssued")
+  if (marker._tag !== "SubmissionPermitIssued") return
+  let adapterCalls = 0
+  const adapter: GenerationAdapterService = {
+    invoke: () => Effect.die("Qwen must not run"),
+    submitSeedance: () => {
+      adapterCalls += 1
+      return Effect.die("Seedance must not run")
+    },
+  }
+  const failure = await Effect.runPromise(Effect.flip(submitSeedance(forged, marker.permit).pipe(
+    Effect.provideService(GenerationAdapter, adapter),
+  )))
+  assert.equal(failure.code, "ADAPTER_RESULT_INVALID")
+  assert.equal(adapterCalls, 0)
 })
 
 test("rejects a sparse provider-reference destination before reservation", async () => {

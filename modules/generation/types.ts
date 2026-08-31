@@ -40,6 +40,44 @@ export type GenerationResult = Readonly<{
   outputs: ReadonlyArray<GeneratedArtifact>
 }>
 
+export type SeedanceSubmission = Readonly<{
+  provider: "openrouter"
+  model: string
+  jobId: string
+  providerEvidence: GenerationProviderEvidence
+}>
+
+export type SeedanceVideoArtifact = Readonly<{
+  applicationPath: `outputs/${string}.mp4`
+  mediaType: "video/mp4"
+  body: Uint8Array
+  sha256: string
+}>
+
+export type SeedanceCostEvidence = Readonly<{
+  state: "actual" | "estimated-only" | "unknown"
+  actualCostUsd?: string
+}>
+
+export type SeedancePollResult =
+  | Readonly<{
+      status: "pending"
+      provider: "openrouter"
+      model: string
+      jobId: string
+      providerEvidence: GenerationProviderEvidence
+    }>
+  | Readonly<{
+      status: "completed"
+      provider: "openrouter"
+      model: string
+      jobId: string
+      providerEvidence: GenerationProviderEvidence
+      outputs: ReadonlyArray<SeedanceVideoArtifact>
+      completedCount: number
+      cost: SeedanceCostEvidence
+    }>
+
 export interface GenerationAdapterService {
   readonly invoke: (
     prepared: PreparedGeneration,
@@ -48,6 +86,14 @@ export interface GenerationAdapterService {
     prepared: PreparedGeneration,
     providerEvidence: GenerationProviderEvidence,
   ) => Effect.Effect<GenerationResult, GenerationError>
+  readonly submitSeedance?: (
+    prepared: PreparedGeneration,
+  ) => Effect.Effect<SeedanceSubmission, GenerationError>
+  readonly pollSeedance?: (
+    prepared: PreparedGeneration,
+    jobId: string,
+    submissionEvidence: GenerationProviderEvidence,
+  ) => Effect.Effect<SeedancePollResult, GenerationError>
 }
 
 export const GenerationAdapter = Context.Service<GenerationAdapterService>(

@@ -12,6 +12,8 @@ import {
   type GenerationReference,
   type GenerationResult,
   type PreparedGeneration,
+  type SeedancePollResult,
+  type SeedanceSubmission,
 } from "./types.js"
 
 const sha256 = (value: Uint8Array | string): string =>
@@ -86,6 +88,66 @@ const isNormalizedRgbaRaster = (body: Uint8Array): boolean => {
     return false
   }
 }
+
+const isSafeJobId = (value: unknown): value is string =>
+  typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)
+
+const hasSecretMaterial = (value: unknown, parentKey = ""): boolean => {
+  if (/(?:credential|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|authorization|password|secret|(?:access|refresh|id)[_-]?token)/i.test(parentKey)) {
+    return true
+  }
+  if (typeof value === "string") {
+    return /(?:sk-|gh[pousr]_|Bearer\s+)[A-Za-z0-9_-]{6,}/i.test(value) ||
+      /https?:\/\/[^/\s:@]+:[^/\s@]+@/i.test(value)
+  }
+  if (Array.isArray(value)) return value.some((child) => hasSecretMaterial(child, parentKey))
+  if (value !== null && typeof value === "object") {
+    return Object.entries(value).some(([key, child]) => hasSecretMaterial(child, key))
+  }
+  return false
+}
+
+const parseProviderDocument = (
+  evidence: GenerationProviderEvidence,
+): Record<string, unknown> | undefined => {
+  if (
+    evidence.mediaType !== "application/json" ||
+    !(evidence.body instanceof Uint8Array) ||
+    !/^[a-f0-9]{64}$/.test(evidence.sha256) ||
+    sha256(evidence.body) !== evidence.sha256
+  ) return undefined
+  try {
+    const document: unknown = JSON.parse(Buffer.from(evidence.body).toString("utf8"))
+    if (document === null || typeof document !== "object" || Array.isArray(document) || hasSecretMaterial(document)) {
+      return undefined
+    }
+    return document as Record<string, unknown>
+  } catch {
+    return undefined
+  }
+}
+
+const adapterEffect = <Success>(
+  make: () => unknown,
+  missingMessage: string,
+): Effect.Effect<Success, GenerationError> => Effect.gen(function*() {
+  const untrusted = yield* Effect.try({
+    try: make,
+    catch: () => new GenerationError("ADAPTER_RESULT_INVALID", `${missingMessage} threw before returning its Effect.`),
+  })
+  if (!Effect.isEffect(untrusted)) {
+    return yield* Effect.fail(new GenerationError("ADAPTER_RESULT_INVALID", `${missingMessage} did not return an Effect.`))
+  }
+  return yield* (untrusted as Effect.Effect<Success, unknown>).pipe(
+    Effect.mapError((error) => error instanceof GenerationError
+      ? error
+      : new GenerationError("ADAPTER_RESULT_INVALID", `${missingMessage} failed with an unnamed error.`)),
+    Effect.catchDefect(() => Effect.fail(new GenerationError(
+      "ADAPTER_RESULT_INVALID",
+      `${missingMessage} terminated with a defect.`,
+    ))),
+  )
+})
 
 const referencesFromPreparedPayload = (
   prepared: PreparedGeneration,
@@ -364,3 +426,182 @@ export const recoverGeneration = (
   )
   return yield* validateGenerationResult(validatedPrepared, untrustedResult, providerEvidence)
 })
+
+export const submitSeedanceGeneration = (
+  prepared: PreparedGeneration,
+  permit: SubmissionPermit,
+): Effect.Effect<SeedanceSubmission, GenerationError | import("../run-record/index.js").RunRecordError, GenerationAdapterService> =>
+  Effect.gen(function*() {
+    const validatedPrepared = yield* validatePreparedGeneration(prepared)
+    if (
+      validatedPrepared.request.mode !== "seedance-video" ||
+      validatedPrepared.request.videoPlan?.assembly.required !== false ||
+      validatedPrepared.request.videoPlan.assembly.pixelOwnership !== "none-authoritative" ||
+      validatedPrepared.request.references.some((reference) =>
+        reference.kind !== "video" || reference.mediaType !== "video/mp4" ||
+        !/\/video_url\/url$/.test(reference.payloadDestination))
+    ) {
+      return yield* Effect.fail(new GenerationError(
+        "ADAPTER_RESULT_INVALID",
+        "Seedance submission requires an immutable exact-video plan with an explicit no-Assembly proof.",
+      ))
+    }
+    const adapter = yield* GenerationAdapter
+    if (typeof adapter.submitSeedance !== "function") {
+      return yield* Effect.fail(new GenerationError("ADAPTER_RESULT_INVALID", "The adapter cannot submit Seedance."))
+    }
+    yield* consumeSubmission(permit, {
+      requestSha256: validatedPrepared.requestSha256,
+      payloadSha256: validatedPrepared.payloadSha256,
+    })
+    const untrusted = yield* adapterEffect<unknown>(
+      () => adapter.submitSeedance!(validatedPrepared),
+      "The Seedance submission adapter",
+    )
+    const result = objectRecord(untrusted)
+    const evidenceRecord = result === undefined ? undefined : objectRecord(result.providerEvidence)
+    const providerEvidence: GenerationProviderEvidence | undefined = evidenceRecord === undefined ||
+        evidenceRecord.mediaType !== "application/json" ||
+        !(evidenceRecord.body instanceof Uint8Array) ||
+        typeof evidenceRecord.sha256 !== "string"
+      ? undefined
+      : {
+          mediaType: "application/json",
+          body: evidenceRecord.body,
+          sha256: evidenceRecord.sha256,
+        }
+    const document = providerEvidence === undefined ? undefined : parseProviderDocument(providerEvidence)
+    if (
+      result === undefined || result.provider !== validatedPrepared.request.provider ||
+      result.model !== validatedPrepared.request.model || !isSafeJobId(result.jobId) ||
+      providerEvidence === undefined || document?.job_id !== result.jobId ||
+      (document.status !== "submitted" && document.status !== "queued")
+    ) {
+      return yield* Effect.fail(new GenerationError(
+        "ADAPTER_RESULT_INVALID",
+        "Seedance submission did not return a sanitized response bound to one job identity.",
+      ))
+    }
+    return {
+      provider: "openrouter",
+      model: validatedPrepared.request.model,
+      jobId: result.jobId,
+      providerEvidence,
+    }
+  })
+
+export const pollSeedanceGeneration = (
+  prepared: PreparedGeneration,
+  jobId: string,
+  submissionEvidence: GenerationProviderEvidence,
+): Effect.Effect<SeedancePollResult, GenerationError, GenerationAdapterService> =>
+  Effect.gen(function*() {
+    const validatedPrepared = yield* validatePreparedGeneration(prepared)
+    const submissionDocument = parseProviderDocument(submissionEvidence)
+    if (
+      validatedPrepared.request.mode !== "seedance-video" ||
+      !isSafeJobId(jobId) || submissionDocument?.job_id !== jobId ||
+      (submissionDocument.status !== "submitted" && submissionDocument.status !== "queued")
+    ) {
+      return yield* Effect.fail(new GenerationError(
+        "ADAPTER_RESULT_INVALID",
+        "Seedance polling requires the exact sanitized submission receipt and job identity.",
+      ))
+    }
+    const adapter = yield* GenerationAdapter
+    if (typeof adapter.pollSeedance !== "function") {
+      return yield* Effect.fail(new GenerationError("ADAPTER_RESULT_INVALID", "The adapter cannot poll Seedance."))
+    }
+    const untrusted = yield* adapterEffect<unknown>(
+      () => adapter.pollSeedance!(validatedPrepared, jobId, submissionEvidence),
+      "The Seedance polling adapter",
+    )
+    const result = objectRecord(untrusted)
+    const evidenceRecord = result === undefined ? undefined : objectRecord(result.providerEvidence)
+    const providerEvidence: GenerationProviderEvidence | undefined = evidenceRecord === undefined ||
+        evidenceRecord.mediaType !== "application/json" ||
+        !(evidenceRecord.body instanceof Uint8Array) ||
+        typeof evidenceRecord.sha256 !== "string"
+      ? undefined
+      : {
+          mediaType: "application/json",
+          body: evidenceRecord.body,
+          sha256: evidenceRecord.sha256,
+        }
+    const document = providerEvidence === undefined ? undefined : parseProviderDocument(providerEvidence)
+    if (
+      result === undefined || result.provider !== validatedPrepared.request.provider ||
+      result.model !== validatedPrepared.request.model || result.jobId !== jobId ||
+      providerEvidence === undefined || document?.job_id !== jobId ||
+      (result.status !== "pending" && result.status !== "completed") ||
+      document.status !== result.status
+    ) {
+      return yield* Effect.fail(new GenerationError(
+        "ADAPTER_RESULT_INVALID",
+        "Seedance poll evidence substituted the provider, model, job identity, or status.",
+      ))
+    }
+    if (result.status === "pending") {
+      return {
+        status: "pending",
+        provider: "openrouter",
+        model: validatedPrepared.request.model,
+        jobId,
+        providerEvidence,
+      }
+    }
+    if (
+      !Array.isArray(result.outputs) ||
+      typeof result.completedCount !== "number" || !Number.isSafeInteger(result.completedCount) ||
+      result.completedCount !== validatedPrepared.request.requestedCount ||
+      result.outputs.length !== result.completedCount
+    ) {
+      return yield* Effect.fail(new GenerationError("OUTPUT_COUNT_MISMATCH", "Seedance completed with the wrong output count."))
+    }
+    const outputs: Extract<SeedancePollResult, { status: "completed" }>["outputs"][number][] = []
+    const paths = new Set<string>()
+    for (let index = 0; index < result.outputs.length; index += 1) {
+      if (!Object.hasOwn(result.outputs, index)) {
+        return yield* Effect.fail(new GenerationError("ADAPTER_RESULT_INVALID", "Seedance returned a sparse output set."))
+      }
+      const output = objectRecord(result.outputs[index])
+      if (
+        output === undefined || typeof output.applicationPath !== "string" ||
+        !/^outputs\/[a-z0-9][a-z0-9._-]*\.mp4$/.test(output.applicationPath) ||
+        paths.has(output.applicationPath) || output.mediaType !== "video/mp4" ||
+        !(output.body instanceof Uint8Array) || typeof output.sha256 !== "string" ||
+        !/^[a-f0-9]{64}$/.test(output.sha256) || sha256(output.body) !== output.sha256
+      ) {
+        return yield* Effect.fail(new GenerationError("ADAPTER_RESULT_INVALID", "Seedance output evidence is malformed."))
+      }
+      paths.add(output.applicationPath)
+      outputs.push({
+        applicationPath: output.applicationPath as `outputs/${string}.mp4`,
+        mediaType: "video/mp4",
+        body: output.body,
+        sha256: output.sha256,
+      })
+    }
+    const cost = objectRecord(result.cost)
+    if (
+      cost === undefined ||
+      (cost.state !== "actual" && cost.state !== "estimated-only" && cost.state !== "unknown") ||
+      (cost.state === "actual"
+        ? typeof cost.actualCostUsd !== "string" || !/^(?:0|[1-9]\d*)\.\d{2,6}$/.test(cost.actualCostUsd)
+        : cost.actualCostUsd !== undefined)
+    ) {
+      return yield* Effect.fail(new GenerationError("ADAPTER_RESULT_INVALID", "Seedance cost evidence is malformed."))
+    }
+    return {
+      status: "completed",
+      provider: "openrouter",
+      model: validatedPrepared.request.model,
+      jobId,
+      providerEvidence,
+      outputs,
+      completedCount: result.completedCount,
+      cost: cost.state === "actual"
+        ? { state: "actual", actualCostUsd: cost.actualCostUsd as string }
+        : { state: cost.state },
+    }
+  })

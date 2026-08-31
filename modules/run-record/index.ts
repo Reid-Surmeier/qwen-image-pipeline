@@ -56,4 +56,7 @@ export type {
   RunRecordDiagnostics,
   SubmissionPermit,
   SubmissionBinding,
+  SeedanceCostInput,
+  SeedancePollOperation,
+  VideoVerificationReportInput,
 } from "./types.js"

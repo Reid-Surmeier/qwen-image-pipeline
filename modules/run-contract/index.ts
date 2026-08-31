@@ -48,4 +48,5 @@ export type {
   PlanningIdentityService,
   RawPlanningDocuments,
   ToolIdentity,
+  VideoPlan,
 } from "./types.js"

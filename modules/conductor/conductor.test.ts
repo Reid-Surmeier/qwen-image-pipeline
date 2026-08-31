@@ -389,3 +389,130 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
     assert.equal(recoveryCalls, 1)
   }
 })
+
+test("advances one Seedance Run by submitting once and polling the same job to verified video", async () => {
+  const fixture = makeFixture("seedance-video")
+  const plannedDecision = await Effect.runPromise(
+    plan({ objectivePath: fixture.objectivePath }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(MediaInspector, byteMediaInspector),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+    ),
+  )
+  assert.equal(plannedDecision._tag, "Planned")
+  if (plannedDecision._tag !== "Planned") return
+  const videoBody = (await Effect.runPromise(fixture.files.read("references/neutral.mp4"))).bytes
+  const submissionBody = Buffer.from('{"job_id":"seedance-job-1","status":"submitted"}')
+  const pendingBody = Buffer.from('{"job_id":"seedance-job-1","status":"pending"}')
+  const completedBody = Buffer.from('{"job_id":"seedance-job-1","status":"completed"}')
+  let submitCalls = 0
+  let pollCalls = 0
+  const adapter: GenerationAdapterService = {
+    invoke: () => Effect.die("Qwen Generation must not run for Seedance"),
+    submitSeedance: (prepared) => Effect.sync(() => {
+      submitCalls += 1
+      const destination = (
+        prepared.payload.input_references as ReadonlyArray<{
+          video_url: { url: { applicationPath: string; bytesBase64: string; mediaType: string; sha256: string } }
+        }>
+      )[0]!.video_url.url
+      assert.equal(destination.applicationPath, "references/neutral.mp4")
+      assert.equal(destination.sha256, hash(videoBody))
+      assert.equal(destination.mediaType, "video/mp4")
+      assert.deepEqual(Buffer.from(destination.bytesBase64, "base64"), Buffer.from(videoBody))
+      return {
+        provider: "openrouter" as const,
+        model: prepared.request.model,
+        jobId: "seedance-job-1",
+        providerEvidence: {
+          mediaType: "application/json" as const,
+          body: submissionBody,
+          sha256: hash(submissionBody),
+        },
+      }
+    }),
+    pollSeedance: (prepared, jobId, evidence) => Effect.sync(() => {
+      pollCalls += 1
+      assert.equal(jobId, "seedance-job-1")
+      assert.equal(evidence.sha256, hash(submissionBody))
+      if (pollCalls === 1) {
+        return {
+          status: "pending" as const,
+          provider: "openrouter" as const,
+          model: prepared.request.model,
+          jobId,
+          providerEvidence: {
+            mediaType: "application/json" as const,
+            body: pendingBody,
+            sha256: hash(pendingBody),
+          },
+        }
+      }
+      return {
+        status: "completed" as const,
+        provider: "openrouter" as const,
+        model: prepared.request.model,
+        jobId,
+        providerEvidence: {
+          mediaType: "application/json" as const,
+          body: completedBody,
+          sha256: hash(completedBody),
+        },
+        outputs: [{
+          applicationPath: "outputs/seedance-result.mp4" as const,
+          mediaType: "video/mp4" as const,
+          body: videoBody,
+          sha256: hash(videoBody),
+        }],
+        completedCount: 1,
+        cost: { state: "estimated-only" as const },
+      }
+    }),
+  }
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const clock: RunRecordClockService = {
+    now: () => Effect.succeed("2026-08-30T16:00:00.000Z"),
+  }
+  const executeAdvance = () => Effect.runPromise(
+    advance({ run: plannedDecision.run }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(GenerationAdapter, adapter),
+      Effect.provide(memory.layer),
+      Effect.provideService(RunRecordClock, clock),
+    ),
+  )
+
+  const submitted = await executeAdvance()
+  assert.equal(submitted._tag, "ProviderPending")
+  if (submitted._tag !== "ProviderPending") return
+  assert.equal(submitted.jobId, "seedance-job-1")
+  assert.equal(submitted.pollCount, 0)
+  assert.equal(submitCalls, 1)
+  assert.equal(pollCalls, 0)
+
+  const pending = await executeAdvance()
+  assert.equal(pending._tag, "ProviderPending")
+  if (pending._tag !== "ProviderPending") return
+  assert.equal(pending.runId, submitted.runId)
+  assert.equal(pending.jobId, submitted.jobId)
+  assert.equal(pending.pollCount, 1)
+  assert.equal(submitCalls, 1)
+  assert.equal(pollCalls, 1)
+
+  const completed = await executeAdvance()
+  assert.equal(completed._tag, "VerifiedCandidate")
+  if (completed._tag !== "VerifiedCandidate") return
+  assert.equal(completed.runId, submitted.runId)
+  assert.equal(completed.candidate.applicationPath, "outputs/seedance-result.mp4")
+  assert.equal(completed.candidate.mediaType, "video/mp4")
+  assert.equal(completed.candidate.sha256, hash(videoBody))
+  assert.equal(completed.diagnostics.view.providerJobId, "seedance-job-1")
+  assert.equal(completed.diagnostics.view.pollCount, 2)
+  assert.equal(completed.diagnostics.view.completedCount, 1)
+  assert.equal(completed.diagnostics.view.costState, "estimated-only")
+  assert.equal(plannedDecision.run.request.videoPlan?.assembly.pixelOwnership, "none-authoritative")
+  assert.equal("assemblyPlan" in plannedDecision.run.request, false)
+  assert.equal(submitCalls, 1)
+  assert.equal(pollCalls, 2)
+  assert.match(completed.normalView.evidence, /video.*checks/i)
+})

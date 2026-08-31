@@ -61,7 +61,7 @@ type RunEvent = Readonly<{
   operationId: string
   runId: string
   timestamp: string
-  kind: "attempt_reserved" | "submission_may_have_started" | "provider_evidence_received" | "generated_output_persisted" | "donor_choice_opened" | "donor_selected" | "assembly_persisted" | "checks_persisted" | "definitive_pre_submit_failure"
+  kind: "attempt_reserved" | "submission_may_have_started" | "provider_evidence_received" | "generated_output_persisted" | "seedance_poll_persisted" | "donor_choice_opened" | "donor_selected" | "assembly_persisted" | "checks_persisted" | "video_checks_persisted" | "definitive_pre_submit_failure"
   previousEventSha256: string | null
   payload: Readonly<Record<string, JsonValue>>
   eventSha256: string
@@ -408,6 +408,132 @@ const validateChecksDocument = (
   }
 }
 
+const validateVideoReport = (
+  runRequest: CanonicalRunRequest,
+  document: unknown,
+  evidence: ReadonlyArray<RunRecordView["evidence"][number]>,
+  completedCount: number | undefined,
+  costState: "actual" | "estimated-only" | "unknown" | undefined,
+  actualCostUsd: string | undefined,
+  evidenceBytes: Readonly<Record<string, Uint8Array>>,
+): void => {
+  if (
+    runRequest.mode !== "seedance-video" || runRequest.videoPlan === undefined ||
+    document === null || typeof document !== "object" || Array.isArray(document)
+  ) {
+    throw new RunRecordError("CHECKS_NOT_PASSED", "Video checks require the immutable Seedance Video Plan.", "repair-evidence")
+  }
+  const report = document as Readonly<Record<string, unknown>>
+  const outputs = report.outputs
+  const checks = report.checks
+  const expectedOutputEvidence = evidence.filter((item) =>
+    item.applicationPath.startsWith("outputs/") && item.mediaType === "video/mp4")
+  if (
+    Object.keys(report).sort().join(",") !== "algorithm,checks,classification,completedCount,cost,expected,outputs,requestedCount" ||
+    report.algorithm !== "seedance-media-v1" || report.classification !== "verified-candidate" ||
+    report.requestedCount !== runRequest.requestedCount || report.completedCount !== completedCount ||
+    canonicalJson(report.expected as JsonValue) !== canonicalJson(runRequest.videoPlan.expectedMedia as unknown as JsonValue) ||
+    !Array.isArray(outputs) || outputs.length !== runRequest.requestedCount ||
+    !Array.isArray(checks) ||
+    canonicalJson(checks as JsonValue) !== canonicalJson([
+      { name: "integrity", passed: true, measured: 0 },
+      { name: "media", passed: true, measured: 0 },
+      { name: "dimensions", passed: true, measured: 0 },
+      { name: "duration", passed: true, measured: 0 },
+      { name: "audio-expectation", passed: true, measured: 0 },
+    ])
+  ) {
+    throw new RunRecordError("CHECKS_NOT_PASSED", "Video checks do not bind the immutable plan, counts, and mandatory checks.", "repair-evidence")
+  }
+  const cost = report.cost
+  if (
+    cost === null || typeof cost !== "object" || Array.isArray(cost) ||
+    canonicalJson(cost as JsonValue) !== canonicalJson({
+      state: costState,
+      estimatedMaximumCostUsd: runRequest.estimatedMaximumCostUsd,
+      ...(actualCostUsd === undefined ? {} : { actualCostUsd }),
+    } as JsonValue)
+  ) {
+    throw new RunRecordError("CHECKS_NOT_PASSED", "Video checks cost evidence contradicts the recorded Run cost state.", "repair-evidence")
+  }
+  for (const outputValue of outputs) {
+    if (outputValue === null || typeof outputValue !== "object" || Array.isArray(outputValue)) {
+      throw new RunRecordError("CHECKS_NOT_PASSED", "Video output checks are malformed.", "repair-evidence")
+    }
+    const output = outputValue as Readonly<Record<string, unknown>>
+    const matchingEvidence = expectedOutputEvidence.find((item) =>
+      item.applicationPath === output.applicationPath && item.sha256 === output.sha256)
+    const actual = output.actual
+    const outputBytes = matchingEvidence === undefined ? undefined : evidenceBytes[matchingEvidence.applicationPath]
+    const recomputed = outputBytes === undefined ? undefined : inspectVideoForReplay(outputBytes)
+    if (
+      matchingEvidence === undefined || output.mediaType !== "video/mp4" ||
+      outputBytes === undefined || sha256(outputBytes) !== matchingEvidence.sha256 || recomputed === undefined ||
+      actual === null || typeof actual !== "object" || Array.isArray(actual) ||
+      canonicalJson(actual as JsonValue) !== canonicalJson(recomputed as unknown as JsonValue) ||
+      recomputed.width !== runRequest.videoPlan.expectedMedia.width ||
+      recomputed.height !== runRequest.videoPlan.expectedMedia.height ||
+      Math.abs(recomputed.durationSeconds - runRequest.videoPlan.expectedMedia.durationSeconds) > 0.001 ||
+      recomputed.hasAudio !== runRequest.videoPlan.expectedMedia.audioExpected
+    ) {
+      throw new RunRecordError("CHECKS_NOT_PASSED", "Video output checks do not match persisted output evidence.", "repair-evidence")
+    }
+  }
+}
+
+const readReplayUint32 = (value: Uint8Array, offset: number): number => {
+  if (offset < 0 || offset + 4 > value.byteLength) {
+    throw new RunRecordError("CHECKS_NOT_PASSED", "The replayed MP4 box is truncated.", "repair-evidence")
+  }
+  return new DataView(value.buffer, value.byteOffset, value.byteLength).getUint32(offset)
+}
+
+const replayBoxes = (
+  value: Uint8Array,
+  kind: string,
+): ReadonlyArray<Readonly<{ start: number; size: number }>> => {
+  const wanted = Buffer.from(kind, "ascii")
+  const found: Array<Readonly<{ start: number; size: number }>> = []
+  for (let index = 4; index <= value.length - 4; index += 1) {
+    if (
+      value[index] === wanted[0] && value[index + 1] === wanted[1] &&
+      value[index + 2] === wanted[2] && value[index + 3] === wanted[3]
+    ) {
+      const start = index - 4
+      const size = readReplayUint32(value, start)
+      if (size >= 8 && start + size <= value.length) found.push({ start, size })
+    }
+  }
+  return found
+}
+
+const inspectVideoForReplay = (
+  value: Uint8Array,
+): Readonly<{ width: number; height: number; durationSeconds: number; hasAudio: boolean }> => {
+  if (value.length < 12 || Buffer.from(value.subarray(4, 8)).toString("ascii") !== "ftyp") {
+    throw new RunRecordError("CHECKS_NOT_PASSED", "The replayed output is not an MP4 container.", "repair-evidence")
+  }
+  const mvhd = replayBoxes(value, "mvhd")[0]
+  const tkhd = replayBoxes(value, "tkhd")[0]
+  if (mvhd === undefined || tkhd === undefined || value[mvhd.start + 8] !== 0) {
+    throw new RunRecordError("CHECKS_NOT_PASSED", "The replayed MP4 timing or track is malformed.", "repair-evidence")
+  }
+  const timescale = readReplayUint32(value, mvhd.start + 20)
+  const duration = readReplayUint32(value, mvhd.start + 24)
+  const width = readReplayUint32(value, tkhd.start + tkhd.size - 8) / 65536
+  const height = readReplayUint32(value, tkhd.start + tkhd.size - 4) / 65536
+  if (
+    timescale === 0 || duration === 0 ||
+    !Number.isSafeInteger(width) || width < 1 ||
+    !Number.isSafeInteger(height) || height < 1
+  ) {
+    throw new RunRecordError("CHECKS_NOT_PASSED", "The replayed MP4 dimensions or duration are invalid.", "repair-evidence")
+  }
+  const hasAudio = replayBoxes(value, "hdlr").some((box) =>
+    box.size >= 20 && Buffer.from(value.subarray(box.start + 16, box.start + 20)).toString("ascii") === "soun")
+  return { width, height, durationSeconds: duration / timescale, hasAudio }
+}
+
 const replay = (
   runId: string,
   request: Uint8Array,
@@ -475,6 +601,11 @@ const replay = (
   let assemblyReportSha256: string | undefined
   let checksSha256: string | undefined
   let classification: "verified_candidate" | undefined
+  let providerJobId: string | undefined
+  let pollCount = 0
+  let completedCount: number | undefined
+  let costState: "actual" | "estimated-only" | "unknown" | undefined
+  let actualCostUsd: string | undefined
   for (const event of events.slice(1)) {
     if (event.kind === "submission_may_have_started") {
       if (phase !== "reserved" || stringPayload(event.payload, "attemptId") !== base.attemptId) {
@@ -494,20 +625,134 @@ const replay = (
       const byteLength = numberPayload(event.payload, "byteLength")
       const mediaType = stringPayload(event.payload, "mediaType")
       const storedEvidence = evidenceBytes[applicationPath]
-      if (storedEvidence === undefined) {
+      if (mediaType !== "application/json" || storedEvidence === undefined) {
         throw new RunRecordError("EVIDENCE_MISSING", `${applicationPath} is named by the journal but missing.`, "repair-evidence")
       }
       if (storedEvidence.byteLength !== byteLength || sha256(storedEvidence) !== evidenceSha256) {
         throw new RunRecordError("EVIDENCE_HASH_MISMATCH", `${applicationPath} no longer matches its event receipt.`, "repair-evidence")
       }
       evidence.push({ applicationPath, sha256: evidenceSha256, byteLength, mediaType })
+      if (runRequest.mode === "seedance-video") {
+        let providerDocument: unknown
+        try {
+          providerDocument = JSON.parse(Buffer.from(storedEvidence).toString("utf8"))
+        } catch {
+          throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance provider evidence is not valid JSON.", "repair-evidence")
+        }
+        const provider = providerDocument as Readonly<Record<string, unknown>>
+        if (
+          providerDocument === null || typeof providerDocument !== "object" || Array.isArray(providerDocument) ||
+          valueHasSecret(providerDocument) ||
+          typeof provider.job_id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(provider.job_id) ||
+          (provider.status !== "submitted" && provider.status !== "queued")
+        ) {
+          throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance provider evidence must bind one sanitized submitted job.", "repair-evidence")
+        }
+        providerJobId = provider.job_id
+      }
       phase = "provider_evidence_received"
       spendState = "unknown"
       retryState = "never-resubmit"
       continue
     }
+    if (event.kind === "seedance_poll_persisted") {
+      if (
+        runRequest.mode !== "seedance-video" || phase !== "provider_evidence_received" ||
+        providerJobId === undefined || stringPayload(event.payload, "jobId") !== providerJobId
+      ) {
+        throw new RunRecordError("ILLEGAL_TRANSITION", "Seedance polling must continue the persisted submitted job.")
+      }
+      const status = stringPayload(event.payload, "status")
+      if (status !== "pending" && status !== "completed") {
+        throw new RunRecordError("ILLEGAL_TRANSITION", "Seedance poll status is invalid.")
+      }
+      const applicationPath = stringPayload(event.payload, "applicationPath")
+      const evidenceSha256 = stringPayload(event.payload, "sha256")
+      const byteLength = numberPayload(event.payload, "byteLength")
+      const mediaType = stringPayload(event.payload, "mediaType")
+      const pollEvidence = evidenceBytes[applicationPath]
+      const expectedPollPath = `polls/poll-${String(pollCount + 1).padStart(4, "0")}.json`
+      if (
+        applicationPath !== expectedPollPath || mediaType !== "application/json" || pollEvidence === undefined ||
+        pollEvidence.byteLength !== byteLength || sha256(pollEvidence) !== evidenceSha256 ||
+        evidence.some((item) => item.applicationPath === applicationPath)
+      ) {
+        throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance poll evidence is missing, out of order, or changed.", "repair-evidence")
+      }
+      let pollDocument: unknown
+      try {
+        pollDocument = JSON.parse(Buffer.from(pollEvidence).toString("utf8"))
+      } catch {
+        throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance poll evidence is not valid JSON.", "repair-evidence")
+      }
+      const poll = pollDocument as Readonly<Record<string, unknown>>
+      if (
+        pollDocument === null || typeof pollDocument !== "object" || Array.isArray(pollDocument) ||
+        valueHasSecret(pollDocument) ||
+        poll.job_id !== providerJobId || poll.status !== status
+      ) {
+        throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance poll evidence substituted its job identity or status.", "repair-evidence")
+      }
+      evidence.push({ applicationPath, sha256: evidenceSha256, byteLength, mediaType: "application/json" })
+      pollCount += 1
+      if (status === "completed") {
+        const outputs = event.payload.outputs
+        const eventCompletedCount = numberPayload(event.payload, "completedCount")
+        const eventCostState = stringPayload(event.payload, "costState")
+        if (
+          !Array.isArray(outputs) || eventCompletedCount !== base.maximumCount ||
+          outputs.length !== eventCompletedCount ||
+          (eventCostState !== "actual" && eventCostState !== "estimated-only" && eventCostState !== "unknown")
+        ) {
+          throw new RunRecordError("RESERVATION_OUTSIDE_PLAN", "Seedance completion contradicts the reserved count or cost state.", "repair-evidence")
+        }
+        const outputPaths = new Set<string>()
+        for (const outputValue of outputs) {
+          if (outputValue === null || typeof outputValue !== "object" || Array.isArray(outputValue)) {
+            throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance output receipt is malformed.", "repair-evidence")
+          }
+          const output = outputValue as Readonly<Record<string, JsonValue>>
+          const outputPath = stringPayload(output, "applicationPath")
+          const outputSha256 = stringPayload(output, "sha256")
+          const outputByteLength = numberPayload(output, "byteLength")
+          const outputMediaType = stringPayload(output, "mediaType")
+          const outputBytes = evidenceBytes[outputPath]
+          if (
+            !/^outputs\/[a-z0-9][a-z0-9._-]*\.mp4$/.test(outputPath) || outputPaths.has(outputPath) ||
+            outputMediaType !== "video/mp4" || !isSha256(outputSha256) || outputBytes === undefined ||
+            outputBytes.byteLength !== outputByteLength || sha256(outputBytes) !== outputSha256 ||
+            evidence.some((item) => item.applicationPath === outputPath)
+          ) {
+            throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance output evidence is unsafe, missing, or changed.", "repair-evidence")
+          }
+          outputPaths.add(outputPath)
+          evidence.push({
+            applicationPath: outputPath,
+            sha256: outputSha256,
+            byteLength: outputByteLength,
+            mediaType: outputMediaType,
+          })
+        }
+        const eventActualCost = event.payload.actualCostUsd
+        if (
+          (eventCostState === "actual" &&
+            (typeof eventActualCost !== "string" || !/^(?:0|[1-9]\d*)\.\d{2,6}$/.test(eventActualCost))) ||
+          (eventCostState !== "actual" && eventActualCost !== undefined)
+        ) {
+          throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance actual-cost evidence is malformed.", "repair-evidence")
+        }
+        completedCount = eventCompletedCount
+        costState = eventCostState
+        actualCostUsd = typeof eventActualCost === "string" ? eventActualCost : undefined
+        phase = "generated_outputs_received"
+      }
+      continue
+    }
     if (event.kind === "generated_output_persisted") {
-      if (phase !== "provider_evidence_received" && phase !== "generated_outputs_received") {
+      if (
+        runRequest.mode !== "qwen-image" ||
+        (phase !== "provider_evidence_received" && phase !== "generated_outputs_received")
+      ) {
         throw new RunRecordError("ILLEGAL_TRANSITION", "Generated output evidence was recorded before provider evidence.")
       }
       const applicationPath = stringPayload(event.payload, "applicationPath")
@@ -538,7 +783,7 @@ const replay = (
       continue
     }
     if (event.kind === "donor_choice_opened") {
-      if (phase !== "generated_outputs_received") {
+      if (runRequest.mode !== "qwen-image" || phase !== "generated_outputs_received") {
         throw new RunRecordError("ILLEGAL_TRANSITION", "A donor choice was opened before generated outputs were persisted.")
       }
       const candidates = stringArrayPayload(event.payload, "candidateSha256s")
@@ -702,6 +947,43 @@ const replay = (
       phase = "verified_candidate"
       continue
     }
+    if (event.kind === "video_checks_persisted") {
+      if (
+        runRequest.mode !== "seedance-video" || phase !== "generated_outputs_received" ||
+        providerJobId === undefined || stringPayload(event.payload, "jobId") !== providerJobId
+      ) {
+        throw new RunRecordError("ILLEGAL_TRANSITION", "Video checks require completed output evidence for the same Seedance job.")
+      }
+      const applicationPath = stringPayload(event.payload, "applicationPath")
+      const evidenceSha256 = stringPayload(event.payload, "sha256")
+      const byteLength = numberPayload(event.payload, "byteLength")
+      const storedEvidence = evidenceBytes[applicationPath]
+      if (
+        applicationPath !== "checks.json" || storedEvidence === undefined ||
+        storedEvidence.byteLength !== byteLength || sha256(storedEvidence) !== evidenceSha256 ||
+        evidence.some((item) => item.applicationPath === applicationPath)
+      ) {
+        throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Video checks evidence is missing or changed.", "repair-evidence")
+      }
+      let report: unknown
+      try {
+        report = JSON.parse(Buffer.from(storedEvidence).toString("utf8"))
+      } catch {
+        throw new RunRecordError("CHECKS_NOT_PASSED", "Video checks evidence is not valid JSON.", "repair-evidence")
+      }
+      if (
+        canonicalJson(report as JsonValue) !== Buffer.from(storedEvidence).toString("utf8") ||
+        stringPayload(event.payload, "reportSha256") !== evidenceSha256
+      ) {
+        throw new RunRecordError("CHECKS_NOT_PASSED", "Video checks evidence is not canonical or bound to its receipt.", "repair-evidence")
+      }
+      validateVideoReport(runRequest, report, evidence, completedCount, costState, actualCostUsd, evidenceBytes)
+      evidence.push({ applicationPath, sha256: evidenceSha256, byteLength, mediaType: "application/json" })
+      checksSha256 = evidenceSha256
+      classification = "verified_candidate"
+      phase = "verified_candidate"
+      continue
+    }
     if (event.kind === "definitive_pre_submit_failure") {
       if (phase !== "reserved") {
         throw new RunRecordError("ILLEGAL_TRANSITION", "A definitive pre-submit failure was recorded after submission uncertainty.")
@@ -727,6 +1009,11 @@ const replay = (
     ...(assemblyReportSha256 === undefined ? {} : { assemblyReportSha256 }),
     ...(checksSha256 === undefined ? {} : { checksSha256 }),
     ...(classification === undefined ? {} : { classification }),
+    ...(providerJobId === undefined ? {} : { providerJobId }),
+    ...(pollCount === 0 ? {} : { pollCount }),
+    ...(completedCount === undefined ? {} : { completedCount }),
+    ...(costState === undefined ? {} : { costState }),
+    ...(actualCostUsd === undefined ? {} : { actualCostUsd }),
   })
 }
 
@@ -876,7 +1163,10 @@ const valueHasSecret = (value: unknown, key?: string): boolean => {
 }
 
 const validateProviderEvidence = (operation: Extract<RecordOperation, { _tag: "CommitProviderEvidence" }>): void => {
-  if (!isSha256(operation.evidence.sha256) || sha256(operation.evidence.body) !== operation.evidence.sha256) {
+  if (
+    operation.evidence.mediaType !== "application/json" ||
+    !isSha256(operation.evidence.sha256) || sha256(operation.evidence.body) !== operation.evidence.sha256
+  ) {
     throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Provider evidence does not match its declared SHA-256.", "repair-evidence")
   }
   let parsed: unknown
@@ -923,6 +1213,8 @@ export const recordOperation = (
       ? "provider_evidence_received"
       : operation._tag === "CommitGeneratedOutput"
         ? "generated_output_persisted"
+        : operation._tag === "CommitSeedancePoll"
+          ? "seedance_poll_persisted"
         : operation._tag === "OpenDonorChoice"
           ? "donor_choice_opened"
           : operation._tag === "SelectDonor"
@@ -931,6 +1223,8 @@ export const recordOperation = (
               ? "assembly_persisted"
               : operation._tag === "CommitChecks"
                 ? "checks_persisted"
+                : operation._tag === "CommitVideoChecks"
+                  ? "video_checks_persisted"
                 : "definitive_pre_submit_failure"
   const replayed = events.find((event) => event.operationId === operation.operationId)
   if (replayed !== undefined) {
@@ -956,6 +1250,32 @@ export const recordOperation = (
       )
     ) {
       return yield* Effect.fail(new RunRecordError("IDEMPOTENCY_CONFLICT", "The operation identity was replayed with different generated output evidence."))
+    }
+    if (operation._tag === "CommitSeedancePoll") {
+      const replayedOutputs = replayed.payload.outputs
+      const operationOutputs = operation.status === "completed"
+        ? operation.outputs.map((output) => ({
+            applicationPath: output.applicationPath,
+            sha256: output.sha256,
+            byteLength: output.body.byteLength,
+            mediaType: output.mediaType,
+          }))
+        : undefined
+      if (
+        stringPayload(replayed.payload, "jobId") !== operation.jobId ||
+        stringPayload(replayed.payload, "status") !== operation.status ||
+        stringPayload(replayed.payload, "sha256") !== operation.evidence.sha256 ||
+        sha256(operation.evidence.body) !== operation.evidence.sha256 ||
+        canonicalJson((replayedOutputs ?? null) as JsonValue) !== canonicalJson((operationOutputs ?? null) as JsonValue) ||
+        (operation.status === "completed" && (
+          operation.outputs.some((output) => sha256(output.body) !== output.sha256) ||
+          numberPayload(replayed.payload, "completedCount") !== operation.completedCount ||
+          stringPayload(replayed.payload, "costState") !== operation.cost.state ||
+          (replayed.payload.actualCostUsd ?? null) !== (operation.cost.actualCostUsd ?? null)
+        ))
+      ) {
+        return yield* Effect.fail(new RunRecordError("IDEMPOTENCY_CONFLICT", "The operation identity was replayed with different Seedance poll evidence."))
+      }
     }
     if (
       operation._tag === "OpenDonorChoice" &&
@@ -989,6 +1309,15 @@ export const recordOperation = (
         stringPayload(replayed.payload, "operationSha256") !== checksOperationSha256(operation)
       ) {
         return yield* Effect.fail(new RunRecordError("IDEMPOTENCY_CONFLICT", "The operation identity was replayed with different checks evidence."))
+      }
+    }
+    if (operation._tag === "CommitVideoChecks") {
+      const reportBytes = bytes(canonicalJson(operation.report as unknown as JsonValue))
+      if (
+        stringPayload(replayed.payload, "jobId") !== operation.jobId ||
+        stringPayload(replayed.payload, "reportSha256") !== sha256(reportBytes)
+      ) {
+        return yield* Effect.fail(new RunRecordError("IDEMPOTENCY_CONFLICT", "The operation identity was replayed with different video checks evidence."))
       }
     }
     if (
@@ -1040,7 +1369,10 @@ export const recordOperation = (
     return { _tag: "Recorded" as const, view: next }
   }
   if (operation._tag === "CommitGeneratedOutput") {
-    if (current.phase !== "provider_evidence_received" && current.phase !== "generated_outputs_received") {
+    if (
+      runRequest.mode !== "qwen-image" ||
+      (current.phase !== "provider_evidence_received" && current.phase !== "generated_outputs_received")
+    ) {
       return yield* Effect.fail(new RunRecordError("ILLEGAL_TRANSITION", "Generated output evidence requires provider evidence."))
     }
     if (
@@ -1084,8 +1416,116 @@ export const recordOperation = (
     yield* store.writeState(operation.runId, encodeView(next))
     return { _tag: "Recorded" as const, view: next }
   }
+  if (operation._tag === "CommitSeedancePoll") {
+    if (
+      runRequest.mode !== "seedance-video" || current.phase !== "provider_evidence_received" ||
+      current.providerJobId === undefined || operation.jobId !== current.providerJobId
+    ) {
+      return yield* Effect.fail(new RunRecordError("ILLEGAL_TRANSITION", "Seedance polling must continue the one persisted submitted job."))
+    }
+    yield* Effect.try({
+      try: () => validateProviderEvidence({
+        _tag: "CommitProviderEvidence",
+        runId: operation.runId,
+        operationId: operation.operationId,
+        evidence: operation.evidence,
+      }),
+      catch: (error) => error instanceof RunRecordError
+        ? error
+        : new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance poll evidence validation failed.", "repair-evidence"),
+    })
+    let pollDocument: unknown
+    try {
+      pollDocument = JSON.parse(Buffer.from(operation.evidence.body).toString("utf8"))
+    } catch {
+      return yield* Effect.fail(new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance poll evidence is not valid JSON.", "repair-evidence"))
+    }
+    const poll = pollDocument as Readonly<Record<string, unknown>>
+    if (
+      pollDocument === null || typeof pollDocument !== "object" || Array.isArray(pollDocument) ||
+      poll.job_id !== operation.jobId || poll.status !== operation.status
+    ) {
+      return yield* Effect.fail(new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance poll evidence substituted its job identity or status.", "repair-evidence"))
+    }
+    let outputReceipts: ReadonlyArray<Readonly<Record<string, JsonValue>>> | undefined
+    if (operation.status === "completed") {
+      if (
+        !Number.isSafeInteger(operation.completedCount) ||
+        operation.completedCount !== current.maximumCount ||
+        operation.outputs.length !== operation.completedCount ||
+        (operation.cost.state !== "actual" && operation.cost.actualCostUsd !== undefined) ||
+        (operation.cost.state === "actual" &&
+          (operation.cost.actualCostUsd === undefined || !/^(?:0|[1-9]\d*)\.\d{2,6}$/.test(operation.cost.actualCostUsd)))
+      ) {
+        return yield* Effect.fail(new RunRecordError("RESERVATION_OUTSIDE_PLAN", "Seedance completion contradicts the reserved count or cost contract."))
+      }
+      const paths = new Set<string>()
+      for (const output of operation.outputs) {
+        if (
+          !/^outputs\/[a-z0-9][a-z0-9._-]*\.mp4$/.test(output.applicationPath) ||
+          paths.has(output.applicationPath) || output.mediaType !== "video/mp4" ||
+          !isSha256(output.sha256) || sha256(output.body) !== output.sha256 ||
+          current.evidence.some((item) => item.applicationPath === output.applicationPath)
+        ) {
+          return yield* Effect.fail(new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance output evidence is unsafe or malformed.", "repair-evidence"))
+        }
+        paths.add(output.applicationPath)
+      }
+      outputReceipts = operation.outputs.map((output) => ({
+        applicationPath: output.applicationPath,
+        sha256: output.sha256,
+        byteLength: output.body.byteLength,
+        mediaType: output.mediaType,
+      }))
+    }
+    const applicationPath = `polls/poll-${String((current.pollCount ?? 0) + 1).padStart(4, "0")}.json`
+    yield* store.writeEvidence(operation.runId, applicationPath, operation.evidence.body)
+    if (operation.status === "completed") {
+      for (const output of operation.outputs) {
+        yield* store.writeEvidence(operation.runId, output.applicationPath, output.body)
+      }
+    }
+    const clock = yield* RunRecordClock
+    const timestamp = yield* clock.now()
+    const event = makeEvent({
+      schemaVersion: "1",
+      sequence: events.length + 1,
+      operationId: operation.operationId,
+      runId: operation.runId,
+      timestamp,
+      kind: "seedance_poll_persisted",
+      previousEventSha256: current.chainHeadSha256,
+      payload: {
+        applicationPath,
+        sha256: operation.evidence.sha256,
+        byteLength: operation.evidence.body.byteLength,
+        mediaType: operation.evidence.mediaType,
+        jobId: operation.jobId,
+        status: operation.status,
+        ...(operation.status === "pending"
+          ? {}
+          : {
+              outputs: outputReceipts!,
+              completedCount: operation.completedCount,
+              costState: operation.cost.state,
+              ...(operation.cost.actualCostUsd === undefined ? {} : { actualCostUsd: operation.cost.actualCostUsd }),
+            }),
+      },
+    })
+    yield* store.appendEvent(operation.runId, current.chainHeadSha256, encodeEvent(event))
+    const nextEvidence = {
+      ...stored.evidence,
+      [applicationPath]: operation.evidence.body,
+      ...(operation.status === "pending"
+        ? {}
+        : Object.fromEntries(operation.outputs.map((output) => [output.applicationPath, output.body]))),
+    }
+    const next = replay(operation.runId, stored.request, [...events, event], nextEvidence)
+    yield* store.writeState(operation.runId, encodeView(next))
+    return { _tag: "Recorded" as const, view: next }
+  }
   if (operation._tag === "OpenDonorChoice") {
-    if (current.phase !== "generated_outputs_received") {
+    if (runRequest.mode !== "qwen-image" || current.phase !== "generated_outputs_received") {
       return yield* Effect.fail(new RunRecordError("ILLEGAL_TRANSITION", "A donor choice requires persisted generated output evidence."))
     }
     const generatedOutputSha256s = current.evidence
@@ -1286,6 +1726,58 @@ export const recordOperation = (
       ...stored.evidence,
       [baselinePath]: operation.baseline.body,
       [applicationPath]: checksBytes,
+    })
+    yield* store.writeState(operation.runId, encodeView(next))
+    return { _tag: "Recorded" as const, view: next }
+  }
+  if (operation._tag === "CommitVideoChecks") {
+    if (
+      runRequest.mode !== "seedance-video" || current.phase !== "generated_outputs_received" ||
+      current.providerJobId === undefined || operation.jobId !== current.providerJobId
+    ) {
+      return yield* Effect.fail(new RunRecordError("ILLEGAL_TRANSITION", "Video checks require completed output evidence for the persisted Seedance job."))
+    }
+    yield* Effect.try({
+      try: () => validateVideoReport(
+        runRequest,
+        operation.report,
+        current.evidence,
+        current.completedCount,
+        current.costState,
+        current.actualCostUsd,
+        stored.evidence,
+      ),
+      catch: (error) => error instanceof RunRecordError
+        ? error
+        : new RunRecordError("CHECKS_NOT_PASSED", "Video checks evidence could not be validated.", "repair-evidence"),
+    })
+    const reportBytes = bytes(canonicalJson(operation.report as unknown as JsonValue))
+    const reportSha256 = sha256(reportBytes)
+    const applicationPath = "checks.json"
+    yield* store.writeEvidence(operation.runId, applicationPath, reportBytes)
+    const clock = yield* RunRecordClock
+    const timestamp = yield* clock.now()
+    const event = makeEvent({
+      schemaVersion: "1",
+      sequence: events.length + 1,
+      operationId: operation.operationId,
+      runId: operation.runId,
+      timestamp,
+      kind: "video_checks_persisted",
+      previousEventSha256: current.chainHeadSha256,
+      payload: {
+        applicationPath,
+        sha256: reportSha256,
+        reportSha256,
+        byteLength: reportBytes.byteLength,
+        mediaType: "application/json",
+        jobId: operation.jobId,
+      },
+    })
+    yield* store.appendEvent(operation.runId, current.chainHeadSha256, encodeEvent(event))
+    const next = replay(operation.runId, stored.request, [...events, event], {
+      ...stored.evidence,
+      [applicationPath]: reportBytes,
     })
     yield* store.writeState(operation.runId, encodeView(next))
     return { _tag: "Recorded" as const, view: next }

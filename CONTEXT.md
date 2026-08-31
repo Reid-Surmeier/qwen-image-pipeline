@@ -68,6 +68,10 @@ _Avoid_: Latest branch, compatible-enough version
 The proved mapping from authoritative application media to exact provider-payload destinations, including application-relative paths, hashes, detected kinds, inspected properties, and authority reasons.
 _Avoid_: Reference list, Markdown attachment
 
+**Video Plan**:
+The Seedance-only immutable proof that no authoritative pixel ownership requires Assembly, together with expected output dimensions, duration, and audio presence.
+_Avoid_: “Assembly not needed” in prose, adapter default
+
 **Run Request**:
 The canonical provider-independent instructions produced from a valid Objective, Project Contract, Tool Lock, and Reference Plan.
 _Avoid_: Provider payload, loose request blob
@@ -105,6 +109,7 @@ _Avoid_: Retry token, persisted credential
 - **Fidelity Checks** gate both **Assembly** and the **Interactive Replica**.
 - One **Planned Run** may create one **Attempt Reservation** in one **Run Record**.
 - One durable submission-may-have-started event may issue one in-process **Submission Permit**; replay issues none.
+- One Seedance **Submission Permit** may create one persisted provider job identity; every later advance polls only that identity and cannot submit another job.
 - A definitively failed pre-submit **Run Record** remains immutable and may be named by a distinct **Linked Run** whose relationship is fixed in its Run Request before reservation.
 
 ## Example dialogue

@@ -46,6 +46,19 @@ export type AssemblyPlan = Readonly<{
   }>>
 }>
 
+export type VideoPlan = Readonly<{
+  assembly: Readonly<{
+    required: false
+    pixelOwnership: "none-authoritative"
+  }>
+  expectedMedia: Readonly<{
+    width: number
+    height: number
+    durationSeconds: number
+    audioExpected: boolean
+  }>
+}>
+
 export type CanonicalRunRequest = Readonly<{
   schemaVersion: string
   applicationId: string
@@ -62,6 +75,7 @@ export type CanonicalRunRequest = Readonly<{
   outputRoot: string
   linkedRun?: LinkedRunRelationship
   assemblyPlan?: AssemblyPlan
+  videoPlan?: VideoPlan
   references: ReadonlyArray<{
     slot: string
     applicationPath: string

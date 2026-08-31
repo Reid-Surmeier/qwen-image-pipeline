@@ -2,7 +2,7 @@ import type { Effect } from "effect"
 
 import type { SubmissionPermit } from "../run-record/index.js"
 import type { GenerationError } from "./errors.js"
-import { invokeGeneration, prepareGeneration, recoverGeneration } from "./generation.js"
+import { invokeGeneration, pollSeedanceGeneration, prepareGeneration, recoverGeneration, submitSeedanceGeneration } from "./generation.js"
 import type {
   GeneratedArtifact,
   GenerationAdapterService,
@@ -10,6 +10,8 @@ import type {
   GenerationReference,
   GenerationResult,
   PreparedGeneration,
+  SeedancePollResult,
+  SeedanceSubmission,
 } from "./types.js"
 
 export const prepare: (
@@ -27,6 +29,17 @@ export const recover: (
   providerEvidence: GenerationProviderEvidence,
 ) => Effect.Effect<GenerationResult, GenerationError, GenerationAdapterService> = recoverGeneration
 
+export const submitSeedance: (
+  prepared: PreparedGeneration,
+  permit: SubmissionPermit,
+) => Effect.Effect<SeedanceSubmission, GenerationError | import("../run-record/index.js").RunRecordError, GenerationAdapterService> = submitSeedanceGeneration
+
+export const pollSeedance: (
+  prepared: PreparedGeneration,
+  jobId: string,
+  submissionEvidence: GenerationProviderEvidence,
+) => Effect.Effect<SeedancePollResult, GenerationError, GenerationAdapterService> = pollSeedanceGeneration
+
 export { GenerationError } from "./errors.js"
 export type { GenerationErrorCode } from "./errors.js"
 export { GenerationAdapter } from "./types.js"
@@ -37,4 +50,8 @@ export type {
   GenerationReference,
   GenerationResult,
   PreparedGeneration,
+  SeedanceCostEvidence,
+  SeedancePollResult,
+  SeedanceSubmission,
+  SeedanceVideoArtifact,
 } from "./types.js"

@@ -8,6 +8,7 @@ export type RunContractErrorCode =
   | "BUDGET_UNPROVABLE"
   | "BUDGET_EXCEEDED"
   | "ASSEMBLY_PLAN_INVALID"
+  | "VIDEO_PLAN_INVALID"
   | "SEEDANCE_VIDEO_REFERENCE_REQUIRED"
 
 export class RunContractError extends Error {

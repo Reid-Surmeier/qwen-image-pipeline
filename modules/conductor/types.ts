@@ -36,6 +36,14 @@ export type AdvanceCommand = Readonly<{
 
 export type AdvanceDecision =
   | Readonly<{
+      _tag: "ProviderPending"
+      runId: string
+      jobId: string
+      pollCount: number
+      normalView: NormalView
+      diagnostics: RunRecordDiagnostics
+    }>
+  | Readonly<{
       _tag: "HumanDecisionRequired"
       runId: string
       decision: Readonly<{
@@ -49,7 +57,8 @@ export type AdvanceDecision =
       _tag: "VerifiedCandidate"
       runId: string
       candidate: Readonly<{
-        applicationPath: "outputs/assembled.rgba.json"
+        applicationPath: `outputs/${string}`
+        mediaType: "application/vnd.qwen.rgba+json" | "video/mp4"
         sha256: string
       }>
       normalView: NormalView

@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 
 import { assemble } from "../assembly/index.js"
-import { invoke, prepare, recover, type GenerationResult } from "../generation/index.js"
+import { invoke, pollSeedance, prepare, recover, submitSeedance, type GenerationResult } from "../generation/index.js"
 import {
   ApplicationFiles,
   compilePlannedRun,
@@ -17,6 +17,7 @@ import {
   type RunRecordDiagnostics,
 } from "../run-record/index.js"
 import { verify } from "../verification/index.js"
+import { verifyVideo } from "../video-verification/index.js"
 import type {
   AdvanceCommand,
   AdvanceDecision,
@@ -77,6 +78,7 @@ const refusalGuidance = {
   COUNT_OUT_OF_RANGE: fixDocument,
   BUDGET_UNPROVABLE: fixDocument,
   BUDGET_EXCEEDED: fixDocument,
+  VIDEO_PLAN_INVALID: fixDocument,
   REFERENCE_MISSING: fixReference,
   REFERENCE_HASH_MISMATCH: fixReference,
   REFERENCE_KIND_MISMATCH: fixReference,
@@ -232,6 +234,7 @@ const verifiedDecision = (diagnostics: RunRecordDiagnostics, objective: string):
     runId: diagnostics.view.runId,
     candidate: {
       applicationPath: "outputs/assembled.rgba.json",
+      mediaType: "application/vnd.qwen.rgba+json",
       sha256: diagnostics.view.assemblyOutputSha256!,
     },
     normalView: {
@@ -245,11 +248,262 @@ const verifiedDecision = (diagnostics: RunRecordDiagnostics, objective: string):
   }
 }
 
+const providerPendingDecision = (
+  diagnostics: RunRecordDiagnostics,
+  objective: string,
+): AdvanceDecision => ({
+  _tag: "ProviderPending",
+  runId: diagnostics.view.runId,
+  jobId: diagnostics.view.providerJobId!,
+  pollCount: diagnostics.view.pollCount ?? 0,
+  normalView: {
+    objective,
+    evidence: `Seedance job ${diagnostics.view.providerJobId} is persisted with ${diagnostics.view.pollCount ?? 0} completed status poll${diagnostics.view.pollCount === 1 ? "" : "s"}.`,
+    nextAction: "Advance this same Run again to poll the existing job identity; do not submit a new job.",
+    spendRisk: "The one planned provider submission may already be spent; polling cannot authorize another submission.",
+    humanDecision: "No human decision is needed while the existing provider job is still running.",
+  },
+  diagnostics,
+})
+
+const verifiedVideoDecision = (
+  diagnostics: RunRecordDiagnostics,
+  objective: string,
+): AdvanceDecision => {
+  const output = diagnostics.view.evidence.find((item) =>
+    item.applicationPath.startsWith("outputs/") && item.mediaType === "video/mp4")!
+  return {
+    _tag: "VerifiedCandidate",
+    runId: diagnostics.view.runId,
+    candidate: {
+      applicationPath: output.applicationPath as `outputs/${string}`,
+      mediaType: "video/mp4",
+      sha256: output.sha256,
+    },
+    normalView: {
+      objective,
+      evidence: "The completed video passed exact hash, media, dimensions, duration, audio-expectation, count, and cost-state checks.",
+      nextAction: "Review the verified video candidate visually; do not submit another provider job for this Run.",
+      spendRisk: "No further provider submission is allowed on this Run.",
+      humanDecision: "Subjective final visual approval remains with the human owner.",
+    },
+    diagnostics,
+  }
+}
+
+const advanceSeedanceRun = (
+  command: AdvanceCommand,
+): Effect.Effect<AdvanceDecision, ConductorError, ApplicationFilesService | import("../generation/index.js").GenerationAdapterService | import("../run-record/index.js").RunRecordStoreService | import("../run-record/index.js").RunRecordClockService> =>
+  Effect.gen(function*() {
+    const request = command.run.request
+    if (
+      request.mode !== "seedance-video" || request.videoPlan === undefined ||
+      request.videoPlan.assembly.required !== false ||
+      request.videoPlan.assembly.pixelOwnership !== "none-authoritative" ||
+      request.assemblyPlan !== undefined
+    ) {
+      return yield* Effect.fail(new ConductorError(
+        "ADVANCE_REQUIRES_VALIDATED_VIDEO_PLAN",
+        "Seedance advance requires the immutable Video Plan and its explicit no-authoritative-pixel-ownership proof.",
+      ))
+    }
+    const files = yield* ApplicationFiles
+    const references = yield* Effect.forEach(request.references, (reference) =>
+      files.read(reference.applicationPath).pipe(
+        Effect.map((snapshot) => ({
+          slot: reference.slot,
+          applicationPath: reference.applicationPath,
+          sha256: reference.sha256,
+          payloadDestination: reference.payloadDestination,
+          mediaType: reference.mediaType,
+          bytes: snapshot.bytes,
+        })),
+        Effect.mapError(asConductorError(
+          "REFERENCE_EVIDENCE_UNAVAILABLE",
+          `The locked reference ${reference.applicationPath} could not be read.`,
+        )),
+      ),
+    )
+    const prepared = yield* prepare(request, references).pipe(
+      Effect.mapError(asConductorError(
+        "REFERENCE_EVIDENCE_UNAVAILABLE",
+        "The exact Seedance reference payload could not be prepared.",
+      )),
+    )
+    let current = yield* reserve({
+      plannedRun: command.run,
+      payloadSha256: prepared.payloadSha256,
+    }).pipe(Effect.mapError(asConductorError(
+      "RUN_RECORD_FAILURE",
+      "The immutable Seedance Run could not be reserved or reloaded.",
+    )))
+
+    if (current.phase === "reserved") {
+      const marked = yield* record({
+        _tag: "SubmissionMayHaveStarted",
+        runId: current.runId,
+        operationId: "conductor-seedance-submit-once",
+      }).pipe(Effect.mapError(asConductorError(
+        "RUN_RECORD_FAILURE",
+        "The durable Seedance submission marker could not be recorded.",
+      )))
+      if (marked._tag !== "SubmissionPermitIssued") {
+        return yield* Effect.fail(new ConductorError(
+          "RUN_STATE_UNSUPPORTED",
+          "The Seedance Run did not issue its one in-process Submission Permit.",
+        ))
+      }
+      const submitted = yield* submitSeedance(prepared, marked.permit).pipe(
+        Effect.mapError(asConductorError(
+          "GENERATION_FAILURE",
+          "The one permitted Seedance submission did not return a trustworthy job identity.",
+        )),
+      )
+      const persisted = yield* record({
+        _tag: "CommitProviderEvidence",
+        runId: current.runId,
+        operationId: "conductor-seedance-submission-evidence",
+        evidence: submitted.providerEvidence,
+      }).pipe(Effect.mapError(asConductorError(
+        "RUN_RECORD_FAILURE",
+        "The sanitized Seedance submission response and job identity could not be persisted.",
+      )))
+      const diagnostics = yield* readDiagnostics(persisted.view.runId).pipe(Effect.mapError(asConductorError(
+        "RUN_RECORD_FAILURE",
+        "The submitted Seedance job diagnostics could not be replayed.",
+      )))
+      return providerPendingDecision(diagnostics, request.objective)
+    }
+
+    if (current.phase === "provider_evidence_received") {
+      if (current.providerJobId === undefined) {
+        return yield* Effect.fail(new ConductorError(
+          "RUN_RECORD_FAILURE",
+          "The persisted Seedance submission has no replay-verified job identity.",
+        ))
+      }
+      const submissionReceipt = current.evidence.find((item) => item.applicationPath === "provider-response.json")
+      if (submissionReceipt === undefined) {
+        return yield* Effect.fail(new ConductorError(
+          "RUN_RECORD_FAILURE",
+          "The persisted Seedance submission response is missing.",
+        ))
+      }
+      const submissionBody = yield* readEvidence(current.runId, submissionReceipt.applicationPath).pipe(
+        Effect.mapError(asConductorError(
+          "RUN_RECORD_FAILURE",
+          "The persisted Seedance submission response could not be verified and read.",
+        )),
+      )
+      const polled = yield* pollSeedance(prepared, current.providerJobId, {
+        mediaType: "application/json",
+        body: submissionBody,
+        sha256: submissionReceipt.sha256,
+      }).pipe(Effect.mapError(asConductorError(
+        "GENERATION_FAILURE",
+        "The persisted Seedance job could not be polled through trustworthy evidence.",
+      )))
+      const persisted = yield* record(polled.status === "pending"
+        ? {
+            _tag: "CommitSeedancePoll" as const,
+            runId: current.runId,
+            operationId: `conductor-seedance-poll-${(current.pollCount ?? 0) + 1}`,
+            jobId: current.providerJobId,
+            status: "pending" as const,
+            evidence: polled.providerEvidence,
+          }
+        : {
+            _tag: "CommitSeedancePoll" as const,
+            runId: current.runId,
+            operationId: `conductor-seedance-poll-${(current.pollCount ?? 0) + 1}`,
+            jobId: current.providerJobId,
+            status: "completed" as const,
+            evidence: polled.providerEvidence,
+            outputs: polled.outputs,
+            completedCount: polled.completedCount,
+            cost: polled.cost,
+          }).pipe(Effect.mapError(asConductorError(
+            "RUN_RECORD_FAILURE",
+            "The Seedance poll response could not be persisted.",
+          )))
+      current = persisted.view
+      if (polled.status === "pending") {
+        const diagnostics = yield* readDiagnostics(current.runId).pipe(Effect.mapError(asConductorError(
+          "RUN_RECORD_FAILURE",
+          "The pending Seedance diagnostics could not be replayed.",
+        )))
+        return providerPendingDecision(diagnostics, request.objective)
+      }
+    }
+
+    if (current.phase === "verified_candidate") {
+      const diagnostics = yield* readDiagnostics(current.runId).pipe(Effect.mapError(asConductorError(
+        "RUN_RECORD_FAILURE",
+        "The verified Seedance diagnostics could not be replayed.",
+      )))
+      return verifiedVideoDecision(diagnostics, request.objective)
+    }
+    if (current.phase !== "generated_outputs_received" || current.providerJobId === undefined) {
+      return yield* Effect.fail(new ConductorError(
+        "RUN_STATE_UNSUPPORTED",
+        `The Seedance Run is in ${current.phase}; it cannot submit again and has no completed output to verify.`,
+      ))
+    }
+    const outputReceipts = current.evidence.filter((item) =>
+      item.applicationPath.startsWith("outputs/") && item.mediaType === "video/mp4")
+    const outputs = yield* Effect.forEach(outputReceipts, (receipt) =>
+      readEvidence(current.runId, receipt.applicationPath).pipe(
+        Effect.map((body) => ({
+          applicationPath: receipt.applicationPath as `outputs/${string}.mp4`,
+          mediaType: "video/mp4" as const,
+          body,
+          sha256: receipt.sha256,
+        })),
+        Effect.mapError(asConductorError(
+          "RUN_RECORD_FAILURE",
+          "The completed Seedance output could not be verified and read.",
+        )),
+      ),
+    )
+    const checked = yield* verifyVideo({
+      outputs,
+      expected: request.videoPlan.expectedMedia,
+      requestedCount: request.requestedCount,
+      completedCount: current.completedCount ?? -1,
+      cost: {
+        state: current.costState ?? "unknown",
+        estimatedMaximumCostUsd: request.estimatedMaximumCostUsd,
+        ...(current.actualCostUsd === undefined ? {} : { actualCostUsd: current.actualCostUsd }),
+      },
+    }).pipe(Effect.mapError(asConductorError(
+      "VERIFICATION_FAILURE",
+      "The completed Seedance output did not pass independent media verification.",
+    )))
+    const committed = yield* record({
+      _tag: "CommitVideoChecks",
+      runId: current.runId,
+      operationId: "conductor-seedance-video-checks",
+      jobId: current.providerJobId,
+      report: checked,
+    }).pipe(Effect.mapError(asConductorError(
+      "RUN_RECORD_FAILURE",
+      "The independent Seedance video checks could not be persisted.",
+    )))
+    const diagnostics = yield* readDiagnostics(committed.view.runId).pipe(Effect.mapError(asConductorError(
+      "RUN_RECORD_FAILURE",
+      "The verified Seedance diagnostics could not be replayed.",
+    )))
+    return verifiedVideoDecision(diagnostics, request.objective)
+  })
+
 export const advanceRun = (
   command: AdvanceCommand,
 ): Effect.Effect<AdvanceDecision, ConductorError, ApplicationFilesService | import("../generation/index.js").GenerationAdapterService | import("../run-record/index.js").RunRecordStoreService | import("../run-record/index.js").RunRecordClockService> =>
   Effect.gen(function*() {
     const request = command.run.request
+    if (request.mode === "seedance-video") {
+      return yield* advanceSeedanceRun(command)
+    }
     if (request.mode !== "qwen-image" || request.assemblyPlan?.required !== true) {
       return yield* Effect.fail(new ConductorError(
         "ADVANCE_REQUIRES_QWEN_ASSEMBLY",

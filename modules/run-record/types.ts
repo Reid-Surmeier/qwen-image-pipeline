@@ -42,6 +42,61 @@ export type BaselineEvidenceInput = Readonly<{
   sha256: string
 }>
 
+export type SeedanceCostInput = Readonly<{
+  state: "actual" | "estimated-only" | "unknown"
+  actualCostUsd?: string
+}>
+
+export type SeedancePollOperation = Readonly<{
+  _tag: "CommitSeedancePoll"
+  runId: string
+  operationId: string
+  jobId: string
+  evidence: ProviderEvidenceInput
+}> & (
+  | Readonly<{ status: "pending" }>
+  | Readonly<{
+      status: "completed"
+      outputs: ReadonlyArray<GeneratedOutputEvidenceInput>
+      completedCount: number
+      cost: SeedanceCostInput
+    }>
+)
+
+export type VideoVerificationReportInput = Readonly<{
+  algorithm: "seedance-media-v1"
+  classification: "verified-candidate"
+  outputs: ReadonlyArray<Readonly<{
+    applicationPath: `outputs/${string}.mp4`
+    mediaType: "video/mp4"
+    sha256: string
+    actual: Readonly<{
+      width: number
+      height: number
+      durationSeconds: number
+      hasAudio: boolean
+    }>
+  }>>
+  requestedCount: number
+  completedCount: number
+  expected: Readonly<{
+    width: number
+    height: number
+    durationSeconds: number
+    audioExpected: boolean
+  }>
+  cost: Readonly<{
+    state: "actual" | "estimated-only" | "unknown"
+    estimatedMaximumCostUsd: string
+    actualCostUsd?: string
+  }>
+  checks: ReadonlyArray<Readonly<{
+    name: "integrity" | "media" | "dimensions" | "duration" | "audio-expectation"
+    passed: true
+    measured: number
+  }>>
+}>
+
 export type RecordOperation =
   | Readonly<{
       _tag: "SubmissionMayHaveStarted"
@@ -88,6 +143,14 @@ export type RecordOperation =
       baseline: BaselineEvidenceInput
       checks: ReadonlyArray<FidelityCheckInput>
     }>
+  | SeedancePollOperation
+  | Readonly<{
+      _tag: "CommitVideoChecks"
+      runId: string
+      operationId: string
+      jobId: string
+      report: VideoVerificationReportInput
+    }>
   | Readonly<{
       _tag: "DefinitivePreSubmitFailure"
       runId: string
@@ -130,6 +193,11 @@ export type RunRecordView = Readonly<{
   assemblyReportSha256?: string
   checksSha256?: string
   classification?: "verified_candidate"
+  providerJobId?: string
+  pollCount?: number
+  completedCount?: number
+  costState?: "actual" | "estimated-only" | "unknown"
+  actualCostUsd?: string
   linkedFrom?: RunLink
 }>
 

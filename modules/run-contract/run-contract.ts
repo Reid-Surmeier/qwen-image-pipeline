@@ -11,6 +11,7 @@ import {
   type PlanningIdentityService,
   type RawPlanningDocuments,
   type ToolIdentity,
+  type VideoPlan,
 } from "./types.js"
 import { RunContractError } from "./errors.js"
 import {
@@ -323,6 +324,52 @@ const decodeAssemblyPlan = (
   return { required: true, baselineReferenceSlot, ownedRegion, exactCopy }
 }
 
+const videoPlanError = (message: string): RunContractError =>
+  new RunContractError("VIDEO_PLAN_INVALID", message)
+
+const decodeVideoPlan = (
+  value: unknown,
+  mode: "qwen-image" | "seedance-video",
+): VideoPlan | undefined => {
+  if (mode === "qwen-image") {
+    if (value !== undefined) {
+      throw videoPlanError("Video plans are supported only for Seedance objectives.")
+    }
+    return undefined
+  }
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw videoPlanError("Seedance requires an explicit Video Plan.")
+  }
+  const plan = value as JsonRecord
+  if (plan.assembly === null || typeof plan.assembly !== "object" || Array.isArray(plan.assembly)) {
+    throw videoPlanError("The Video Plan must contain an Assembly decision.")
+  }
+  const assembly = plan.assembly as JsonRecord
+  if (assembly.required !== false || assembly.pixelOwnership !== "none-authoritative") {
+    throw videoPlanError("Assembly may be absent only when the plan proves no authoritative pixel ownership.")
+  }
+  if (plan.expectedMedia === null || typeof plan.expectedMedia !== "object" || Array.isArray(plan.expectedMedia)) {
+    throw videoPlanError("The Video Plan must contain expected media properties.")
+  }
+  const media = plan.expectedMedia as JsonRecord
+  const { width, height, durationSeconds, audioExpected } = media
+  if (
+    typeof width !== "number" || !Number.isSafeInteger(width) || width < 1 ||
+    typeof height !== "number" || !Number.isSafeInteger(height) || height < 1 ||
+    typeof durationSeconds !== "number" || !Number.isFinite(durationSeconds) || durationSeconds <= 0 ||
+    typeof audioExpected !== "boolean"
+  ) {
+    throw videoPlanError("Expected video dimensions, duration, and audio expectation must be valid.")
+  }
+  return {
+    assembly: {
+      required: false,
+      pixelOwnership: "none-authoritative",
+    },
+    expectedMedia: { width, height, durationSeconds, audioExpected },
+  }
+}
+
 export const compileDocuments = (
   input: RawPlanningDocuments,
 ): Effect.Effect<
@@ -415,6 +462,7 @@ export const compileDocuments = (
         objectiveBudget,
         linkedRun: decodeLinkedRun(objective),
         assemblyPlan: objective.assemblyPlan,
+        videoPlan: objective.videoPlan,
         requirements: decodeRequirements(procedure),
         candidates: decodeCandidates(objective),
       }
@@ -446,6 +494,12 @@ export const compileDocuments = (
       ? error
       : assemblyPlanError("Assembly plan could not be decoded."),
   })
+  const videoPlan = yield* Effect.try({
+    try: () => decodeVideoPlan(decoded.videoPlan, decoded.mode),
+    catch: (error) => error instanceof RunContractError
+      ? error
+      : videoPlanError("Video plan could not be decoded."),
+  })
 
   const request: CanonicalRunRequest = deepFreeze({
     schemaVersion: lock.runSchemaVersion,
@@ -463,6 +517,7 @@ export const compileDocuments = (
     outputRoot: decoded.outputRoot,
     ...(decoded.linkedRun === undefined ? {} : { linkedRun: decoded.linkedRun }),
     ...(assemblyPlan === undefined ? {} : { assemblyPlan }),
+    ...(videoPlan === undefined ? {} : { videoPlan }),
     references: referencePlan.references,
     tool: lock,
   })

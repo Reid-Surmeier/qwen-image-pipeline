@@ -107,6 +107,22 @@ export const makeFixture = (
     procedureId,
     requestedCount: 1,
     budgetCeilingUsd: isVideo ? "0.25" : "0.05",
+    ...(isVideo
+      ? {
+          videoPlan: {
+            assembly: {
+              required: false,
+              pixelOwnership: "none-authoritative",
+            },
+            expectedMedia: {
+              width: 64,
+              height: 48,
+              durationSeconds: 0.2,
+              audioExpected: false,
+            },
+          },
+        }
+      : {}),
     references: [
       {
         slot: isVideo ? "motion" : "source",

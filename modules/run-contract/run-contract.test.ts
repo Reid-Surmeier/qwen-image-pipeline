@@ -265,9 +265,51 @@ test("requires Assembly and a locked image baseline when a Qwen plan is declared
   }
 })
 
-test("leaves an existing Seedance Run Request unchanged when no Assembly plan is declared", async () => {
+test("locks an explicit no-Assembly proof and expected media into a Seedance Run Request", async () => {
   const run = await compileFixture(makeFixture("seedance-video"))
 
   assert.equal(run.request.mode, "seedance-video")
   assert.equal("assemblyPlan" in run.request, false)
+  assert.deepEqual(run.request.videoPlan, {
+    assembly: {
+      required: false,
+      pixelOwnership: "none-authoritative",
+    },
+    expectedMedia: {
+      width: 64,
+      height: 48,
+      durationSeconds: 0.2,
+      audioExpected: false,
+    },
+  })
+})
+
+test("refuses Seedance when no validated no-Assembly proof reaches the Run Request", async (context) => {
+  for (const [name, videoPlan] of [
+    ["missing", undefined],
+    ["caller assertion", {
+      assembly: { required: false, pixelOwnership: "unknown" },
+      expectedMedia: { width: 64, height: 48, durationSeconds: 0.2, audioExpected: false },
+    }],
+    ["invalid expected media", {
+      assembly: { required: false, pixelOwnership: "none-authoritative" },
+      expectedMedia: { width: 0, height: 48, durationSeconds: 0.2, audioExpected: false },
+    }],
+  ] as const) {
+    await context.test(name, async () => {
+      const fixture = makeFixture("seedance-video", {
+        objective: (objective) => {
+          if (videoPlan === undefined) delete objective.videoPlan
+          else objective.videoPlan = videoPlan
+        },
+      })
+      await assert.rejects(
+        compileFixture(fixture),
+        (error: unknown) =>
+          error instanceof Error &&
+          "code" in error &&
+          error.code === "VIDEO_PLAN_INVALID",
+      )
+    })
+  }
 })

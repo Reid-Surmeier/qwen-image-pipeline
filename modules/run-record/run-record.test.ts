@@ -16,6 +16,7 @@ import {
   type PlannedRun,
 } from "../run-contract/index.js"
 import { makeFixture } from "../../tests/control-plane-fixture.js"
+import { verifyVideo } from "../video-verification/index.js"
 import {
   RunRecordClock,
   consumeSubmission,
@@ -67,6 +68,22 @@ const plannedRun = async (linkedRun?: RunLink, requestedCount = 1): Promise<Plan
       Effect.provideService(PlanningIdentity, fixture.identity),
     ),
   )
+}
+
+const plannedSeedanceRun = async (): Promise<Readonly<{
+  planned: PlannedRun
+  body: Uint8Array
+}>> => {
+  const fixture = makeFixture("seedance-video")
+  const planned = await Effect.runPromise(
+    compilePlannedRun(fixture.documents).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(MediaInspector, byteMediaInspector),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+    ),
+  )
+  const body = (await Effect.runPromise(fixture.files.read("references/neutral.mp4"))).bytes
+  return { planned, body }
 }
 
 const raster = (pixels: ReadonlyArray<number>): Uint8Array =>
@@ -430,6 +447,147 @@ test("commits provider evidence write-once and replays its verified hash", async
     },
   }))))
   assert.equal(changedError.code, "IDEMPOTENCY_CONFLICT")
+})
+
+test("persists one Seedance job, polls only that identity, and records verified video evidence", async () => {
+  const { planned, body: videoBody } = await plannedSeedanceRun()
+  const memory = await memoryHarness()
+  const provide = <Success, Error>(
+    effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
+  ): Effect.Effect<Success, Error> => effect.pipe(
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, clock),
+  )
+  const reserved = await Effect.runPromise(provide(reserve(reservationFor(planned))))
+  await Effect.runPromise(provide(record({
+    _tag: "SubmissionMayHaveStarted",
+    runId: reserved.runId,
+    operationId: "seedance-submit-marker",
+  })))
+  const submissionBody = Buffer.from('{"job_id":"seedance-job-1","status":"submitted"}')
+  const submitted = await Effect.runPromise(provide(record({
+    _tag: "CommitProviderEvidence",
+    runId: reserved.runId,
+    operationId: "seedance-submission-evidence",
+    evidence: {
+      mediaType: "application/json",
+      body: submissionBody,
+      sha256: createHash("sha256").update(submissionBody).digest("hex"),
+    },
+  })))
+  assert.equal(submitted.view.providerJobId, "seedance-job-1")
+
+  const pendingBody = Buffer.from('{"job_id":"seedance-job-1","status":"pending"}')
+  const pending = await Effect.runPromise(provide(record({
+    _tag: "CommitSeedancePoll",
+    runId: reserved.runId,
+    operationId: "seedance-poll-1",
+    jobId: "seedance-job-1",
+    status: "pending",
+    evidence: {
+      mediaType: "application/json",
+      body: pendingBody,
+      sha256: createHash("sha256").update(pendingBody).digest("hex"),
+    },
+  })))
+  assert.equal(pending.view.phase, "provider_evidence_received")
+  assert.equal(pending.view.pollCount, 1)
+  assert.equal(pending.view.providerJobId, "seedance-job-1")
+
+  const completedBody = Buffer.from('{"job_id":"seedance-job-1","status":"completed"}')
+  const outputSha256 = createHash("sha256").update(videoBody).digest("hex")
+  const completed = await Effect.runPromise(provide(record({
+    _tag: "CommitSeedancePoll",
+    runId: reserved.runId,
+    operationId: "seedance-poll-2",
+    jobId: "seedance-job-1",
+    status: "completed",
+    evidence: {
+      mediaType: "application/json",
+      body: completedBody,
+      sha256: createHash("sha256").update(completedBody).digest("hex"),
+    },
+    outputs: [{
+      applicationPath: "outputs/seedance-result.mp4",
+      mediaType: "video/mp4",
+      body: videoBody,
+      sha256: outputSha256,
+    }],
+    completedCount: 1,
+    cost: { state: "estimated-only" },
+  })))
+  assert.equal(completed.view.phase, "generated_outputs_received")
+  assert.equal(completed.view.pollCount, 2)
+  assert.equal(completed.view.completedCount, 1)
+  assert.equal(completed.view.costState, "estimated-only")
+
+  const report = await Effect.runPromise(verifyVideo({
+    outputs: [{
+      applicationPath: "outputs/seedance-result.mp4",
+      mediaType: "video/mp4",
+      body: videoBody,
+      sha256: outputSha256,
+    }],
+    expected: planned.request.videoPlan!.expectedMedia,
+    requestedCount: planned.request.requestedCount,
+    completedCount: 1,
+    cost: {
+      state: "estimated-only",
+      estimatedMaximumCostUsd: planned.request.estimatedMaximumCostUsd,
+    },
+  }))
+  const verified = await Effect.runPromise(provide(record({
+    _tag: "CommitVideoChecks",
+    runId: reserved.runId,
+    operationId: "seedance-video-checks",
+    jobId: "seedance-job-1",
+    report,
+  })))
+  assert.equal(verified.view.phase, "verified_candidate")
+  assert.equal(verified.view.classification, "verified_candidate")
+  assert.equal(verified.view.checksSha256?.length, 64)
+  assert.deepEqual(
+    verified.view.evidence.map((item) => item.applicationPath),
+    [
+      "provider-response.json",
+      "polls/poll-0001.json",
+      "polls/poll-0002.json",
+      "outputs/seedance-result.mp4",
+      "checks.json",
+    ],
+  )
+  const checks = JSON.parse(Buffer.from(await Effect.runPromise(
+    readEvidence(reserved.runId, "checks.json").pipe(Effect.provide(memory.layer)),
+  )).toString("utf8")) as Record<string, unknown>
+  assert.deepEqual(checks.expected, planned.request.videoPlan!.expectedMedia)
+  assert.equal(checks.requestedCount, 1)
+  assert.equal(checks.completedCount, 1)
+  assert.deepEqual(checks.cost, {
+    state: "estimated-only",
+    estimatedMaximumCostUsd: planned.request.estimatedMaximumCostUsd,
+  })
+  assert.deepEqual((checks.outputs as Array<Record<string, unknown>>)[0]?.actual, {
+    width: 64,
+    height: 48,
+    durationSeconds: 0.2,
+    hasAudio: false,
+  })
+  const reloaded = await Effect.runPromise(load(reserved.runId).pipe(Effect.provide(memory.layer)))
+  assert.deepEqual(reloaded, verified.view)
+
+  const wrongJob = await Effect.runPromise(Effect.flip(provide(record({
+    _tag: "CommitSeedancePoll",
+    runId: reserved.runId,
+    operationId: "wrong-seedance-job",
+    jobId: "seedance-job-2",
+    status: "pending",
+    evidence: {
+      mediaType: "application/json",
+      body: pendingBody,
+      sha256: createHash("sha256").update(pendingBody).digest("hex"),
+    },
+  }))))
+  assert.equal(wrongJob.code, "ILLEGAL_TRANSITION")
 })
 
 test("a definitive pre-submit failure remains immutable and only supports a proved linked Run", async () => {
