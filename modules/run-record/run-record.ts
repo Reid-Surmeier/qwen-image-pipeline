@@ -1296,12 +1296,23 @@ export const recordOperation = (
   const next = replay(operation.runId, stored.request, [...events, event])
   let consumed = false
   const usePermit = <Success, Error, Requirements>(
+    binding: Readonly<{ requestSha256: string; payloadSha256: string }>,
     submission: Effect.Effect<Success, Error, Requirements>,
   ): Effect.Effect<Success, Error | RunRecordError, Requirements> => Effect.suspend<
     Success,
     Error | RunRecordError,
     Requirements
   >(() => {
+    if (
+      binding.requestSha256 !== next.requestSha256 ||
+      binding.payloadSha256 !== next.payloadSha256
+    ) {
+      return Effect.fail(new RunRecordError(
+        "SUBMISSION_BINDING_MISMATCH",
+        "The Submission Permit does not authorize this immutable Run and provider payload.",
+        "reconcile",
+      ))
+    }
     if (consumed) {
       return Effect.fail(new RunRecordError(
         "DUPLICATE_SUBMISSION_BLOCKED",
@@ -1317,6 +1328,8 @@ export const recordOperation = (
     permit: immutable({
       runId: operation.runId,
       attemptId: next.attemptId,
+      requestSha256: next.requestSha256,
+      payloadSha256: next.payloadSha256,
       use: usePermit,
       [submissionPermitBrand]: true as const,
     }),

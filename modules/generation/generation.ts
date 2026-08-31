@@ -87,6 +87,7 @@ export const prepareGeneration = (
       if (
         supplied === undefined || supplied.applicationPath !== locked.applicationPath ||
         supplied.sha256 !== locked.sha256 || supplied.payloadDestination !== locked.payloadDestination ||
+        supplied.mediaType !== locked.mediaType || locked.inspectedMedia.mediaType !== locked.mediaType ||
         sha256(supplied.bytes) !== locked.sha256
       ) {
         throw new GenerationError("REFERENCE_BYTES_MISMATCH", `${locked.slot} does not match its locked bytes and SHA-256.`)
@@ -134,7 +135,13 @@ export const prepareGeneration = (
       requested_count: request.requestedCount,
     }
     const payloadBytes = Buffer.from(canonicalize(payload), "utf8")
-    return { request, payload, payloadBytes, payloadSha256: sha256(payloadBytes) }
+    return {
+      request,
+      requestSha256: sha256(canonicalize(request)),
+      payload,
+      payloadBytes,
+      payloadSha256: sha256(payloadBytes),
+    }
   },
   catch: (error) => error instanceof GenerationError
     ? error
@@ -147,11 +154,39 @@ export const invokeGeneration = (
 ): Effect.Effect<GenerationResult, GenerationError | import("../run-record/index.js").RunRecordError, GenerationAdapterService> =>
   Effect.gen(function*() {
     const adapter = yield* GenerationAdapter
-    const submission = Effect.try({
-      try: () => adapter.invoke(prepared),
-      catch: () => new GenerationError("ADAPTER_RESULT_INVALID", "The adapter threw before returning its Effect."),
-    }).pipe(Effect.flatMap((effect) => effect))
-    const untrustedResult: unknown = yield* permit.use(submission)
+    const submission = Effect.gen(function*() {
+      const canonicalPayloadBytes = Buffer.from(canonicalize(prepared.payload), "utf8")
+      if (
+        prepared.requestSha256 !== sha256(canonicalize(prepared.request)) ||
+        prepared.payloadSha256 !== sha256(prepared.payloadBytes) ||
+        !Buffer.from(prepared.payloadBytes).equals(canonicalPayloadBytes)
+      ) {
+        return yield* Effect.fail(new GenerationError(
+          "ADAPTER_RESULT_INVALID",
+          "The prepared immutable Run or provider payload failed its digest binding.",
+        ))
+      }
+      const adapterEffect: unknown = yield* Effect.try({
+        try: () => adapter.invoke(prepared) as unknown,
+        catch: () => new GenerationError("ADAPTER_RESULT_INVALID", "The adapter threw before returning its Effect."),
+      })
+      if (!Effect.isEffect(adapterEffect)) {
+        return yield* Effect.fail(new GenerationError(
+          "ADAPTER_RESULT_INVALID",
+          "The adapter did not return an Effect.",
+        ))
+      }
+      return yield* adapterEffect.pipe(
+        Effect.catchDefect(() => Effect.fail(new GenerationError(
+          "ADAPTER_RESULT_INVALID",
+          "The adapter Effect terminated with a defect.",
+        ))),
+      )
+    })
+    const untrustedResult: unknown = yield* permit.use({
+      requestSha256: prepared.requestSha256,
+      payloadSha256: prepared.payloadSha256,
+    }, submission)
     const result = yield* Effect.try({
       try: () => normalizeAdapterResult(untrustedResult),
       catch: () => new GenerationError("ADAPTER_RESULT_INVALID", "The adapter returned a malformed result."),

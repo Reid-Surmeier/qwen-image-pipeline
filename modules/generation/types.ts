@@ -14,6 +14,7 @@ export type GenerationReference = Readonly<{
 
 export type PreparedGeneration = Readonly<{
   request: CanonicalRunRequest
+  requestSha256: string
   payload: Readonly<Record<string, unknown>>
   payloadBytes: Uint8Array
   payloadSha256: string

@@ -118,6 +118,7 @@ test("rejects a sparse provider-reference destination before reservation", async
 test("requires reference media type to match its exact payload destination", async () => {
   for (const [mode, wrongMediaType] of [
     ["qwen-image", "video/mp4"],
+    ["qwen-image", "application/vnd.qwen.rgba+json"],
     ["seedance-video", "image/png"],
   ] as const) {
     const fixture = makeFixture(mode)
@@ -138,8 +139,105 @@ test("requires reference media type to match its exact payload destination", asy
       mediaType: wrongMediaType,
       bytes: snapshot.bytes,
     }])))
-    assert.equal(error.code, "PAYLOAD_DESTINATION_INVALID", mode)
+    assert.equal(error.code, "REFERENCE_BYTES_MISMATCH", mode)
   }
+})
+
+test("a Submission Permit refuses a different Run and a changed payload before adapter invocation", async () => {
+  const firstFixture = makeFixture("qwen-image")
+  const secondFixture = makeFixture("qwen-image", {
+    objective: (objective) => { objective.summary = "A distinct immutable Run objective." },
+  })
+  const planFixture = (fixture: ReturnType<typeof makeFixture>) => Effect.runPromise(
+    plan({ objectivePath: fixture.objectivePath }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(MediaInspector, byteMediaInspector),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+    ),
+  )
+  const firstDecision = await planFixture(firstFixture)
+  const secondDecision = await planFixture(secondFixture)
+  assert.equal(firstDecision._tag, "Planned")
+  assert.equal(secondDecision._tag, "Planned")
+  if (firstDecision._tag !== "Planned" || secondDecision._tag !== "Planned") return
+  const prepareFixture = async (
+    decision: typeof firstDecision,
+    fixture: ReturnType<typeof makeFixture>,
+  ) => {
+    const locked = decision.run.request.references[0]!
+    const snapshot = await Effect.runPromise(fixture.files.read(locked.applicationPath))
+    return Effect.runPromise(prepare(decision.run.request, [{
+      slot: locked.slot,
+      applicationPath: locked.applicationPath,
+      sha256: locked.sha256,
+      payloadDestination: locked.payloadDestination,
+      mediaType: locked.mediaType,
+      bytes: snapshot.bytes,
+    }]))
+  }
+  const firstPrepared = await prepareFixture(firstDecision, firstFixture)
+  const secondPrepared = await prepareFixture(secondDecision, secondFixture)
+  const donorBody = Buffer.from(JSON.stringify({ height: 1, pixels: [90, 90, 90, 255], width: 1 }))
+  const providerBody = Buffer.from(JSON.stringify({ id: "should-not-submit", status: "completed" }))
+  let adapterCalls = 0
+  const adapter: GenerationAdapterService = {
+    invoke: (prepared) => Effect.sync(() => {
+      adapterCalls += 1
+      return {
+        provider: "openrouter",
+        model: prepared.request.model,
+        providerEvidence: { mediaType: "application/json", body: providerBody, sha256: sha256(providerBody) },
+        outputs: [{
+          applicationPath: "outputs/donor-01.rgba.json",
+          mediaType: "application/vnd.qwen.rgba+json",
+          body: donorBody,
+          sha256: sha256(donorBody),
+        }],
+      }
+    }),
+  }
+  const issuePermit = async () => {
+    const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+    const clock = { now: () => Effect.succeed("2026-08-30T12:00:00.000Z") }
+    const reserved: RunRecordView = await Effect.runPromise(reserve({
+      plannedRun: firstDecision.run,
+      payloadSha256: firstPrepared.payloadSha256,
+    }).pipe(Effect.provide(memory.layer), Effect.provideService(RunRecordClock, clock)))
+    const marked = await Effect.runPromise(record({
+      _tag: "SubmissionMayHaveStarted",
+      runId: reserved.runId,
+      operationId: "bound-permit",
+    }).pipe(Effect.provide(memory.layer), Effect.provideService(RunRecordClock, clock)))
+    assert.equal(marked._tag, "SubmissionPermitIssued")
+    if (marked._tag !== "SubmissionPermitIssued") throw new Error("permit missing")
+    return marked.permit
+  }
+
+  const crossRunError = await Effect.runPromise(Effect.flip(
+    invoke(secondPrepared, await issuePermit()).pipe(Effect.provideService(GenerationAdapter, adapter)),
+  ))
+  assert.equal(crossRunError.code, "SUBMISSION_BINDING_MISMATCH")
+
+  const changedPayloadBytes = Buffer.from("changed-provider-payload", "utf8")
+  const changedPayload = {
+    ...firstPrepared,
+    payloadBytes: changedPayloadBytes,
+    payloadSha256: sha256(changedPayloadBytes),
+  }
+  const payloadError = await Effect.runPromise(Effect.flip(
+    invoke(changedPayload, await issuePermit()).pipe(Effect.provideService(GenerationAdapter, adapter)),
+  ))
+  assert.equal(payloadError.code, "SUBMISSION_BINDING_MISMATCH")
+
+  const forgedPreparedDigest = {
+    ...firstPrepared,
+    payloadBytes: changedPayloadBytes,
+  }
+  const integrityError = await Effect.runPromise(Effect.flip(
+    invoke(forgedPreparedDigest, await issuePermit()).pipe(Effect.provideService(GenerationAdapter, adapter)),
+  ))
+  assert.equal(integrityError.code, "ADAPTER_RESULT_INVALID")
+  assert.equal(adapterCalls, 0)
 })
 
 test("rejects unknown, null, malformed, and sparse adapter results as typed failures", async () => {
@@ -234,4 +332,48 @@ test("converts a synchronous adapter throw into ADAPTER_RESULT_INVALID", async (
     Effect.provideService(GenerationAdapter, adapter),
   )))
   assert.equal(error.code, "ADAPTER_RESULT_INVALID")
+})
+
+test("converts a non-Effect adapter return and adapter defect into typed failures", async () => {
+  const fixture = makeFixture("qwen-image")
+  const decision = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(MediaInspector, byteMediaInspector),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+  ))
+  assert.equal(decision._tag, "Planned")
+  if (decision._tag !== "Planned") return
+  const locked = decision.run.request.references[0]!
+  const snapshot = await Effect.runPromise(fixture.files.read(locked.applicationPath))
+  const prepared = await Effect.runPromise(prepare(decision.run.request, [{
+    slot: locked.slot,
+    applicationPath: locked.applicationPath,
+    sha256: locked.sha256,
+    payloadDestination: locked.payloadDestination,
+    mediaType: locked.mediaType,
+    bytes: snapshot.bytes,
+  }]))
+
+  for (const [name, adapter] of [
+    ["non-effect", { invoke: () => undefined } as unknown as GenerationAdapterService],
+    ["defect", { invoke: () => Effect.die("adapter defect") } as unknown as GenerationAdapterService],
+  ] as const) {
+    const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+    const clock = { now: () => Effect.succeed("2026-08-30T12:00:00.000Z") }
+    const reserved: RunRecordView = await Effect.runPromise(reserve({
+      plannedRun: decision.run,
+      payloadSha256: prepared.payloadSha256,
+    }).pipe(Effect.provide(memory.layer), Effect.provideService(RunRecordClock, clock)))
+    const marker: RecordResult = await Effect.runPromise(record({
+      _tag: "SubmissionMayHaveStarted",
+      runId: reserved.runId,
+      operationId: `malformed-effect-${name}`,
+    }).pipe(Effect.provide(memory.layer), Effect.provideService(RunRecordClock, clock)))
+    assert.equal(marker._tag, "SubmissionPermitIssued")
+    if (marker._tag !== "SubmissionPermitIssued") continue
+    const error = await Effect.runPromise(Effect.flip(invoke(prepared, marker.permit).pipe(
+      Effect.provideService(GenerationAdapter, adapter),
+    )))
+    assert.equal(error.code, "ADAPTER_RESULT_INVALID", name)
+  }
 })

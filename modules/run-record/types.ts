@@ -138,7 +138,10 @@ export const submissionPermitBrand = Symbol("SubmissionPermit")
 export type SubmissionPermit = Readonly<{
   runId: string
   attemptId: string
+  requestSha256: string
+  payloadSha256: string
   use: <Success, Error, Requirements>(
+    binding: Readonly<{ requestSha256: string; payloadSha256: string }>,
     submission: Effect.Effect<Success, Error, Requirements>,
   ) => Effect.Effect<Success, Error | RunRecordError, Requirements>
   [submissionPermitBrand]: true
