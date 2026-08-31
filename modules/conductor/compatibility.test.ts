@@ -16,7 +16,7 @@ import { GenerationAdapter, type GenerationAdapterService } from "../generation/
 import { RunRecordClock, makeMemoryRunRecordHarness } from "../run-record/index.js"
 import { makeFixture } from "../../tests/control-plane-fixture.js"
 
-test("legacy planning emits immutable deprecation metadata and delegates to Conductor.plan", async () => {
+test("additive compatibility planning emits immutable deprecation metadata and delegates to Conductor.plan", async () => {
   const fixture = makeFixture("qwen-image")
   const command = { objectivePath: fixture.objectivePath }
 
@@ -48,7 +48,7 @@ test("legacy planning emits immutable deprecation metadata and delegates to Cond
   assert.equal(Object.isFrozen(compatibility.compatibility), true)
 })
 
-test("legacy execution delegates to Conductor.advance without another writer or state machine", async () => {
+test("additive compatibility execution delegates to Conductor.advance without another writer or state machine", async () => {
   let files: Map<string, Uint8Array> | undefined
   const fixture = makeFixture("seedance-video", { files: (values) => { files = values } })
   const planned = await Effect.runPromise(

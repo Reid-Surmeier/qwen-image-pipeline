@@ -9,13 +9,13 @@ import type { GenerationAdapterService } from "../generation/index.js"
 import type { RunRecordClockService, RunRecordStoreService } from "../run-record/index.js"
 import type { ConductorError } from "./errors.js"
 import { advanceRun, planObjective } from "./conductor.js"
+import {
+  COMPATIBILITY_RETIREMENT_CONDITIONS,
+  type CompatibilitySurface,
+} from "./compatibility-surfaces.js"
 import type { AdvanceCommand, AdvanceDecision, PlanCommand, PlanDecision } from "./types.js"
 
-export type CompatibilitySurface =
-  | "python-cli.generate"
-  | "comfyui.QwenImage3TextToImage"
-  | "comfyui.QwenImage3Edit"
-  | "comfyui.QwenImage3Render"
+export type { CompatibilitySurface } from "./compatibility-surfaces.js"
 
 export type CompatibilityMetadata = Readonly<{
   schemaVersion: "1"
@@ -31,13 +31,6 @@ export type CompatibilityResult<Decision> = Readonly<{
   decision: Decision
 }>
 
-const RETIREMENT_CONDITIONS: Readonly<Record<CompatibilitySurface, string>> = Object.freeze({
-  "python-cli.generate": "Issue #28 migrates the Python CLI caller and proves saved-input compatibility.",
-  "comfyui.QwenImage3TextToImage": "Issue #29 migrates the ComfyUI node and proves saved-workflow compatibility.",
-  "comfyui.QwenImage3Edit": "Issue #29 migrates the ComfyUI node and proves saved-workflow compatibility.",
-  "comfyui.QwenImage3Render": "Issue #29 migrates the ComfyUI node and proves saved-workflow compatibility.",
-})
-
 const metadata = (
   surface: CompatibilitySurface,
   replacement: CompatibilityMetadata["replacement"],
@@ -47,7 +40,7 @@ const metadata = (
   status: "deprecated",
   surface,
   replacement,
-  retirementCondition: RETIREMENT_CONDITIONS[surface],
+  retirementCondition: COMPATIBILITY_RETIREMENT_CONDITIONS[surface],
 })
 
 const result = <Decision>(

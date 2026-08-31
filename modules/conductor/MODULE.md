@@ -3,7 +3,7 @@
 - Purpose: Give an application agent one normal planning path and one classified answer.
 - Interface: `modules/conductor/index.ts`
 - Errors: `modules/conductor/errors.ts`
-- Acceptance: `modules/conductor/conductor.test.ts`
+- Acceptance: `modules/conductor/conductor.test.ts` and `modules/conductor/compatibility.test.ts`
 
 If a sanitized Seedance submission response became write-once durable before its journal event, the next advance lets Run Record reconcile it during reservation reload and continues from the recovered job identity without another submission.
 
@@ -11,7 +11,7 @@ If a sanitized Seedance submission response became write-once durable before its
 
 The production path has two explicit roots: `fileApplicationFiles(applicationRoot)` supplies application-owned read-only inputs, `filePlanningIdentity(installedToolArtifactRoot)` derives the installed release identity from verified bytes, and `fileRunRecordLayer(applicationRoot)` discovers the application-owned artifact root from the fixed Project Contract. The application Tool Lock must exactly equal that derived identity before a Planned Run exists. Two applications can use different exact Tool Locks and artifact roots without sharing references, provider receipts, outputs, Assembly evidence, checks, or Run Records. Conductor has no tool-repository artifact destination and cleanup remains an application decision.
 
-During the additive migration, `compatibilityPlan` and `compatibilityAdvance` are version-1 deprecated adapters for the closed set of inherited Python CLI and ComfyUI execution surfaces. They add immutable migration metadata around the exact `plan` and `advance` result and have exactly the same Effect requirements; they own no Run writer, provider, or state transition. `migration/entrypoints.json` names every retained CLI, node, request builder, workflow builder, provider kernel, replacement interface, and retirement condition. The baseline regenerates its human view and scans application-facing Python for any unclassified direct provider call.
+During the additive migration, `compatibilityPlan` and `compatibilityAdvance` are version-1 deprecated adapters placed beside a closed set of inherited Python CLI and ComfyUI execution surfaces. Calls through these new surfaces add immutable migration metadata around the exact `plan` and `advance` result and have exactly the same Effect requirements; they own no Run writer, provider, or state transition. The inherited callers do not silently acquire that status: they remain truthfully classified retained implementations and recorded bypasses until Issues #28 and #29 switch them to these adapters. `migration/entrypoints.json` is the source for every retained CLI, node, request builder, workflow builder, provider kernel, replacement interface, retirement condition, and the generated compatibility-surface identifiers. The baseline regenerates its human and TypeScript views and uses both static and runtime checks to identify unclassified direct provider calls.
 
 Planning refusals and execution terminals use exactly four Machine Outcomes: `verified_candidate`, `human_decision_required`, `blocked`, and `failed`. Every finding carries one correction owner from Reference Planning, Generation, Assembly, Verification, or the application decision owner. These machine results never contain or imply owner Approval.
 
