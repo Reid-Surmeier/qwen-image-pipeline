@@ -163,7 +163,14 @@ const CAPABILITIES = {
     reproducible: false,
     maxReferences: null,           // not probed — unknown, don't pretend
     moderation: "Meta",
-    refuses: [],
+    // MEASURED 2026-08-31, correcting this file's original claim of `[]`.
+    // Muse refuses political maps too: 12 filter events in 17 regional
+    // submissions, three sheets exhausting every retry. It is non-deterministic
+    // — the same prompt passed on Africa and was filtered on Australia in 6 s —
+    // so it is a rate, not a rule.
+    refuses: ["political-map"],
+    refusalKind: "filterable",     // pre-generation, unbilled, worth retrying
+    refusalRate: 0.7,              // 12 of 17; retries often clear it
     slowestObserved: 42,
   },
   "qwen/qwen-image-3-pro": {
@@ -185,14 +192,25 @@ const CAPABILITIES = {
     maxReferences: 4,
     moderation: "Alibaba",
     refuses: ["political-map"],
+    refusalKind: "hard",           // 253 s to return the rejection; no retry helps
+    refusalRate: 1.0,
     slowestObserved: 253,
   },
 };
 
 const REFUSAL_TEXT = {
-  "political-map":
-    "Alibaba moderation rejects maps drawn with national borders. Measured: HTTP 400 " +
-    "after 253 s, before any generation happened. No prompt wording gets past it.",
+  "meta/muse-image": {
+    "political-map":
+      "Meta's filter rejects this content non-deterministically -- 12 of 17 regional " +
+      "submissions were filtered, three of them on every retry. Rejected before " +
+      "generation in 4-8 s and NOT billed, so retrying is free in money and costs only " +
+      "time. Shorter prompts trip it far less than long ones.",
+  },
+  "qwen/qwen-image-3-pro": {
+    "political-map":
+      "Alibaba moderation rejects maps drawn with national borders. HTTP 400 after " +
+      "253 s, before any generation. No prompt wording and no retry gets past it.",
+  },
 };
 
 /**
@@ -232,11 +250,22 @@ function resolve(brief, modelId){
 
   // --- refusal gate: cheapest possible check, before anything is built ------
   if (cap.refuses.includes(brief.contentClass)) {
+    // Refusal is not a routing problem. Both models refuse this content, so
+    // there is nowhere safe to send it; what differs is the PRICE of finding
+    // out. Say which refusals are cheap and let the caller choose, rather than
+    // implying an alternative that does not exist.
+    const others = Object.keys(CAPABILITIES)
+      .filter(id => id !== modelId)
+      .map(id => `${CAPABILITIES[id].label}: ${CAPABILITIES[id].refuses.includes(brief.contentClass)
+        ? (CAPABILITIES[id].refusalKind === "filterable"
+            ? "also refuses, but cheaply and worth retrying"
+            : "also refuses, expensively")
+        : "no refusal recorded"}`);
     return {
-      model: modelId, label: cap.label, blocked: REFUSAL_TEXT[brief.contentClass],
-      alternatives: Object.keys(CAPABILITIES)
-        .filter(id => id !== modelId && !CAPABILITIES[id].refuses.includes(brief.contentClass))
-        .map(id => CAPABILITIES[id].label),
+      model: modelId, label: cap.label,
+      blocked: REFUSAL_TEXT[modelId][brief.contentClass],
+      refusalKind: cap.refusalKind,
+      alternatives: others,
       request: null, fields: [], reproducible: false, notes: [],
     };
   }
@@ -340,7 +369,11 @@ function render(){
   if (r.blocked){
     out.innerHTML = `<div class="card">
       <div class="banner b-bad"><strong>${r.label} will refuse this.</strong><br>${r.blocked}</div>
-      <p class="note">Nothing is sent. Try instead: <strong>${r.alternatives.join(", ") || "no other model in the table"}</strong>.</p>
+      <p class="note">Nothing is sent, and nothing is billed.
+      ${r.refusalKind === "filterable"
+        ? "This refusal is <strong>filterable</strong> — it fires before generation, costs nothing, and a retry often clears it."
+        : "This refusal is <strong>hard</strong> — no retry and no wording gets past it."}<br>
+      Elsewhere in the table: ${r.alternatives.join("; ")}.</p>
     </div>`;
     lastFields = null;
     return;
@@ -408,12 +441,14 @@ const SCENARIOS = [
   {
     name: "The world map (the real one)",
     blurb: "The actual benchmark. A 2:1 map with national borders and one reference image. " +
-           "Qwen should be stopped before a single byte is spent — it took 253 seconds to " +
-           "return a refusal in the real test.",
+           "This file originally claimed Muse would take it. That was wrong: Muse refuses " +
+           "this content too, 12 times in 17 tries. Refusal is not a routing problem — " +
+           "there is nowhere safe to send it. What differs is the price of finding out: " +
+           "Meta refuses in 4–8 seconds unbilled, Alibaba takes 253.",
     steps: [
       ["Set up the world-map brief", b=>{b.content="political-map";b.framing="2:1";b.seed="";b.refs="1";}],
-      ["Try Qwen Image 3 Pro", null, "qwen/qwen-image-3-pro"],
-      ["Route it to Muse instead", null, "meta/muse-image"],
+      ["Try Qwen Image 3 Pro — an expensive refusal", null, "qwen/qwen-image-3-pro"],
+      ["Try Muse — a cheap one, and worth retrying", null, "meta/muse-image"],
     ],
   },
   {
