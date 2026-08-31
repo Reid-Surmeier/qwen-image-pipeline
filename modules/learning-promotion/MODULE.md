@@ -5,4 +5,4 @@
 - Errors: `modules/learning-promotion/errors.ts`
 - Acceptance: `modules/learning-promotion/learning-promotion.test.ts`
 
-Learning Promotion requires provenance, positive evidence, and at least one independently caught known-bad mutation. It names scope, affected seam, compatibility risk, and excluded application detail. Its only continuation is a decision draft whose permitted action is review; it has no writer, Procedure, interface, test, application-lock, provider, credential, network, Run Record, or Approval capability.
+Learning Promotion rereads hash-locked request, candidate, OpenRouter receipt, and positive evidence bytes and requires at least one opaque known-bad mutation issued by Review after an independent byte mismatch. It names scope, affected seam, compatibility risk, and excluded application detail. Only the exact privately issued complete proposal can open a decision draft; a cloned or caller-authored proposal is refused. Its only permitted continuation is review, and it has no writer, Procedure, interface, test, application-lock, provider, credential, network, Run Record, or Approval capability.

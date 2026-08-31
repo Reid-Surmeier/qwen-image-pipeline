@@ -3,72 +3,77 @@ import test from "node:test"
 
 import { Effect } from "effect"
 
-import { prepareReviewPacket, validateReviewPacket, type ReviewPacketInput } from "./index.js"
+import { plan, ApplicationFiles, MediaInspector, PlanningIdentity, byteMediaInspector } from "../conductor/index.js"
+import { RunRecordClock, makeMemoryRunRecordHarness, reserve, type RunRecordClockService } from "../run-record/index.js"
+import { makeFixture } from "../../tests/control-plane-fixture.js"
+import { makeVerifiedReviewFixture } from "../../tests/review-evidence-fixture.js"
+import {
+  inspectReviewInvalidation,
+  prepareReviewPacket,
+  validateReviewPacket,
+} from "./index.js"
 
-const sha = (digit: string): string => digit.repeat(64)
-const input = (): ReviewPacketInput => ({
-  acceptanceContract: { applicationPath: "contracts/acceptance.md", sha256: sha("1") },
-  run: {
-    runId: "run-a",
-    requestSha256: sha("2"),
-    recordPath: "runs/run-a",
-    eventHeadSha256: sha("8"),
-  },
-  references: [{ applicationPath: "references/source.png", sha256: sha("3") }],
-  candidate: { applicationPath: "outputs/candidate.png", sha256: sha("4") },
-  instructions: "Judge the exact candidate against the exact reference and acceptance contract.",
-  verificationEvidence: [{ applicationPath: "checks/verification.json", sha256: sha("5") }],
-  deterministicGate: "passed",
-  unresolvedHumanDecisions: ["Does the candidate subjectively match the intended style?"],
+const clock: RunRecordClockService = { now: () => Effect.succeed("2026-08-31T21:00:00.000Z") }
+
+test("a non-verified Run prevents independent or paid semantic review", async () => {
+  const fixture = makeFixture("seedance-video")
+  const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(MediaInspector, byteMediaInspector),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+  ))
+  assert.equal(planned._tag, "Planned")
+  if (planned._tag !== "Planned") return
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const reserved = await Effect.runPromise(reserve({ plannedRun: planned.run, payloadSha256: planned.run.requestSha256 }).pipe(
+    Effect.provide(memory.layer), Effect.provideService(RunRecordClock, clock)))
+  const reference = planned.run.request.references[0]!
+  await assert.rejects(Effect.runPromise(prepareReviewPacket({
+    applicationCommit: "b".repeat(40),
+    acceptanceContract: { applicationPath: reference.applicationPath, sha256: reference.sha256 },
+    runId: reserved.runId,
+    references: [{ applicationPath: reference.applicationPath, sha256: reference.sha256 }],
+    candidate: { applicationPath: "outputs/missing.mp4", sha256: "1".repeat(64) },
+    instructions: "review",
+    unresolvedHumanDecisions: ["approve?"],
+  }).pipe(Effect.provideService(ApplicationFiles, fixture.files), Effect.provide(memory.layer))),
+  (error: unknown) => error instanceof Error && "code" in error && error.code === "ReviewBlocked")
 })
 
-test("deterministic failure prevents independent or paid semantic review", async () => {
-  await assert.rejects(
-    Effect.runPromise(prepareReviewPacket({ ...input(), deterministicGate: "failed" })),
-    (error: unknown) => error instanceof Error && "code" in error && error.code === "ReviewBlocked",
-  )
-})
-
-test("prepares a complete hash-locked packet with machine verification separate from Approval", async () => {
-  const packet = await Effect.runPromise(prepareReviewPacket(input()))
+test("prepares and revalidates a complete exact packet with Approval separate", async () => {
+  const fixture = await makeVerifiedReviewFixture()
+  const packet = await Effect.runPromise(fixture.provide(prepareReviewPacket(fixture.input)))
   assert.equal(packet.machineVerification, "passed")
   assert.equal(packet.ownerApproval, "unresolved")
-  assert.deepEqual(packet.normalView, {
-    machineVerification: "passed",
-    ownerApproval: "unresolved",
-    nextAction: "independent-review",
-  })
+  assert.equal(packet.applicationCommit, "b".repeat(40))
+  assert.match(packet.toolCommit, /^[a-f0-9]{40}$/)
+  assert.equal(JSON.parse(packet.run.canonicalRequest).objectiveId, "seedance-neutral-objective")
   assert.match(packet.packetSha256, /^[a-f0-9]{64}$/)
-  assert.equal(Object.isFrozen(packet), true)
-  await Effect.runPromise(validateReviewPacket(packet, {
-    requestSha256: input().run.requestSha256,
-    references: input().references,
-    candidate: input().candidate,
-  }))
+  await Effect.runPromise(fixture.provide(validateReviewPacket(packet, { applicationCommit: packet.applicationCommit })))
 })
 
-test("a changed candidate or reference invalidates the exact review packet", async () => {
-  const packet = await Effect.runPromise(prepareReviewPacket(input()))
-  for (const [bindings, expectedCode] of [
-    [{ requestSha256: input().run.requestSha256, references: input().references, candidate: { ...input().candidate, sha256: sha("6") } }, "CandidateIdentityChanged"],
-    [{ requestSha256: input().run.requestSha256, references: [{ ...input().references[0]!, sha256: sha("7") }], candidate: input().candidate }, "ReferenceIdentityChanged"],
-  ]) {
-    await assert.rejects(
-      Effect.runPromise(validateReviewPacket(packet, bindings as Parameters<typeof validateReviewPacket>[1])),
-      (error: unknown) => error instanceof Error && "code" in error && error.code === expectedCode,
-    )
-  }
+test("changed reference bytes or application commit invalidate the packet and issue counterevidence", async () => {
+  const fixture = await makeVerifiedReviewFixture()
+  const packet = await Effect.runPromise(fixture.provide(prepareReviewPacket(fixture.input)))
+  await assert.rejects(
+    Effect.runPromise(fixture.provide(validateReviewPacket(packet, { applicationCommit: "c".repeat(40) }))),
+    (error: unknown) => error instanceof Error && "code" in error && error.code === "ReviewPacketInvalid",
+  )
+  fixture.applicationFiles.set(packet.references[0]!.applicationPath, Buffer.from("changed reference"))
+  let caught: unknown
+  try { await Effect.runPromise(fixture.provide(validateReviewPacket(packet, { applicationCommit: packet.applicationCommit }))) }
+  catch (error) { caught = error }
+  assert.equal(caught instanceof Error && "code" in caught && caught.code, "ReferenceIdentityChanged")
+  const evidence = inspectReviewInvalidation(caught)
+  assert.equal(evidence?.caughtBy, "Review")
+  assert.match(evidence!.evidenceSha256, /^[a-f0-9]{64}$/)
 })
 
 test("changed packet contents fail their own hash before review", async () => {
-  const packet = await Effect.runPromise(prepareReviewPacket(input()))
-  const tampered = { ...packet, instructions: "Trust the implementer instead." }
+  const fixture = await makeVerifiedReviewFixture()
+  const packet = await Effect.runPromise(fixture.provide(prepareReviewPacket(fixture.input)))
   await assert.rejects(
-    Effect.runPromise(validateReviewPacket(tampered, {
-      requestSha256: input().run.requestSha256,
-      references: input().references,
-      candidate: input().candidate,
-    })),
+    Effect.runPromise(fixture.provide(validateReviewPacket({ ...packet, instructions: "trust me" }, { applicationCommit: packet.applicationCommit }))),
     (error: unknown) => error instanceof Error && "code" in error && error.code === "ReviewPacketInvalid",
   )
 })

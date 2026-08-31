@@ -4,30 +4,31 @@ export type ReviewEvidenceIdentity = Readonly<{
 }>
 
 export type ReviewPacketInput = Readonly<{
+  applicationCommit: string
   acceptanceContract: ReviewEvidenceIdentity
-  run: Readonly<{
-    runId: string
-    requestSha256: string
-    recordPath: string
-    eventHeadSha256: string
-  }>
+  runId: string
   references: ReadonlyArray<ReviewEvidenceIdentity>
   candidate: ReviewEvidenceIdentity
   instructions: string
-  verificationEvidence: ReadonlyArray<ReviewEvidenceIdentity>
-  deterministicGate: "passed" | "failed"
   unresolvedHumanDecisions: ReadonlyArray<string>
 }>
 
 export type ReviewPacket = Readonly<{
   schemaVersion: "1"
   state: "ready_for_independent_review"
+  applicationCommit: string
+  toolCommit: string
   acceptanceContract: ReviewEvidenceIdentity
-  run: ReviewPacketInput["run"]
+  run: Readonly<{
+    runId: string
+    canonicalRequest: string
+    requestSha256: string
+    eventHeadSha256: string
+  }>
   references: ReadonlyArray<ReviewEvidenceIdentity>
   candidate: ReviewEvidenceIdentity
   instructions: string
-  verificationEvidence: ReadonlyArray<ReviewEvidenceIdentity>
+  verificationEvidence: ReviewEvidenceIdentity
   unresolvedHumanDecisions: ReadonlyArray<string>
   machineVerification: "passed"
   ownerApproval: "unresolved"
@@ -40,7 +41,13 @@ export type ReviewPacket = Readonly<{
 }>
 
 export type ReviewPacketBindings = Readonly<{
-  requestSha256: string
-  references: ReadonlyArray<ReviewEvidenceIdentity>
-  candidate: ReviewEvidenceIdentity
+  applicationCommit: string
+}>
+
+export type ReviewInvalidationEvidence = Readonly<{
+  name: "candidate-changed" | "reference-changed"
+  mutationSha256: string
+  caughtBy: "Review"
+  evidenceSha256: string
+  findingCode: "CandidateIdentityChanged" | "ReferenceIdentityChanged"
 }>
