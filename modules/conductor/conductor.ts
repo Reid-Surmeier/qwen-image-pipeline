@@ -41,21 +41,6 @@ const asConductorError = (
   message: string,
 ) => (error: unknown): ConductorError => new ConductorError(code, message, namedCause(error))
 
-const isNormalizedRgba = (bytes: Uint8Array): boolean => {
-  try {
-    const value = JSON.parse(Buffer.from(bytes).toString("utf8")) as Record<string, unknown>
-    const { width, height, pixels } = value
-    return (
-      typeof width === "number" && Number.isSafeInteger(width) && width > 0 &&
-      typeof height === "number" && Number.isSafeInteger(height) && height > 0 &&
-      Array.isArray(pixels) && pixels.length === width * height * 4 &&
-      pixels.every((channel) => typeof channel === "number" && Number.isInteger(channel) && channel >= 0 && channel <= 255)
-    )
-  } catch {
-    return false
-  }
-}
-
 const spendRisk = "Planning made no provider request, created no attempt, and spent $0. A later advance may spend up to the locked ceiling."
 
 type RefusalGuidance = Readonly<{
@@ -280,11 +265,7 @@ export const advanceRun = (
           applicationPath: reference.applicationPath,
           sha256: reference.sha256,
           payloadDestination: reference.payloadDestination,
-          mediaType: reference.kind === "video"
-            ? "video/mp4" as const
-            : isNormalizedRgba(snapshot.bytes)
-              ? "application/vnd.qwen.rgba+json" as const
-              : "image/png" as const,
+          mediaType: reference.mediaType,
           bytes: snapshot.bytes,
         })),
         Effect.mapError(asConductorError(

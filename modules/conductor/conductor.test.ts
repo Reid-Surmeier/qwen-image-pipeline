@@ -182,7 +182,12 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
           parsed.pixels.some((channel) =>
             typeof channel !== "number" || !Number.isInteger(channel) || channel < 0 || channel > 255)
         ) throw new Error("invalid normalized RGBA")
-        return { width: Number(parsed.width), height: Number(parsed.height) }
+        return {
+          kind: "image" as const,
+          mediaType: "application/vnd.qwen.rgba+json" as const,
+          width: Number(parsed.width),
+          height: Number(parsed.height),
+        }
       },
       catch: () => new MediaInspectionError("MALFORMED_MEDIA"),
     }),

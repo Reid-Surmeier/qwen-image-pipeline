@@ -9,6 +9,7 @@ import { inspectSnapshot, planReferenceInputs } from "./reference-planning.js"
 import type {
   ApplicationFilesService,
   MediaInspectorService,
+  MediaInspection,
   MediaProperties,
   ReferencePlan,
   ReferencePlanningInput,
@@ -40,8 +41,10 @@ export type {
   FileSnapshot,
   LockedReference,
   MediaInspectorService,
+  MediaInspection,
   MediaKind,
   MediaProperties,
+  ReferenceMediaType,
   ReferenceCandidate,
   ReferencePlan,
   ReferencePlanningInput,

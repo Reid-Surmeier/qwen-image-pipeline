@@ -9,6 +9,7 @@ import {
   type FileSnapshot,
   type LockedReference,
   type MediaInspectorService,
+  type MediaInspection,
   type MediaKind,
   type MediaProperties,
   type ReferencePlan,
@@ -85,10 +86,12 @@ const locateBox = (
   return undefined
 }
 
-const inspectBytes = (snapshot: FileSnapshot): MediaProperties => {
+const inspectBytes = (snapshot: FileSnapshot): MediaInspection => {
   const kind = detectKind(snapshot.bytes)
   if (kind === "image") {
     return {
+      kind: "image",
+      mediaType: "image/png",
       width: readUint32(snapshot.bytes, 16),
       height: readUint32(snapshot.bytes, 20),
     }
@@ -108,6 +111,8 @@ const inspectBytes = (snapshot: FileSnapshot): MediaProperties => {
     const heightFixed = readUint32(snapshot.bytes, tkhd.start + tkhd.size - 4)
     if (timescale === 0) throw new MediaInspectionError("MALFORMED_MEDIA")
     return {
+      kind: "video",
+      mediaType: "video/mp4",
       width: widthFixed / 65536,
       height: heightFixed / 65536,
       durationSeconds: duration / timescale,
@@ -122,6 +127,27 @@ const sameMedia = (actual: MediaProperties, declared: MediaProperties): boolean 
   (declared.durationSeconds === undefined ||
     (actual.durationSeconds !== undefined &&
       Math.abs(actual.durationSeconds - declared.durationSeconds) <= 0.001))
+
+const isValidInspection = (value: unknown): value is MediaInspection => {
+  if (value === null || typeof value !== "object") return false
+  const record = value as Record<string, unknown>
+  const kind = record.kind
+  const mediaType = record.mediaType
+  const width = record.width
+  const height = record.height
+  const duration = record.durationSeconds
+  return (
+    (kind === "image" || kind === "video") &&
+    ((kind === "image" &&
+        (mediaType === "image/png" || mediaType === "application/vnd.qwen.rgba+json")) ||
+      (kind === "video" && mediaType === "video/mp4")) &&
+    typeof width === "number" && Number.isSafeInteger(width) && width > 0 &&
+    typeof height === "number" && Number.isSafeInteger(height) && height > 0 &&
+    (kind === "image"
+      ? duration === undefined
+      : typeof duration === "number" && Number.isFinite(duration) && duration > 0)
+  )
+}
 
 const isProviderPayloadDestination = (
   mode: ReferencePlanningInput["mode"],
@@ -218,14 +244,33 @@ export const planReferenceInputs = (
         candidate.path,
       ))
     }
-    const inspectedMedia = yield* inspector.inspect({ ...snapshot, sha256: actualSha256 }).pipe(
+    const inspectedResult: unknown = yield* inspector.inspect({ ...snapshot, sha256: actualSha256 }).pipe(
       Effect.mapError(() => new ReferencePlanningError(
         "MEDIA_INSPECTION_FAILED",
         `Reference ${requirement.slot} could not be inspected.`,
         candidate.path,
       )),
     )
-    const actualKind = detectedKind ?? requirement.kind
+    if (!isValidInspection(inspectedResult)) {
+      return yield* Effect.fail(new ReferencePlanningError(
+        "MEDIA_INSPECTION_FAILED",
+        `Reference ${requirement.slot} inspection did not prove a supported media kind and type.`,
+        candidate.path,
+      ))
+    }
+    const inspectedMedia = inspectedResult
+    if (
+      inspectedMedia.kind !== requirement.kind ||
+      (detectedKind !== undefined && inspectedMedia.kind !== detectedKind)
+    ) {
+      return yield* Effect.fail(new ReferencePlanningError(
+        input.mode === "seedance-video"
+          ? "SEEDANCE_VIDEO_REFERENCE_REQUIRED"
+          : "REFERENCE_KIND_MISMATCH",
+        `Reference ${requirement.slot} inspected media kind does not match the required kind.`,
+        candidate.path,
+      ))
+    }
     if (candidate.declaredMedia !== undefined && !sameMedia(inspectedMedia, candidate.declaredMedia)) {
       return yield* Effect.fail(new ReferencePlanningError(
         "DECLARED_MEDIA_MISMATCH",
@@ -238,7 +283,8 @@ export const planReferenceInputs = (
       applicationPath: candidate.path,
       sha256: actualSha256,
       byteLength: snapshot.bytes.byteLength,
-      kind: actualKind,
+      kind: inspectedMedia.kind,
+      mediaType: inspectedMedia.mediaType,
       authorityReason: candidate.authorityReason,
       payloadDestination: candidate.payloadDestination,
       inspectedMedia,
@@ -249,7 +295,7 @@ export const planReferenceInputs = (
 
 export const inspectSnapshot = (
   snapshot: Readonly<FileSnapshot & { sha256: string }>,
-): Effect.Effect<MediaProperties, MediaInspectionError> =>
+): Effect.Effect<MediaInspection, MediaInspectionError> =>
   Effect.try({
     try: () => deepFreeze(inspectBytes(snapshot)),
     catch: (error) => error instanceof MediaInspectionError

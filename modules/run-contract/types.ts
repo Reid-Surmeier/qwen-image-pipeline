@@ -68,9 +68,12 @@ export type CanonicalRunRequest = Readonly<{
     sha256: string
     byteLength: number
     kind: "image" | "video"
+    mediaType: "image/png" | "video/mp4" | "application/vnd.qwen.rgba+json"
     authorityReason: string
     payloadDestination: string
     inspectedMedia: Readonly<{
+      kind: "image" | "video"
+      mediaType: "image/png" | "video/mp4" | "application/vnd.qwen.rgba+json"
       width: number
       height: number
       durationSeconds?: number

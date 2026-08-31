@@ -4,10 +4,20 @@ import type { ApplicationReadError, MediaInspectionError } from "./errors.js"
 
 export type MediaKind = "image" | "video"
 
+export type ReferenceMediaType =
+  | "image/png"
+  | "video/mp4"
+  | "application/vnd.qwen.rgba+json"
+
 export type MediaProperties = Readonly<{
   width: number
   height: number
   durationSeconds?: number
+}>
+
+export type MediaInspection = Readonly<MediaProperties & {
+  kind: MediaKind
+  mediaType: ReferenceMediaType
 }>
 
 export type FileSnapshot = Readonly<{
@@ -28,7 +38,7 @@ export const ApplicationFiles = Context.Service<
 export interface MediaInspectorService {
   readonly inspect: (
     snapshot: Readonly<FileSnapshot & { sha256: string }>,
-  ) => Effect.Effect<MediaProperties, MediaInspectionError>
+  ) => Effect.Effect<MediaInspection, MediaInspectionError>
 }
 
 export const MediaInspector = Context.Service<
@@ -64,9 +74,10 @@ export type LockedReference = Readonly<{
   sha256: string
   byteLength: number
   kind: MediaKind
+  mediaType: ReferenceMediaType
   authorityReason: string
   payloadDestination: string
-  inspectedMedia: MediaProperties
+  inspectedMedia: MediaInspection
 }>
 
 export type ReferencePlan = Readonly<{
