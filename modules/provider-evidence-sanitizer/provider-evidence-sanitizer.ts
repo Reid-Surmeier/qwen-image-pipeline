@@ -28,15 +28,28 @@ const decodeField = (encoded: string): string | undefined => {
 }
 
 const stringHasCredentialField = (value: string): boolean => {
-  for (const match of value.matchAll(/"((?:\\.|[^"\\])*)"\s*:/g)) {
+  const compatibleValue = value.normalize("NFKC")
+  let structuralStart = 0
+  for (let cursor = 0; cursor < compatibleValue.length;) {
+    const codePoint = compatibleValue.codePointAt(cursor)
+    const character = codePoint === undefined ? "" : String.fromCodePoint(codePoint)
+    if (
+      /[^\x00-\x7f]/u.test(character) &&
+      /[\p{P}\p{S}]/u.test(character) &&
+      credentialFieldName(compatibleValue.slice(structuralStart, cursor))
+    ) return true
+    if (/[:=,;{}\n]/u.test(character)) structuralStart = cursor + character.length
+    cursor += character.length || 1
+  }
+  for (const match of compatibleValue.matchAll(/"((?:\\.|[^"\\])*)"\s*:/g)) {
     const decoded = decodeField(match[1] ?? "")
     if (decoded === undefined || credentialFieldName(decoded)) return true
   }
-  for (const match of value.matchAll(/'((?:\\.|[^'\\])*)'\s*[:=]/g)) {
+  for (const match of compatibleValue.matchAll(/'((?:\\.|[^'\\])*)'\s*[:=]/g)) {
     const decoded = decodeField(match[1] ?? "")
     if (decoded === undefined || credentialFieldName(decoded)) return true
   }
-  const looseSegments = value.split(/[:=]/u)
+  const looseSegments = compatibleValue.split(/[:=]/u)
   for (const encoded of looseSegments.slice(0, -1)) {
     const decoded = decodeField(encoded)
     if (decoded === undefined || credentialFieldName(decoded)) return true
