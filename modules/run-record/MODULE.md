@@ -5,7 +5,7 @@
 - Errors: `modules/run-record/errors.ts`
 - Acceptance: `modules/run-record/run-record.test.ts`
 
-Provider response and poll evidence must match the shared closed schema for the Run mode and exact provider stage before any bytes are persisted. Run Record snapshots each closed evidence wrapper and copies its bytes once, then uses only that immutable snapshot for validation, trial replay, intent, and persistence. Unknown or statefully substituted fields fail closed, including diagnostic fields whose contents use an unrecognized encoding. The shared Provider Evidence Sanitizer also owns recursive credential and duplicate-key checks as defense-in-depth; Run Record owns the typed refusal and persistence decision.
+Provider response and poll evidence must match the shared closed schema for the Run mode and exact provider stage before any bytes are persisted. Run Record obtains the shared sanitizer's descriptor-strict wrapper snapshot and byte copy, then uses only that snapshot for validation, trial replay, intent, and persistence. Unknown, accessor-backed, or statefully substituted fields fail closed, including diagnostic fields whose contents use an unrecognized encoding. The shared Provider Evidence Sanitizer also owns recursive credential and duplicate-key checks as defense-in-depth; Run Record owns the typed refusal and persistence decision.
 
 Generated Qwen and completed Seedance output wrappers, byte bodies, dense output arrays, and cost receipts are likewise snapshotted once before validation or persistence. Replay applies the raw duplicate-key refusal to both provider responses and every Seedance poll receipt.
 

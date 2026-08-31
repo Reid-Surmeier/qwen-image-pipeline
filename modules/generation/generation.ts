@@ -6,6 +6,8 @@ import {
   hasDuplicateJsonKeys,
   hasProviderCredentialMaterial,
   isSanitizedProviderDocument,
+  snapshotProviderEvidence,
+  type ProviderEvidenceSnapshot,
   type SanitizedProviderDocumentKind,
 } from "../provider-evidence-sanitizer/index.js"
 import type { CanonicalRunRequest } from "../run-contract/index.js"
@@ -117,41 +119,6 @@ const parseProviderDocument = (
       return undefined
     }
     return document as Record<string, unknown>
-  } catch {
-    return undefined
-  }
-}
-
-type ProviderEvidenceSnapshot = GenerationProviderEvidence
-
-const snapshotProviderEvidence = (value: unknown): ProviderEvidenceSnapshot | undefined => {
-  try {
-    const evidence = objectRecord(value)
-    if (
-      evidence === undefined ||
-      (Object.getPrototypeOf(evidence) !== Object.prototype && Object.getPrototypeOf(evidence) !== null) ||
-      Reflect.ownKeys(evidence).length !== 3 ||
-      !Object.hasOwn(evidence, "mediaType") ||
-      !Object.hasOwn(evidence, "body") ||
-      !Object.hasOwn(evidence, "sha256")
-    ) return undefined
-    const mediaType = evidence.mediaType
-    const body = evidence.body
-    const digest = evidence.sha256
-    if (
-      Reflect.ownKeys(evidence).length !== 3 ||
-      !Object.hasOwn(evidence, "mediaType") ||
-      !Object.hasOwn(evidence, "body") ||
-      !Object.hasOwn(evidence, "sha256") ||
-      mediaType !== "application/json" || !(body instanceof Uint8Array) || typeof digest !== "string"
-    ) {
-      return undefined
-    }
-    return {
-      mediaType,
-      body: Buffer.isBuffer(body) ? Buffer.from(body) : Uint8Array.from(body),
-      sha256: digest,
-    }
   } catch {
     return undefined
   }
@@ -512,8 +479,9 @@ export const recoverGeneration = (
       "The adapter cannot recover outputs from persisted provider evidence.",
     ))
   }
+  const adapterProviderEvidence = snapshotProviderEvidence(stableProviderEvidence)!
   const adapterEffect: unknown = yield* Effect.try({
-    try: () => adapter.recover!(validatedPrepared, stableProviderEvidence) as unknown,
+    try: () => adapter.recover!(validatedPrepared, adapterProviderEvidence) as unknown,
     catch: () => new GenerationError("ADAPTER_RESULT_INVALID", "The recovery adapter threw before returning its Effect."),
   })
   if (!Effect.isEffect(adapterEffect)) {
@@ -627,8 +595,9 @@ export const pollSeedanceGeneration = (
     if (typeof adapter.pollSeedance !== "function") {
       return yield* Effect.fail(new GenerationError("ADAPTER_RESULT_INVALID", "The adapter cannot poll Seedance."))
     }
+    const adapterSubmissionEvidence = snapshotProviderEvidence(stableSubmissionEvidence)!
     const untrusted = yield* adapterEffect<unknown>(
-      () => adapter.pollSeedance!(validatedPrepared, jobId, stableSubmissionEvidence!),
+      () => adapter.pollSeedance!(validatedPrepared, jobId, adapterSubmissionEvidence),
       "The Seedance polling adapter",
     )
     const result = yield* Effect.try({

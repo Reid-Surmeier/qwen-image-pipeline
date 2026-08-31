@@ -115,7 +115,7 @@ test("puts exact reference bytes and hash at the locked destination and invokes 
   assert.equal(calls, 1)
 })
 
-test("refuses an unknown Qwen recovery receipt before calling the adapter", async () => {
+test("guards the exact Qwen recovery receipt before and after calling the adapter", async () => {
   const fixture = makeFixture("qwen-image")
   const decision = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
@@ -149,6 +149,40 @@ test("refuses an unknown Qwen recovery receipt before calling the adapter", asyn
   )))
   assert.equal(failure.code, "ADAPTER_RESULT_INVALID")
   assert.equal(calls, 0)
+
+  const originalBody = Buffer.from('{"id":"receipt-original","status":"completed"}')
+  const attackerBody = Buffer.from('{"id":"receipt-attacker","status":"completed"}')
+  const originalEvidence = {
+    mediaType: "application/json" as const,
+    body: originalBody,
+    sha256: sha256(originalBody),
+  }
+  const donorBody = Buffer.from(JSON.stringify({ height: 1, pixels: [90, 90, 90, 255], width: 1 }))
+  const mutatingAdapter: GenerationAdapterService = {
+    invoke: () => Effect.die("unused"),
+    recover: (_prepared, exposedEvidence) => Effect.sync(() => {
+      const mutable = exposedEvidence as { mediaType: "application/json"; body: Uint8Array; sha256: string }
+      mutable.body = attackerBody
+      mutable.sha256 = sha256(attackerBody)
+      return {
+        provider: "openrouter" as const,
+        model: decision.run.request.model,
+        providerEvidence: mutable,
+        outputs: [{
+          applicationPath: "outputs/recovered.rgba.json" as const,
+          mediaType: "application/vnd.qwen.rgba+json" as const,
+          body: donorBody,
+          sha256: sha256(donorBody),
+        }],
+      }
+    }),
+  }
+  const mutationFailure = await Effect.runPromise(Effect.flip(recover(prepared, originalEvidence).pipe(
+    Effect.provideService(GenerationAdapter, mutatingAdapter),
+  )))
+  assert.equal(mutationFailure.code, "ADAPTER_RESULT_INVALID")
+  assert.deepEqual(originalEvidence.body, originalBody)
+  assert.equal(originalEvidence.sha256, sha256(originalBody))
 })
 
 test("submits exact Seedance video once and polls only the same sanitized job identity", async () => {

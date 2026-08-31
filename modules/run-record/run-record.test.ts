@@ -593,7 +593,7 @@ test("commits provider evidence write-once and replays its verified hash", async
   assert.equal(changedError.code, "IDEMPOTENCY_CONFLICT")
 })
 
-test("freezes Qwen provider bytes before validation and durable persistence", async () => {
+test("refuses accessor-backed Qwen provider bytes before durable persistence", async () => {
   const planned = await plannedRun()
   const memory = await memoryHarness()
   const provide = <Success, Error>(
@@ -619,20 +619,22 @@ test("freezes Qwen provider bytes before validation and durable persistence", as
     enumerable: true,
     get: () => (++reads <= 5 ? safeBody : unsafeBody),
   })
-  await Effect.runPromise(provide(record({
+  const failure = await Effect.runPromise(Effect.flip(provide(record({
     _tag: "CommitProviderEvidence",
     runId: reserved.runId,
     operationId: "stateful-qwen-provider",
     evidence,
-  })))
+  }))))
+  assert.equal(failure.code, "EVIDENCE_HASH_MISMATCH")
   let durable: Uint8Array | undefined
   await Effect.runPromise(memory.mutate(reserved.runId, (stored) => {
     durable = stored.evidence["provider-response.json"]
   }))
-  assert.deepEqual(Buffer.from(durable!), safeBody)
+  assert.equal(durable, undefined)
+  assert.equal(reads, 0)
 })
 
-test("freezes Seedance poll bytes before validation and durable persistence", async () => {
+test("refuses accessor-backed Seedance poll bytes before durable persistence", async () => {
   const { planned } = await plannedSeedanceRun()
   const memory = await memoryHarness()
   const provide = <Success, Error>(
@@ -669,19 +671,21 @@ test("freezes Seedance poll bytes before validation and durable persistence", as
     enumerable: true,
     get: () => (++reads <= 3 ? safeBody : unsafeBody),
   })
-  await Effect.runPromise(provide(record({
+  const failure = await Effect.runPromise(Effect.flip(provide(record({
     _tag: "CommitSeedancePoll",
     runId: reserved.runId,
     operationId: "stateful-seedance-poll",
     jobId: "stateful-seedance",
     status: "pending",
     evidence,
-  })))
+  }))))
+  assert.equal(failure.code, "EVIDENCE_HASH_MISMATCH")
   let durable: Uint8Array | undefined
   await Effect.runPromise(memory.mutate(reserved.runId, (stored) => {
     durable = stored.evidence["polls/poll-0001.json"]
   }))
-  assert.deepEqual(Buffer.from(durable!), safeBody)
+  assert.equal(durable, undefined)
+  assert.equal(reads, 0)
 })
 
 test("freezes Qwen generated output bytes before validation and durable persistence", async () => {

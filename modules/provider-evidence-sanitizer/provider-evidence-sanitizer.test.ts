@@ -6,6 +6,7 @@ import {
   hasDuplicateJsonKeys,
   hasProviderCredentialMaterial,
   isSanitizedProviderDocument,
+  snapshotProviderEvidence,
 } from "./index.js"
 
 test("classifies every shared provider diagnostic disguise as unsafe", () => {
@@ -150,4 +151,22 @@ test("detects duplicate object keys without treating malformed JSON as a duplica
   assert.equal(hasDuplicateJsonKeys('{"status":"pending","status":"completed"}'), true)
   assert.equal(hasDuplicateJsonKeys('{"status":"pending"}'), false)
   assert.equal(hasDuplicateJsonKeys("{"), false)
+})
+
+test("snapshots only a closed data-property evidence wrapper", () => {
+  const body = Buffer.from('{"id":"fake-qwen-1","status":"completed"}')
+  const exact = {
+    mediaType: "application/json",
+    body,
+    sha256: "a".repeat(64),
+  }
+  const snapshot = snapshotProviderEvidence(exact)
+  assert.notEqual(snapshot, undefined)
+  assert.notStrictEqual(snapshot!.body, body)
+  assert.deepEqual(Buffer.from(snapshot!.body), body)
+
+  const accessor = { mediaType: "application/json", sha256: "a".repeat(64) }
+  Object.defineProperty(accessor, "body", { enumerable: true, get: () => body })
+  assert.equal(snapshotProviderEvidence(accessor), undefined)
+  assert.equal(snapshotProviderEvidence({ ...exact, debug: "unknown" }), undefined)
 })

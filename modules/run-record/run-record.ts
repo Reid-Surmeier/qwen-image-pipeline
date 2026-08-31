@@ -7,6 +7,7 @@ import {
   hasDuplicateJsonKeys,
   hasProviderCredentialMaterial,
   isSanitizedProviderDocument,
+  snapshotProviderEvidence,
 } from "../provider-evidence-sanitizer/index.js"
 import { RunRecordError } from "./errors.js"
 import type { CanonicalRunRequest } from "../run-contract/index.js"
@@ -1544,36 +1545,6 @@ const validateProviderEvidence = (operation: Extract<RecordOperation, { _tag: "C
     throw new RunRecordError("SECRET_MATERIAL_DETECTED", "Provider evidence contains credential material.", "repair-evidence")
   }
   return parsed
-}
-
-const snapshotProviderEvidence = (value: unknown): ProviderEvidenceInput | undefined => {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined
-  const evidence = value as Readonly<Record<string, unknown>>
-  const prototype = Object.getPrototypeOf(evidence)
-  if (
-    (prototype !== Object.prototype && prototype !== null) ||
-    Reflect.ownKeys(evidence).length !== 3 ||
-    !Object.hasOwn(evidence, "mediaType") ||
-    !Object.hasOwn(evidence, "body") ||
-    !Object.hasOwn(evidence, "sha256")
-  ) return undefined
-  const mediaType = evidence.mediaType
-  const body = evidence.body
-  const digest = evidence.sha256
-  if (
-    Reflect.ownKeys(evidence).length !== 3 ||
-    !Object.hasOwn(evidence, "mediaType") ||
-    !Object.hasOwn(evidence, "body") ||
-    !Object.hasOwn(evidence, "sha256") ||
-    mediaType !== "application/json" || !(body instanceof Uint8Array) || typeof digest !== "string"
-  ) {
-    return undefined
-  }
-  return {
-    mediaType,
-    body: Buffer.isBuffer(body) ? Buffer.from(body) : Uint8Array.from(body),
-    sha256: digest,
-  }
 }
 
 const exactOwnKeys = (value: object, keys: ReadonlyArray<string>): boolean => {

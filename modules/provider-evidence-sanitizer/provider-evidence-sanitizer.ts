@@ -233,6 +233,32 @@ const hasExactKeys = (
   return descriptor !== undefined && Object.hasOwn(descriptor, "value")
 })
 
+export type ProviderEvidenceSnapshot = Readonly<{
+  mediaType: "application/json"
+  body: Uint8Array
+  sha256: string
+}>
+
+export const snapshotProviderEvidence = (value: unknown): ProviderEvidenceSnapshot | undefined => {
+  try {
+    const evidence = objectRecord(value)
+    if (evidence === undefined || !hasExactKeys(evidence, ["mediaType", "body", "sha256"])) return undefined
+    const mediaType = evidence.mediaType
+    const body = evidence.body
+    const digest = evidence.sha256
+    if (mediaType !== "application/json" || !(body instanceof Uint8Array) || typeof digest !== "string") {
+      return undefined
+    }
+    return {
+      mediaType,
+      body: Buffer.isBuffer(body) ? Buffer.from(body) : Uint8Array.from(body),
+      sha256: digest,
+    }
+  } catch {
+    return undefined
+  }
+}
+
 const safeIdentifier = (value: unknown): value is string =>
   typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)
 
