@@ -1,6 +1,9 @@
 import { Context, type Effect } from "effect"
 
 import type { LinkedRunRelationship, PlannedRun } from "../run-contract/index.js"
+import type { AssemblyError } from "../assembly/index.js"
+import type { VerificationError } from "../verification/index.js"
+import type { VideoVerificationError } from "../video-verification/index.js"
 import type { RunRecordError } from "./errors.js"
 
 export type RunLink = LinkedRunRelationship
@@ -16,10 +19,24 @@ export type ClassifiedFailureClass =
   | "ambiguous_provider_timeout"
   | "malformed_provider_response"
   | "output_count_mismatch"
-  | "post_submit_persistence_failure"
   | "assembly_failure"
   | "verification_failure"
-  | "repeated_bad_output"
+
+export type ClassifiedFailureInput =
+  | Readonly<{
+      class: "ambiguous_provider_timeout" | "malformed_provider_response" | "output_count_mismatch"
+      message: string
+    }>
+  | Readonly<{
+      class: "assembly_failure"
+      message: string
+      cause: AssemblyError
+    }>
+  | Readonly<{
+      class: "verification_failure"
+      message: string
+      cause: VerificationError | VideoVerificationError
+    }>
 
 export type RunFinding = Readonly<{
   class: string
@@ -177,16 +194,14 @@ export type RecordOperation =
       _tag: "DefinitivePreSubmitFailure"
       runId: string
       operationId: string
+      permit?: SubmissionPermit
       failure: Readonly<{ class: string; message: string }>
     }>
   | Readonly<{
       _tag: "ClassifyFailure"
       runId: string
       operationId: string
-      failure: Readonly<{
-        class: ClassifiedFailureClass
-        message: string
-      }>
+      failure: ClassifiedFailureInput
     }>
 
 export type RunRecordPhase =

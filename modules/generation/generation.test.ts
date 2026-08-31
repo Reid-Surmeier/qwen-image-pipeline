@@ -796,7 +796,7 @@ test("rejects unknown, null, malformed, and sparse adapter results as typed fail
   }
 })
 
-test("converts a synchronous adapter throw into ADAPTER_RESULT_INVALID", async () => {
+test("classifies a synchronous submission-adapter refusal before its Effect as ADAPTER_NOT_STARTED", async () => {
   const fixture = makeFixture("qwen-image")
   const decision = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
@@ -836,10 +836,10 @@ test("converts a synchronous adapter throw into ADAPTER_RESULT_INVALID", async (
   const error = await Effect.runPromise(Effect.flip(invoke(prepared, marker.permit).pipe(
     Effect.provideService(GenerationAdapter, adapter),
   )))
-  assert.equal(error.code, "ADAPTER_RESULT_INVALID")
+  assert.equal(error.code, "ADAPTER_NOT_STARTED")
 })
 
-test("converts a non-Effect adapter return and adapter defect into typed failures", async () => {
+test("separates a non-starting adapter from failures after its Effect begins", async () => {
   const fixture = makeFixture("qwen-image")
   const decision = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
@@ -881,6 +881,6 @@ test("converts a non-Effect adapter return and adapter defect into typed failure
     const error = await Effect.runPromise(Effect.flip(invoke(prepared, marker.permit).pipe(
       Effect.provideService(GenerationAdapter, adapter),
     )))
-    assert.equal(error.code, "ADAPTER_RESULT_INVALID", name)
+    assert.equal(error.code, name === "non-effect" ? "ADAPTER_NOT_STARTED" : "ADAPTER_RESULT_INVALID", name)
   }
 })

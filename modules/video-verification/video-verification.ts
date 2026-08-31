@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process"
 
 import { Effect } from "effect"
 
-import { VideoVerificationError } from "./errors.js"
+import { issueVideoVerificationFailure, VideoVerificationError } from "./errors.js"
 import type { VerifyVideoInput, VideoVerification } from "./types.js"
 
 const sha256 = (bytes: Uint8Array): string =>
@@ -421,23 +421,27 @@ export const verifyVideoArtifact = (
       }
     })
     return {
-      algorithm: "seedance-media-v1",
-      classification: "verified-candidate",
+      algorithm: "seedance-media-v1" as const,
+      classification: "verified-candidate" as const,
       outputs,
       requestedCount: input.requestedCount,
       completedCount: input.completedCount,
       expected: input.expected,
       cost: input.cost,
       checks: [
-        { name: "integrity", passed: true, measured: 0 },
-        { name: "media", passed: true, measured: 0 },
-        { name: "dimensions", passed: true, measured: 0 },
-        { name: "duration", passed: true, measured: 0 },
-        { name: "audio-expectation", passed: true, measured: 0 },
+        { name: "integrity" as const, passed: true as const, measured: 0 },
+        { name: "media" as const, passed: true as const, measured: 0 },
+        { name: "dimensions" as const, passed: true as const, measured: 0 },
+        { name: "duration" as const, passed: true as const, measured: 0 },
+        { name: "audio-expectation" as const, passed: true as const, measured: 0 },
       ],
     }
   },
   catch: (error) => error instanceof VideoVerificationError
     ? error
     : new VideoVerificationError("VIDEO_MEDIA_INVALID", "Video verification could not inspect the output."),
-})
+}).pipe(Effect.mapError((error) => issueVideoVerificationFailure(error, {
+  outputSha256s: input.outputs.map((output) => output.sha256),
+  requestedCount: input.requestedCount,
+  completedCount: input.completedCount,
+})))

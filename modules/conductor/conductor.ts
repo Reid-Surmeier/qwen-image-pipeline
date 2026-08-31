@@ -14,8 +14,10 @@ import {
   readDiagnostics,
   record,
   reserve,
+  type ClassifiedFailureInput,
   type ClassifiedFailureClass,
   type RunRecordDiagnostics,
+  type SubmissionPermit,
 } from "../run-record/index.js"
 import { verify } from "../verification/index.js"
 import { verifyVideo } from "../video-verification/index.js"
@@ -394,15 +396,14 @@ const replayedTerminalDecision = (
 const classifyRunFailure = (
   runId: string,
   objective: string,
-  failureClass: ClassifiedFailureClass,
-  message: string,
+  failure: ClassifiedFailureInput,
 ): Effect.Effect<AdvanceDecision, ConductorError, import("../run-record/index.js").RunRecordStoreService | import("../run-record/index.js").RunRecordClockService> =>
   Effect.gen(function*() {
     const result = yield* record({
       _tag: "ClassifyFailure",
       runId,
-      operationId: `conductor-${failureClass}`,
-      failure: { class: failureClass, message },
+      operationId: `conductor-${failure.class}`,
+      failure,
     }).pipe(Effect.mapError(asConductorError(
       "RUN_RECORD_FAILURE",
       "The terminal module failure could not be persisted.",
@@ -418,8 +419,38 @@ const classifyGenerationFailure = (
   runId: string,
   objective: string,
   error: unknown,
+  permit?: SubmissionPermit,
 ): Effect.Effect<AdvanceDecision, ConductorError, import("../run-record/index.js").RunRecordStoreService | import("../run-record/index.js").RunRecordClockService> => {
   const code = namedCause(error)
+  if (code === "ADAPTER_NOT_STARTED") {
+    if (permit === undefined) {
+      return Effect.fail(new ConductorError(
+        "GENERATION_FAILURE",
+        "A submission-not-started refusal has no live Submission Permit proof.",
+        code,
+      ))
+    }
+    return Effect.gen(function*() {
+      const result = yield* record({
+        _tag: "DefinitivePreSubmitFailure",
+        runId,
+        operationId: "conductor-adapter-not-started",
+        permit,
+        failure: {
+          class: "submission_not_started",
+          message: "The unused submission capability proves that no provider submission began.",
+        },
+      }).pipe(Effect.mapError(asConductorError(
+        "RUN_RECORD_FAILURE",
+        "The definitive pre-submit adapter refusal could not be persisted.",
+      )))
+      const diagnostics = yield* readDiagnostics(result.view.runId).pipe(Effect.mapError(asConductorError(
+        "RUN_RECORD_FAILURE",
+        "The definitive pre-submit adapter refusal could not be replayed.",
+      )))
+      return replayedTerminalDecision(diagnostics, objective)
+    })
+  }
   const failureClass = code === "PROVIDER_AMBIGUOUS"
     ? "ambiguous_provider_timeout" as const
     : code === "OUTPUT_COUNT_MISMATCH"
@@ -438,7 +469,7 @@ const classifyGenerationFailure = (
     : failureClass === "output_count_mismatch"
       ? "The provider returned a completed output count that contradicts the immutable request."
       : "The provider response or normalized adapter evidence is malformed."
-  return classifyRunFailure(runId, objective, failureClass, message)
+  return classifyRunFailure(runId, objective, { class: failureClass, message })
 }
 
 const persistWithReconciliation = <Success, Error, Requirements>(
@@ -508,7 +539,7 @@ const advanceSeedanceRun = (
       "The immutable Seedance Run could not be reserved or reloaded.",
     )))
 
-    if (current.phase === "blocked" || current.phase === "failed") {
+    if (current.phase === "definitive_pre_submit_failure" || current.phase === "blocked" || current.phase === "failed") {
       const diagnostics = yield* readDiagnostics(current.runId).pipe(Effect.mapError(asConductorError(
         "RUN_RECORD_FAILURE",
         "The terminal Seedance outcome could not be replayed.",
@@ -536,7 +567,7 @@ const advanceSeedanceRun = (
         onSuccess: (value) => ({ _tag: "Success" as const, value }),
       }))
       if (submissionAttempt._tag === "Failure") {
-        return yield* classifyGenerationFailure(current.runId, request.objective, submissionAttempt.error)
+        return yield* classifyGenerationFailure(current.runId, request.objective, submissionAttempt.error, marked.permit)
       }
       const submitted = submissionAttempt.value
       const persisted = yield* persistWithReconciliation(record({
@@ -661,8 +692,11 @@ const advanceSeedanceRun = (
       return yield* classifyRunFailure(
         current.runId,
         request.objective,
-        "verification_failure",
-        "The completed Seedance output did not pass independent media verification.",
+        {
+          class: "verification_failure",
+          message: "The completed Seedance output did not pass independent media verification.",
+          cause: verificationAttempt.error,
+        },
       )
     }
     const checked = verificationAttempt.value
@@ -741,7 +775,7 @@ export const advanceRun = (
     )))
     let generated: GenerationResult | undefined
 
-    if (current.phase === "blocked" || current.phase === "failed") {
+    if (current.phase === "definitive_pre_submit_failure" || current.phase === "blocked" || current.phase === "failed") {
       const diagnostics = yield* readDiagnostics(current.runId).pipe(Effect.mapError(asConductorError(
         "RUN_RECORD_FAILURE",
         "The terminal Qwen outcome could not be replayed.",
@@ -769,7 +803,7 @@ export const advanceRun = (
         onSuccess: (value) => ({ _tag: "Success" as const, value }),
       }))
       if (generationAttempt._tag === "Failure") {
-        return yield* classifyGenerationFailure(current.runId, request.objective, generationAttempt.error)
+        return yield* classifyGenerationFailure(current.runId, request.objective, generationAttempt.error, marked.permit)
       }
       generated = generationAttempt.value
       const provider = yield* persistWithReconciliation(record({
@@ -920,8 +954,11 @@ export const advanceRun = (
         return yield* classifyRunFailure(
           current.runId,
           request.objective,
-          "assembly_failure",
-          "Hash-locked deterministic Assembly failed.",
+          {
+            class: "assembly_failure",
+            message: "Hash-locked deterministic Assembly failed.",
+            cause: assemblyAttempt.error,
+          },
         )
       }
       const assembled = assemblyAttempt.value
@@ -958,8 +995,11 @@ export const advanceRun = (
       return yield* classifyRunFailure(
         current.runId,
         request.objective,
-        "verification_failure",
-        "The assembled candidate did not pass the ordered Fidelity Checks.",
+        {
+          class: "verification_failure",
+          message: "The assembled candidate did not pass the ordered Fidelity Checks.",
+          cause: verificationAttempt.error,
+        },
       )
     }
     const checked = verificationAttempt.value

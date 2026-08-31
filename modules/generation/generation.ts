@@ -11,7 +11,7 @@ import {
   type SanitizedProviderDocumentKind,
 } from "../provider-evidence-sanitizer/index.js"
 import type { CanonicalRunRequest } from "../run-contract/index.js"
-import { consumeSubmission, type SubmissionPermit } from "../run-record/index.js"
+import { consumeSubmission, validateSubmission, type SubmissionPermit } from "../run-record/index.js"
 import { GenerationError } from "./errors.js"
 import {
   GenerationAdapter,
@@ -217,6 +217,30 @@ const adapterEffect = <Success>(
       `${missingMessage} terminated with a defect.`,
     ))),
   )
+})
+
+const submissionAdapterProgram = <Success>(
+  make: () => unknown,
+  name: string,
+): Effect.Effect<Readonly<{ effect: Effect.Effect<Success, GenerationError> }>, GenerationError> => Effect.gen(function*() {
+  const untrusted = yield* Effect.try({
+    try: make,
+    catch: () => new GenerationError("ADAPTER_NOT_STARTED", `${name} refused before returning its Effect.`),
+  })
+  if (!Effect.isEffect(untrusted)) {
+    return yield* Effect.fail(new GenerationError("ADAPTER_NOT_STARTED", `${name} did not return an Effect.`))
+  }
+  return Object.freeze({
+    effect: (untrusted as Effect.Effect<Success, unknown>).pipe(
+      Effect.mapError((error) => error instanceof GenerationError
+        ? error
+        : new GenerationError("ADAPTER_RESULT_INVALID", `${name} failed with an unnamed error.`)),
+      Effect.catchDefect(() => Effect.fail(new GenerationError(
+        "ADAPTER_RESULT_INVALID",
+        `${name} terminated with a defect.`,
+      ))),
+    ),
+  })
 })
 
 const referencesFromPreparedPayload = (
@@ -428,32 +452,19 @@ export const invokeGeneration = (
   Effect.gen(function*() {
     const validatedPrepared = yield* validatePreparedGeneration(prepared)
     const adapter = yield* GenerationAdapter
-    const submission = Effect.gen(function*() {
-      const adapterEffect: unknown = yield* Effect.try({
-        try: () => adapter.invoke(validatedPrepared) as unknown,
-        catch: () => new GenerationError("ADAPTER_RESULT_INVALID", "The adapter threw before returning its Effect."),
-      })
-      if (!Effect.isEffect(adapterEffect)) {
-        return yield* Effect.fail(new GenerationError(
-          "ADAPTER_RESULT_INVALID",
-          "The adapter did not return an Effect.",
-        ))
-      }
-      return yield* adapterEffect.pipe(
-        Effect.mapError((error) => error instanceof GenerationError
-          ? error
-          : new GenerationError("ADAPTER_RESULT_INVALID", "The adapter Effect failed with an unnamed error.")),
-        Effect.catchDefect(() => Effect.fail(new GenerationError(
-          "ADAPTER_RESULT_INVALID",
-          "The adapter Effect terminated with a defect.",
-        ))),
-      )
+    yield* validateSubmission(permit, {
+      requestSha256: validatedPrepared.requestSha256,
+      payloadSha256: validatedPrepared.payloadSha256,
     })
+    const submission = yield* submissionAdapterProgram<unknown>(
+      () => adapter.invoke(validatedPrepared) as unknown,
+      "The Qwen submission adapter",
+    )
     yield* consumeSubmission(permit, {
       requestSha256: validatedPrepared.requestSha256,
       payloadSha256: validatedPrepared.payloadSha256,
     })
-    const untrustedResult: unknown = yield* submission
+    const untrustedResult: unknown = yield* submission.effect
     return yield* validateGenerationResult(validatedPrepared, untrustedResult)
   })
 
@@ -522,14 +533,19 @@ export const submitSeedanceGeneration = (
     if (typeof adapter.submitSeedance !== "function") {
       return yield* Effect.fail(new GenerationError("ADAPTER_RESULT_INVALID", "The adapter cannot submit Seedance."))
     }
+    yield* validateSubmission(permit, {
+      requestSha256: validatedPrepared.requestSha256,
+      payloadSha256: validatedPrepared.payloadSha256,
+    })
+    const submission = yield* submissionAdapterProgram<unknown>(
+      () => adapter.submitSeedance!(validatedPrepared),
+      "The Seedance submission adapter",
+    )
     yield* consumeSubmission(permit, {
       requestSha256: validatedPrepared.requestSha256,
       payloadSha256: validatedPrepared.payloadSha256,
     })
-    const untrusted = yield* adapterEffect<unknown>(
-      () => adapter.submitSeedance!(validatedPrepared),
-      "The Seedance submission adapter",
-    )
+    const untrusted = yield* submission.effect
     const result = yield* Effect.try({
       try: () => snapshotSeedanceSubmission(untrusted),
       catch: () => new GenerationError("ADAPTER_RESULT_INVALID", "The Seedance submission result could not be snapshotted safely."),

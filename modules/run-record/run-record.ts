@@ -3,6 +3,8 @@ import { spawnSync } from "node:child_process"
 
 import { Effect } from "effect"
 
+import { inspectAssemblyFailure } from "../assembly/index.js"
+
 import {
   hasDuplicateJsonKeys,
   hasProviderCredentialMaterial,
@@ -10,6 +12,8 @@ import {
   snapshotProviderEvidence,
 } from "../provider-evidence-sanitizer/index.js"
 import { RunRecordError } from "./errors.js"
+import { inspectVerificationFailure } from "../verification/index.js"
+import { inspectVideoVerificationFailure } from "../video-verification/index.js"
 import type { CanonicalRunRequest } from "../run-contract/index.js"
 import type {
   ClassifiedFailureClass,
@@ -39,12 +43,27 @@ type JsonValue = null | boolean | number | string | ReadonlyArray<JsonValue> | {
 }
 
 interface SubmissionPermitConsumer {
+  readonly validate: (binding: SubmissionBinding) => Effect.Effect<void, RunRecordError>
   readonly consume: (
     binding: SubmissionBinding,
   ) => Effect.Effect<void, RunRecordError>
+  readonly refuse: (runId: string, operationId: string) => Effect.Effect<void, RunRecordError>
 }
 
 const submissionPermitConsumers = new WeakMap<SubmissionPermit, SubmissionPermitConsumer>()
+
+export const validateSubmissionPermit = (
+  permit: SubmissionPermit,
+  binding: SubmissionBinding,
+): Effect.Effect<void, RunRecordError> => Effect.suspend(() => {
+  if (permit === null || typeof permit !== "object") {
+    return Effect.fail(new RunRecordError("SUBMISSION_PERMIT_INVALID", "The Submission Permit was not issued by this process.", "reconcile"))
+  }
+  const consumer = submissionPermitConsumers.get(permit)
+  return consumer === undefined
+    ? Effect.fail(new RunRecordError("SUBMISSION_PERMIT_INVALID", "The Submission Permit was not issued by this process.", "reconcile"))
+    : consumer.validate(binding)
+})
 
 export const consumeSubmissionPermit = (
   permit: SubmissionPermit,
@@ -122,12 +141,6 @@ const classifiedFailurePolicies = {
     retryState: "reconcile-only",
     correctionOwner: "Generation",
   },
-  post_submit_persistence_failure: {
-    outcome: "blocked",
-    spendState: "possibly_spent",
-    retryState: "reconcile-only",
-    correctionOwner: "Generation",
-  },
   assembly_failure: {
     outcome: "failed",
     spendState: "unknown",
@@ -135,12 +148,6 @@ const classifiedFailurePolicies = {
     correctionOwner: "Assembly",
   },
   verification_failure: {
-    outcome: "failed",
-    spendState: "unknown",
-    retryState: "reconcile-only",
-    correctionOwner: "Verification",
-  },
-  repeated_bad_output: {
     outcome: "failed",
     spendState: "unknown",
     retryState: "reconcile-only",
@@ -1505,7 +1512,9 @@ const replay = (
       if (
         Object.keys(failure).sort().join(",") !== "class,correctionOwner,evidence,message,outcome,retryState,spendState" ||
         failureEvidence === null || typeof failureEvidence !== "object" || Array.isArray(failureEvidence) ||
-        Object.keys(failureEvidence).sort().join(",") !== "artifactSha256s,requestSha256,stateEventSha256" ||
+        Object.keys(failureEvidence).sort().join(",") !== "artifactSha256s,failureProof,requestSha256,stateEventSha256" ||
+        failureEvidenceRecord.failureProof === null || typeof failureEvidenceRecord.failureProof !== "object" ||
+        Array.isArray(failureEvidenceRecord.failureProof) ||
         canonicalJson(failureEvidenceRecord.artifactSha256s!) !== canonicalJson(expectedArtifactSha256s) ||
         failureEvidenceRecord.requestSha256 !== base.requestSha256 ||
         failureEvidenceRecord.stateEventSha256 !== classifiedOutcomeIntent.previousEventSha256 ||
@@ -1543,17 +1552,18 @@ const replay = (
       continue
     }
     if (event.kind === "definitive_pre_submit_failure") {
-      if (phase !== "reserved") {
+      const failureClass = stringPayload(event.payload, "class")
+      const adapterRefusalAfterMarker = phase === "submission_may_have_started" && failureClass === "submission_not_started"
+      if (phase !== "reserved" && !adapterRefusalAfterMarker) {
         throw new RunRecordError("ILLEGAL_TRANSITION", "A definitive pre-submit failure was recorded after submission uncertainty.")
       }
-      stringPayload(event.payload, "class")
       stringPayload(event.payload, "message")
       phase = "definitive_pre_submit_failure"
       spendState = "not_spent"
       retryState = "new-linked-run-only"
       classification = "failed"
       finding = {
-        class: stringPayload(event.payload, "class"),
+        class: failureClass,
         message: stringPayload(event.payload, "message"),
         correctionOwner: "Generation",
       }
@@ -1837,14 +1847,22 @@ const exactOwnKeys = (value: object, keys: ReadonlyArray<string>): boolean => {
   return ownKeys.length === keys.length && keys.every((key) => Object.hasOwn(value, key))
 }
 
+type FailureProof = Readonly<Record<string, JsonValue>>
+
 const snapshotClassifiedFailure = (
   value: unknown,
-): Readonly<{ class: ClassifiedFailureClass; message: string }> | undefined => {
+): Readonly<{ class: ClassifiedFailureClass; message: string; proof?: FailureProof }> | undefined => {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined
   const prototype = Object.getPrototypeOf(value)
   if (prototype !== Object.prototype && prototype !== null) return undefined
   const failure = value as Readonly<Record<string, unknown>>
-  const keys = ["class", "message"]
+  const failureRecord = value as Readonly<Record<string, unknown>>
+  const classDescriptor = Object.getOwnPropertyDescriptor(failureRecord, "class")
+  if (classDescriptor === undefined || !Object.hasOwn(classDescriptor, "value")) return undefined
+  const failureClass = classDescriptor.value
+  if (!isClassifiedFailureClass(failureClass)) return undefined
+  const requiresCause = failureClass === "assembly_failure" || failureClass === "verification_failure"
+  const keys = requiresCause ? ["class", "message", "cause"] : ["class", "message"]
   if (
     Reflect.ownKeys(failure).length !== keys.length ||
     keys.some((key) => {
@@ -1852,14 +1870,24 @@ const snapshotClassifiedFailure = (
       return descriptor === undefined || !Object.hasOwn(descriptor, "value")
     })
   ) return undefined
-  const failureClass = failure.class
   const message = failure.message
   if (
     !isClassifiedFailureClass(failureClass) || typeof message !== "string" ||
     message.trim().length === 0 || message.length > 500 ||
     hasProviderCredentialMaterial(failure)
   ) return undefined
-  return { class: failureClass, message }
+  if (!requiresCause) return { class: failureClass, message }
+  const causeDescriptor = Object.getOwnPropertyDescriptor(failureRecord, "cause")
+  if (causeDescriptor === undefined || !Object.hasOwn(causeDescriptor, "value")) return undefined
+  const cause = causeDescriptor.value
+  if (failureClass === "assembly_failure") {
+    const evidence = inspectAssemblyFailure(cause)
+    return evidence === undefined ? undefined : { class: failureClass, message, proof: evidence }
+  }
+  const rasterEvidence = inspectVerificationFailure(cause)
+  if (rasterEvidence !== undefined) return { class: failureClass, message, proof: rasterEvidence }
+  const videoEvidence = inspectVideoVerificationFailure(cause)
+  return videoEvidence === undefined ? undefined : { class: failureClass, message, proof: videoEvidence }
 }
 
 const snapshotGeneratedOutput = (value: unknown): GeneratedOutputEvidenceInput | undefined => {
@@ -2046,7 +2074,7 @@ export const recordOperation = (
     stableSeedanceOutputs = snapshot.outputs
     stableSeedanceCost = snapshot.cost
   }
-  let stableClassifiedFailure: Readonly<{ class: ClassifiedFailureClass; message: string }> | undefined
+  let stableClassifiedFailure: Readonly<{ class: ClassifiedFailureClass; message: string; proof?: FailureProof }> | undefined
   if (operation._tag === "ClassifyFailure") {
     stableClassifiedFailure = yield* Effect.try({
       try: () => snapshotClassifiedFailure(operation.failure),
@@ -2801,19 +2829,42 @@ export const recordOperation = (
   if (operation._tag === "ClassifyFailure") {
     const failure = stableClassifiedFailure!
     const policy = classifiedFailurePolicy(failure.class)
+    const assemblyPlan = runRequest.assemblyPlan
+    const baselineSha256 = assemblyPlan === undefined
+      ? undefined
+      : runRequest.references.find((reference) => reference.slot === assemblyPlan.baselineReferenceSlot)?.sha256
+    const regionSha256 = assemblyPlan === undefined ? undefined : sha256(JSON.stringify(assemblyPlan.ownedRegion))
+    const exactCopySha256 = assemblyPlan === undefined
+      ? undefined
+      : sha256(JSON.stringify(assemblyPlan.exactCopy.map((copy) => copy.sha256)))
+    const proof = failure.proof
+    const assemblyProofAllowed = failure.class !== "assembly_failure" || (
+      current.phase === "donor_selected" && proof?.module === "Assembly" &&
+      proof.baselineSha256 === baselineSha256 && proof.donorSha256 === current.selectedDonorSha256 &&
+      proof.regionSha256 === regionSha256 && proof.exactCopySha256 === exactCopySha256
+    )
+    const rasterVerificationProofAllowed = failure.class !== "verification_failure" || proof?.module !== "Verification" || (
+      current.phase === "assembly_completed" && proof.baselineSha256 === baselineSha256 &&
+      proof.donorSha256 === current.selectedDonorSha256 && proof.candidateSha256 === current.assemblyOutputSha256 &&
+      proof.regionSha256 === regionSha256 && proof.exactCopySha256 === exactCopySha256
+    )
+    const videoOutputSha256s = current.evidence
+      .filter((item) => item.applicationPath.startsWith("outputs/") && item.mediaType === "video/mp4")
+      .map((item) => item.sha256)
+    const videoVerificationProofAllowed = failure.class !== "verification_failure" || proof?.module !== "Video Verification" || (
+      current.phase === "generated_outputs_received" && runRequest.mode === "seedance-video" &&
+      proof.requestedCount === runRequest.requestedCount && proof.completedCount === current.completedCount &&
+      canonicalJson(proof.outputSha256s!) === canonicalJson(videoOutputSha256s)
+    )
     const phaseAllowed = failure.class === "assembly_failure"
       ? current.phase === "donor_selected"
-      : failure.class === "verification_failure" || failure.class === "repeated_bad_output"
-        ? current.phase === "generated_outputs_received" || current.phase === "assembly_completed"
+      : failure.class === "verification_failure"
+        ? proof?.module === "Verification" ? current.phase === "assembly_completed" : current.phase === "generated_outputs_received"
         : current.phase === "submission_may_have_started" || current.phase === "provider_evidence_received"
-    const repeatedEvidenceAllowed = failure.class !== "repeated_bad_output" ||
-      current.evidence.filter((item) =>
-        item.applicationPath.startsWith("outputs/") && item.applicationPath !== "outputs/assembled.rgba.json"
-      ).length >= 2
-    if (!phaseAllowed || !repeatedEvidenceAllowed) {
+    if (!phaseAllowed || !assemblyProofAllowed || !rasterVerificationProofAllowed || !videoVerificationProofAllowed) {
       return yield* Effect.fail(new RunRecordError(
         "ILLEGAL_TRANSITION",
-        `The ${failure.class} classification is not valid from ${current.phase}.`,
+        `The ${failure.class} classification is not backed by the exact module failure for ${current.phase}.`,
       ))
     }
     const intentOperationId = `failure-intent-${sha256(operation.operationId).slice(0, 24)}`
@@ -2823,6 +2874,7 @@ export const recordOperation = (
       correctionOwner: policy.correctionOwner,
       evidence: {
         artifactSha256s: current.evidence.map((item) => item.sha256),
+        failureProof: failure.proof ?? { module: "Generation", errorCode: failure.class },
         requestSha256: current.requestSha256,
         stateEventSha256: existingIntent?.previousEventSha256 ?? current.chainHeadSha256,
       },
@@ -2894,8 +2946,10 @@ export const recordOperation = (
     return { _tag: "Recorded" as const, view: next }
   }
   if (operation._tag === "DefinitivePreSubmitFailure") {
-    if (current.phase !== "reserved") {
-      return yield* Effect.fail(new RunRecordError("ILLEGAL_TRANSITION", "Only a reserved Run can end before submission."))
+    const adapterRefusalAfterMarker = current.phase === "submission_may_have_started" &&
+      operation.failure.class === "submission_not_started"
+    if (current.phase !== "reserved" && !adapterRefusalAfterMarker) {
+      return yield* Effect.fail(new RunRecordError("ILLEGAL_TRANSITION", "Only a reserved Run or a proved adapter refusal can end before submission."))
     }
     if (
       !isIdentifier(operation.failure.class) ||
@@ -2907,6 +2961,20 @@ export const recordOperation = (
         hasProviderCredentialMaterial(operation.failure) ? "SECRET_MATERIAL_DETECTED" : "ILLEGAL_TRANSITION",
         "The definitive failure must be safe, named, and non-empty.",
       ))
+    }
+    if (adapterRefusalAfterMarker) {
+      const permit = operation.permit
+      const consumer = permit === undefined || permit === null || typeof permit !== "object"
+        ? undefined
+        : submissionPermitConsumers.get(permit)
+      if (consumer === undefined) {
+        return yield* Effect.fail(new RunRecordError(
+          "SUBMISSION_PERMIT_INVALID",
+          "A submission-not-started Finding requires the genuine unused Submission Permit.",
+          "reconcile",
+        ))
+      }
+      yield* consumer.refuse(operation.runId, operation.operationId)
     }
     const clock = yield* RunRecordClock
     const timestamp = yield* clock.now()
@@ -2955,8 +3023,8 @@ export const recordOperation = (
   })
   yield* store.appendEvent(operation.runId, current.chainHeadSha256, encodeEvent(event))
   const next = replay(operation.runId, stored.request, [...events, event])
-  let consumed = false
-  const consumePermit = (
+  let permitState: "available" | "consumed" | Readonly<{ refusedOperationId: string }> = "available"
+  const validatePermit = (
     binding: SubmissionBinding,
   ): Effect.Effect<void, RunRecordError> => Effect.suspend(() => {
     if (
@@ -2969,14 +3037,33 @@ export const recordOperation = (
         "reconcile",
       ))
     }
-    if (consumed) {
+    if (permitState !== "available") {
       return Effect.fail(new RunRecordError(
         "DUPLICATE_SUBMISSION_BLOCKED",
-        "The in-process Submission Permit was already consumed.",
+        "The in-process Submission Permit was already consumed or refused.",
         "reconcile",
       ))
     }
-    consumed = true
+    return Effect.void
+  })
+  const consumePermit = (
+    binding: SubmissionBinding,
+  ): Effect.Effect<void, RunRecordError> => validatePermit(binding).pipe(Effect.tap(() => Effect.sync(() => {
+    permitState = "consumed"
+  })))
+  const refusePermit = (runId: string, operationId: string): Effect.Effect<void, RunRecordError> => Effect.suspend(() => {
+    if (runId !== operation.runId) {
+      return Effect.fail(new RunRecordError("SUBMISSION_PERMIT_INVALID", "The refusal names a different Run.", "reconcile"))
+    }
+    if (typeof permitState === "object") {
+      return permitState.refusedOperationId === operationId
+        ? Effect.void
+        : Effect.fail(new RunRecordError("DUPLICATE_SUBMISSION_BLOCKED", "The permit already proved a different refusal.", "reconcile"))
+    }
+    if (permitState === "consumed") {
+      return Effect.fail(new RunRecordError("DUPLICATE_SUBMISSION_BLOCKED", "Submission authority was already consumed.", "reconcile"))
+    }
+    permitState = Object.freeze({ refusedOperationId: operationId })
     return Effect.void
   })
   const permit = immutable({
@@ -2985,7 +3072,7 @@ export const recordOperation = (
     requestSha256: next.requestSha256,
     payloadSha256: next.payloadSha256,
   })
-  submissionPermitConsumers.set(permit, { consume: consumePermit })
+  submissionPermitConsumers.set(permit, { validate: validatePermit, consume: consumePermit, refuse: refusePermit })
   return {
     _tag: "SubmissionPermitIssued" as const,
     permit,

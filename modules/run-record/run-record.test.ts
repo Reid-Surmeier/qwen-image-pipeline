@@ -29,7 +29,6 @@ import { verifyVideo } from "../video-verification/index.js"
 import { EMBEDDED_PROVIDER_SECRET_CASES } from "../../tests/provider-evidence-attacks.js"
 import {
   RunRecordClock,
-  RunRecordError,
   consumeSubmission,
   fileRunRecordLayer,
   load,
@@ -45,6 +44,7 @@ import {
   type RunLink,
   type RunRecordStoreService,
 } from "./index.js"
+import { RunRecordError } from "./errors.js"
 import { RunRecordStore } from "./types.js"
 
 const clock: RunRecordClockService = {
@@ -2009,7 +2009,6 @@ test("persists a closed failure record with fixed spend, retry, outcome, and cor
     ["ambiguous_provider_timeout", "blocked", "possibly_spent", "reconcile-only", "Generation", true],
     ["malformed_provider_response", "failed", "possibly_spent", "reconcile-only", "Generation", true],
     ["output_count_mismatch", "failed", "possibly_spent", "reconcile-only", "Generation", true],
-    ["post_submit_persistence_failure", "blocked", "possibly_spent", "reconcile-only", "Generation", true],
   ] as const
 
   for (const [failureClass, outcome, spend, retry, owner, afterSubmission] of cases) {
@@ -2055,6 +2054,7 @@ test("persists a closed failure record with fixed spend, retry, outcome, and cor
       correctionOwner: owner,
       evidence: {
         artifactSha256s: beforeClassification.evidence.map((item) => item.sha256),
+        failureProof: { errorCode: failureClass, module: "Generation" },
         requestSha256: classified.view.requestSha256,
         stateEventSha256: beforeClassification.chainHeadSha256,
       },
@@ -2066,7 +2066,7 @@ test("persists a closed failure record with fixed spend, retry, outcome, and cor
   }
 })
 
-test("repeated bad output requires at least two persisted candidate artifacts", async () => {
+test("two persisted outputs cannot manufacture a repeated failed-candidate finding", async () => {
   const planned = await plannedRun(undefined, 2)
   const memory = await memoryHarness()
   const provide = <Success, Error>(
@@ -2107,6 +2107,7 @@ test("repeated bad output requires at least two persisted candidate artifacts", 
     })
   }
   await Effect.runPromise(provide(persistOutput(1)))
+  await Effect.runPromise(provide(persistOutput(2)))
   const classification = {
     _tag: "ClassifyFailure" as const,
     runId: reserved.runId,
@@ -2116,56 +2117,8 @@ test("repeated bad output requires at least two persisted candidate artifacts", 
       message: "Two persisted candidates failed verification.",
     },
   }
-  const unsupported = await Effect.runPromise(Effect.flip(provide(record(classification))))
+  const unsupported = await Effect.runPromise(Effect.flip(provide(record(classification as unknown as RecordOperation))))
   assert.equal(unsupported.code, "ILLEGAL_TRANSITION")
-
-  await Effect.runPromise(provide(persistOutput(2)))
-  const classified = await Effect.runPromise(provide(record(classification)))
-  assert.equal(classified.view.finding?.class, "repeated_bad_output")
-  assert.equal(classified.view.finding?.correctionOwner, "Verification")
-})
-
-test("replays an interrupted classified failure to one durable evidence-backed outcome", async () => {
-  for (const failedWrite of ["append-event", "write-evidence", "write-state"] as const) {
-    const planned = await plannedRun()
-    const memory = await memoryHarness()
-    const provide = <Success, Error>(
-      effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
-    ): Effect.Effect<Success, Error> => effect.pipe(
-      Effect.provide(memory.layer),
-      Effect.provideService(RunRecordClock, clock),
-    )
-    const reserved = await Effect.runPromise(provide(reserve(reservationFor(planned))))
-    await Effect.runPromise(provide(record({
-      _tag: "SubmissionMayHaveStarted",
-      runId: reserved.runId,
-      operationId: `classified-interruption-${failedWrite}-submission`,
-    })))
-    const operation = {
-      _tag: "ClassifyFailure" as const,
-      runId: reserved.runId,
-      operationId: `classified-interruption-${failedWrite}`,
-      failure: {
-        class: "post_submit_persistence_failure" as const,
-        message: `Interrupted ${failedWrite} while preserving a terminal classification.`,
-      },
-    }
-    await Effect.runPromise(memory.failNext(failedWrite))
-    const interruption = await Effect.runPromise(Effect.flip(provide(record(operation))))
-    assert.equal(interruption.code, "DURABILITY_FAILURE")
-
-    const recovered = await Effect.runPromise(provide(record(operation)))
-    assert.equal(recovered.view.phase, "blocked")
-    assert.equal(recovered.view.classification, "blocked")
-    assert.equal(recovered.view.spendState, "possibly_spent")
-    assert.equal(recovered.view.retryState, "reconcile-only")
-    assert.equal(recovered.view.finding?.correctionOwner, "Generation")
-    assert.deepEqual(await Effect.runPromise(provide(load(reserved.runId))), recovered.view)
-    const failureBytes = await Effect.runPromise(
-      readEvidence(reserved.runId, "failure.json").pipe(Effect.provide(memory.layer)),
-    )
-    assert.equal(JSON.parse(Buffer.from(failureBytes).toString("utf8")).class, "post_submit_persistence_failure")
-  }
 })
 
 test("interruption at every persistence and network seam never creates a second submission", async () => {

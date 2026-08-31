@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 
 import { Effect } from "effect"
 
-import { AssemblyError } from "./errors.js"
+import { AssemblyError, issueAssemblyFailure } from "./errors.js"
 import type { AssemblyInput, AssemblyResult } from "./types.js"
 
 type Raster = Readonly<{ width: number; height: number; pixels: ReadonlyArray<number> }>
@@ -97,4 +97,9 @@ export const assembleRaster = (input: AssemblyInput): Effect.Effect<AssemblyResu
     catch: (error) => error instanceof AssemblyError
       ? error
       : new AssemblyError("RASTER_INVALID", "Assembly inputs could not be decoded."),
-  })
+  }).pipe(Effect.mapError((error) => issueAssemblyFailure(error, {
+    baselineSha256: input.baseline.sha256,
+    donorSha256: input.donor.sha256,
+    regionSha256: sha256(JSON.stringify(input.ownedRegion)),
+    exactCopySha256: sha256(JSON.stringify(input.exactCopy.map((copy) => copy.sha256))),
+  })))

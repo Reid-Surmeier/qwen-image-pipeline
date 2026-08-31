@@ -2,7 +2,7 @@ import { createHash } from "node:crypto"
 
 import { Effect } from "effect"
 
-import { VerificationError } from "./errors.js"
+import { issueVerificationFailure, VerificationError } from "./errors.js"
 import type { VerificationInput, VerificationResult } from "./types.js"
 
 type Raster = Readonly<{ width: number; height: number; pixels: ReadonlyArray<number> }>
@@ -120,4 +120,10 @@ export const verifyRaster = (input: VerificationInput): Effect.Effect<Verificati
     catch: (error) => error instanceof VerificationError
       ? error
       : new VerificationError("INTEGRITY_CHECK_FAILED", "Verification inputs could not be checked.", []),
-  })
+  }).pipe(Effect.mapError((error) => issueVerificationFailure(error, {
+    baselineSha256: input.baseline.sha256,
+    donorSha256: input.donor.sha256,
+    candidateSha256: input.candidate.sha256,
+    regionSha256: createHash("sha256").update(JSON.stringify(input.ownedRegion)).digest("hex"),
+    exactCopySha256: createHash("sha256").update(JSON.stringify(input.exactCopy.map((copy) => copy.sha256))).digest("hex"),
+  })))
