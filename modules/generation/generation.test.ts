@@ -295,6 +295,8 @@ test("rejects unknown, null, malformed, and sparse adapter results as typed fail
     mediaType: "image/png",
     bytes: snapshot.bytes,
   }]))
+  const providerBody = Buffer.from('{"request_id":"malformed-output","status":"succeeded"}')
+  const malformedRasterBody = Buffer.from("not normalized raster evidence")
   const malformedResults: ReadonlyArray<readonly [string, unknown]> = [
     ["null", null],
     ["primitive", 42],
@@ -303,6 +305,17 @@ test("rejects unknown, null, malformed, and sparse adapter results as typed fail
     ["missing provider evidence", { provider: "openrouter", model: decision.run.request.model, outputs: [{}] }],
     ["null output", { provider: "openrouter", model: decision.run.request.model, providerEvidence: {}, outputs: [null] }],
     ["sparse outputs", { provider: "openrouter", model: decision.run.request.model, providerEvidence: {}, outputs: Array(1) }],
+    ["malformed normalized raster", {
+      provider: "openrouter",
+      model: decision.run.request.model,
+      providerEvidence: { mediaType: "application/json", body: providerBody, sha256: sha256(providerBody) },
+      outputs: [{
+        applicationPath: "outputs/malformed.rgba.json",
+        mediaType: "application/vnd.qwen.rgba+json",
+        body: malformedRasterBody,
+        sha256: sha256(malformedRasterBody),
+      }],
+    }],
   ]
 
   for (const [index, [name, malformed]] of malformedResults.entries()) {

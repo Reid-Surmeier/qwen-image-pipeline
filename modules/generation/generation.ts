@@ -74,6 +74,19 @@ const normalizeAdapterResult = (value: unknown): GenerationResult | undefined =>
   }
 }
 
+const isNormalizedRgbaRaster = (body: Uint8Array): boolean => {
+  try {
+    const value = JSON.parse(Buffer.from(body).toString("utf8")) as Record<string, unknown>
+    const { width, height, pixels } = value
+    return typeof width === "number" && Number.isSafeInteger(width) && width > 0 &&
+      typeof height === "number" && Number.isSafeInteger(height) && height > 0 &&
+      Array.isArray(pixels) && pixels.length === width * height * 4 &&
+      pixels.every((channel) => typeof channel === "number" && Number.isInteger(channel) && channel >= 0 && channel <= 255)
+  } catch {
+    return false
+  }
+}
+
 const referencesFromPreparedPayload = (
   prepared: PreparedGeneration,
 ): ReadonlyArray<GenerationReference> => {
@@ -254,6 +267,7 @@ const validateGenerationResult = (
     sha256(result.providerEvidence.body) !== result.providerEvidence.sha256 ||
     result.outputs.some((output) =>
       sha256(output.body) !== output.sha256 ||
+      !isNormalizedRgbaRaster(output.body) ||
       !/^outputs\/[a-z0-9][a-z0-9._-]*\.rgba\.json$/.test(output.applicationPath))
   ) {
     return yield* Effect.fail(new GenerationError("ADAPTER_RESULT_INVALID", "Normalized provider or output evidence is invalid."))

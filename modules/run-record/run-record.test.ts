@@ -975,6 +975,36 @@ test("persists generated output evidence and reads only its verified bytes", asy
     ))),
     output,
   )
+  const forgedReplay = await Effect.runPromise(Effect.flip(provide(record({
+    _tag: "CommitGeneratedOutput",
+    runId: reserved.runId,
+    operationId: "output-one",
+    output: {
+      applicationPath: "outputs/candidate-001.png",
+      mediaType: "image/png",
+      body: Buffer.from("changed replay body"),
+      sha256: outputSha256,
+    },
+  }))))
+  assert.equal(forgedReplay.code, "IDEMPOTENCY_CONFLICT")
+
+  await Effect.runPromise(memory.mutate(reserved.runId, (stored) => {
+    const events = Buffer.from(stored.events).toString("utf8").trimEnd().split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+    const outputEvent = events.at(-1)!
+    outputEvent.payload = {
+      ...(outputEvent.payload as Record<string, unknown>),
+      applicationPath: "outputs/../escape.png",
+    }
+    const { eventSha256: _discarded, ...withoutDigest } = outputEvent
+    outputEvent.eventSha256 = createHash("sha256").update(canonicalJson(withoutDigest)).digest("hex")
+    stored.evidence["outputs/../escape.png"] = stored.evidence["outputs/candidate-001.png"]!
+    delete stored.evidence["outputs/candidate-001.png"]
+    stored.events = Buffer.from(`${events.map(canonicalJson).join("\n")}\n`, "utf8")
+    delete stored.state
+  }))
+  const unsafeReplay = await Effect.runPromise(Effect.flip(load(reserved.runId).pipe(Effect.provide(memory.layer))))
+  assert.equal(unsafeReplay.code, "EVIDENCE_HASH_MISMATCH")
 })
 
 test("records a donor-choice checkpoint and selects only a persisted output on the same Run", async () => {

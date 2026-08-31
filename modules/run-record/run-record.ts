@@ -515,6 +515,15 @@ const replay = (
       const byteLength = numberPayload(event.payload, "byteLength")
       const mediaType = stringPayload(event.payload, "mediaType")
       const storedEvidence = evidenceBytes[applicationPath]
+      if (
+        !/^outputs\/[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(applicationPath) ||
+        applicationPath.includes("..") ||
+        mediaType.trim().length === 0 ||
+        !isSha256(evidenceSha256) ||
+        evidence.some((item) => item.applicationPath === applicationPath)
+      ) {
+        throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Generated output journal metadata is unsafe or malformed.", "repair-evidence")
+      }
       if (evidence.filter((item) => item.applicationPath.startsWith("outputs/")).length >= base.maximumCount) {
         throw new RunRecordError("RESERVATION_OUTSIDE_PLAN", "Generated output evidence exceeds the reserved maximum count.", "repair-evidence")
       }
@@ -930,7 +939,10 @@ export const recordOperation = (
     }
     if (
       operation._tag === "CommitProviderEvidence" &&
-      stringPayload(replayed.payload, "sha256") !== operation.evidence.sha256
+      (
+        stringPayload(replayed.payload, "sha256") !== operation.evidence.sha256 ||
+        sha256(operation.evidence.body) !== operation.evidence.sha256
+      )
     ) {
       return yield* Effect.fail(new RunRecordError("IDEMPOTENCY_CONFLICT", "The operation identity was replayed with different provider evidence."))
     }
@@ -939,7 +951,8 @@ export const recordOperation = (
       (
         stringPayload(replayed.payload, "applicationPath") !== operation.output.applicationPath ||
         stringPayload(replayed.payload, "sha256") !== operation.output.sha256 ||
-        stringPayload(replayed.payload, "mediaType") !== operation.output.mediaType
+        stringPayload(replayed.payload, "mediaType") !== operation.output.mediaType ||
+        sha256(operation.output.body) !== operation.output.sha256
       )
     ) {
       return yield* Effect.fail(new RunRecordError("IDEMPOTENCY_CONFLICT", "The operation identity was replayed with different generated output evidence."))
@@ -963,7 +976,8 @@ export const recordOperation = (
         stringPayload(replayed.payload, "outputPath") !== operation.output.applicationPath ||
         stringPayload(replayed.payload, "outputSha256") !== operation.output.sha256 ||
         stringPayload(replayed.payload, "outputMediaType") !== operation.output.mediaType ||
-        stringPayload(replayed.payload, "reportSha256") !== reportSha256
+        stringPayload(replayed.payload, "reportSha256") !== reportSha256 ||
+        sha256(operation.output.body) !== operation.output.sha256
       ) {
         return yield* Effect.fail(new RunRecordError("IDEMPOTENCY_CONFLICT", "The operation identity was replayed with different Assembly evidence."))
       }

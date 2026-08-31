@@ -265,9 +265,15 @@ export const planReferenceInputs = (
       ))
     }
     const inspectedMedia = inspectedResult
+    const detectedMediaType = detectedKind === "image"
+      ? "image/png"
+      : detectedKind === "video"
+        ? "video/mp4"
+        : undefined
     if (
       inspectedMedia.kind !== requirement.kind ||
-      (detectedKind !== undefined && inspectedMedia.kind !== detectedKind)
+      (detectedKind !== undefined && inspectedMedia.kind !== detectedKind) ||
+      (detectedMediaType !== undefined && inspectedMedia.mediaType !== detectedMediaType)
     ) {
       return yield* Effect.fail(new ReferencePlanningError(
         input.mode === "seedance-video"

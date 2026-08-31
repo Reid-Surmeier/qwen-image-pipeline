@@ -189,3 +189,33 @@ test("refuses an inspector classification that contradicts the required kind", a
   assert.equal(result._tag, "Failure")
   if (result._tag === "Failure") assert.match(String(result.cause), /REFERENCE_KIND_MISMATCH/)
 })
+
+test("refuses an inspector that relabels known PNG bytes as normalized RGBA", async () => {
+  const fixture = makeFixture("qwen-image")
+  const snapshot = await Effect.runPromise(fixture.files.read("references/neutral.png"))
+  const inspector: MediaInspectorService = {
+    inspect: () => Effect.succeed({
+      kind: "image",
+      mediaType: "application/vnd.qwen.rgba+json",
+      width: 16,
+      height: 16,
+    }),
+  }
+  const result = await Effect.runPromiseExit(planReferences({
+    mode: "qwen-image",
+    referenceRoots: ["references"],
+    requirements: [{ slot: "source", kind: "image", payloadDestination: "/input_references/0/image_url/url" }],
+    candidates: [{
+      slot: "source",
+      path: snapshot.applicationPath,
+      sha256: sha256(snapshot.bytes),
+      kind: "image",
+      authorityReason: "Known PNG evidence.",
+      payloadDestination: "/input_references/0/image_url/url",
+    }],
+  }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(MediaInspector, inspector),
+  ))
+  assert.equal(result._tag, "Failure")
+})
