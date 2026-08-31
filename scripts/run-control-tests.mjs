@@ -12,6 +12,11 @@ const entries = [
   "modules/conductor/conductor.test.ts",
   "modules/reference-planning/reference-planning.test.ts",
   "modules/run-contract/run-contract.test.ts",
+  "modules/run-record/run-record.test.ts",
+  "modules/generation/generation.test.ts",
+  "modules/assembly/assembly.test.ts",
+  "modules/verification/verification.test.ts",
+  "modules/learning-promotion/learning-promotion.test.ts",
 ]
 
 process.on("exit", () => rmSync(outputDirectory, { recursive: true, force: true }))

@@ -60,3 +60,11 @@ export type PlannedRun = Readonly<{
   canonicalRequest: string
   requestSha256: string
 }>
+
+export type NormalView = Readonly<{
+  objective: string
+  evidence: string
+  nextAction: string
+  spendRisk: string
+  humanDecision: string
+}>

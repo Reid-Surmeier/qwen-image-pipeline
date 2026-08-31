@@ -9,11 +9,24 @@ import {
   PROJECT_CONTRACT_PATH,
   PlanningIdentity,
   TOOL_LOCK_PATH,
+  advance,
   byteMediaInspector,
   plan,
+  type AdvanceDecision,
   type PlanDecision,
 } from "./index.js"
 import { makeFixture } from "../../tests/control-plane-fixture.js"
+import {
+  RunRecordStore,
+  createMemoryRunRecordStore,
+} from "../run-record/index.js"
+import {
+  GenerationAdapter,
+  GenerationError,
+  createFakeGenerationAdapter,
+} from "../generation/index.js"
+import { Assembly, deterministicAssembly } from "../assembly/index.js"
+import { Verification, orderedVerification } from "../verification/index.js"
 
 const execute = async (
   mode: "qwen-image" | "seedance-video",
@@ -117,4 +130,196 @@ test("a secret-bearing objective is refused without echoing secret material", as
     assert.doesNotMatch(JSON.stringify(result.normalView), new RegExp(secret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
     assert.match(result.normalView.objective, /could not be read safely/i)
   }
+})
+
+test("advances fake Qwen edit through attempt reservation, generation, assembly, and verification", async () => {
+  const { result } = await execute("qwen-image")
+  assert.equal(result._tag, "Planned")
+  if (result._tag !== "Planned") return
+
+  const fixture = makeFixture("qwen-image")
+  const store = createMemoryRunRecordStore()
+  const genAdapter = createFakeGenerationAdapter()
+
+  const advanceResult = await Effect.runPromise(
+    advance({
+      runDirectory: "generated/runs/qwen-001",
+      plannedRun: result.run,
+      runId: "qwen-001",
+    }).pipe(
+      Effect.provideService(RunRecordStore, store),
+      Effect.provideService(GenerationAdapter, genAdapter),
+      Effect.provideService(Assembly, deterministicAssembly),
+      Effect.provideService(Verification, orderedVerification),
+      Effect.provideService(ApplicationFiles, fixture.files),
+    ),
+  )
+
+  assert.equal(advanceResult._tag, "VerifiedCandidate")
+  assert.equal(genAdapter.getInvocationCount(), 1)
+  assert.ok(advanceResult.state.attempt)
+  assert.ok(advanceResult.state.submissionMarker)
+  assert.ok(advanceResult.state.providerEvidence)
+  assert.equal(advanceResult.state.status, "verified")
+  assert.ok(advanceResult.assemblyOutput)
+  assert.match(advanceResult.normalView.evidence, /verified 1 output/i)
+  assert.match(advanceResult.normalView.spendRisk, /money spent: \$0\.04/i)
+  assert.match(advanceResult.normalView.humanDecision, /subjective final visual approval/i)
+})
+
+test("advances fake Seedance video run through attempt reservation, video generation, and verification", async () => {
+  const { result } = await execute("seedance-video")
+  assert.equal(result._tag, "Planned")
+  if (result._tag !== "Planned") return
+
+  const fixture = makeFixture("seedance-video")
+  const store = createMemoryRunRecordStore()
+  const genAdapter = createFakeGenerationAdapter()
+
+  const advanceResult = await Effect.runPromise(
+    advance({
+      runDirectory: "generated/runs/seedance-001",
+      plannedRun: result.run,
+      runId: "seedance-001",
+    }).pipe(
+      Effect.provideService(RunRecordStore, store),
+      Effect.provideService(GenerationAdapter, genAdapter),
+      Effect.provideService(Assembly, deterministicAssembly),
+      Effect.provideService(Verification, orderedVerification),
+      Effect.provideService(ApplicationFiles, fixture.files),
+    ),
+  )
+
+  assert.equal(advanceResult._tag, "VerifiedCandidate")
+  assert.equal(genAdapter.getInvocationCount(), 1)
+  assert.equal(advanceResult.state.request.mode, "seedance-video")
+  assert.equal(advanceResult.state.providerEvidence?.outputs[0]?.mediaType, "video/mp4")
+  assert.match(advanceResult.normalView.spendRisk, /money spent: \$0\.20/i)
+})
+
+test("stops at donor choice checkpoint when multiple candidates exist and resumes with selection", async () => {
+  const { result } = await execute("qwen-image", {
+    objective: (o) => {
+      o.requestedCount = 2
+      o.budgetCeilingUsd = "0.10"
+    },
+  })
+  assert.equal(result._tag, "Planned")
+  if (result._tag !== "Planned") return
+
+  const fixture = makeFixture("qwen-image", {
+    objective: (o) => {
+      o.requestedCount = 2
+      o.budgetCeilingUsd = "0.10"
+    },
+  })
+  const store = createMemoryRunRecordStore()
+  const genAdapter = createFakeGenerationAdapter()
+
+  // First advance creates outputs and checkpoints at donor selection
+  const checkpointResult = await Effect.runPromise(
+    advance({
+      runDirectory: "generated/runs/qwen-multi",
+      plannedRun: result.run,
+      runId: "qwen-multi",
+    }).pipe(
+      Effect.provideService(RunRecordStore, store),
+      Effect.provideService(GenerationAdapter, genAdapter),
+      Effect.provideService(Assembly, deterministicAssembly),
+      Effect.provideService(Verification, orderedVerification),
+      Effect.provideService(ApplicationFiles, fixture.files),
+    ),
+  )
+
+  assert.equal(checkpointResult._tag, "HumanDecisionRequired")
+  assert.equal(genAdapter.getInvocationCount(), 1)
+  assert.equal(checkpointResult.state.status, "donor_checkpoint")
+
+  // Resuming with selected donor completes run without resubmitting to provider
+  const resumeResult = await Effect.runPromise(
+    advance({
+      runDirectory: "generated/runs/qwen-multi",
+      donorChoice: "output-01.png",
+    }).pipe(
+      Effect.provideService(RunRecordStore, store),
+      Effect.provideService(GenerationAdapter, genAdapter),
+      Effect.provideService(Assembly, deterministicAssembly),
+      Effect.provideService(Verification, orderedVerification),
+      Effect.provideService(ApplicationFiles, fixture.files),
+    ),
+  )
+
+  assert.equal(resumeResult._tag, "VerifiedCandidate")
+  // Invocations count did not increase (no duplicate billing)
+  assert.equal(genAdapter.getInvocationCount(), 1)
+})
+
+test("replaying an already verified run does not create another provider attempt", async () => {
+  const { result } = await execute("qwen-image")
+  if (result._tag !== "Planned") return
+
+  const fixture = makeFixture("qwen-image")
+  const store = createMemoryRunRecordStore()
+  const genAdapter = createFakeGenerationAdapter()
+
+  await Effect.runPromise(
+    advance({
+      runDirectory: "generated/runs/qwen-replay",
+      plannedRun: result.run,
+      runId: "qwen-replay",
+    }).pipe(
+      Effect.provideService(RunRecordStore, store),
+      Effect.provideService(GenerationAdapter, genAdapter),
+      Effect.provideService(Assembly, deterministicAssembly),
+      Effect.provideService(Verification, orderedVerification),
+      Effect.provideService(ApplicationFiles, fixture.files),
+    ),
+  )
+  assert.equal(genAdapter.getInvocationCount(), 1)
+
+  // Replay
+  const replayResult = await Effect.runPromise(
+    advance({
+      runDirectory: "generated/runs/qwen-replay",
+    }).pipe(
+      Effect.provideService(RunRecordStore, store),
+      Effect.provideService(GenerationAdapter, genAdapter),
+      Effect.provideService(Assembly, deterministicAssembly),
+      Effect.provideService(Verification, orderedVerification),
+      Effect.provideService(ApplicationFiles, fixture.files),
+    ),
+  )
+
+  assert.equal(replayResult._tag, "VerifiedCandidate")
+  assert.equal(genAdapter.getInvocationCount(), 1)
+})
+
+test("records provider failure properly and produces Failed decision without retry", async () => {
+  const { result } = await execute("qwen-image")
+  if (result._tag !== "Planned") return
+
+  const fixture = makeFixture("qwen-image")
+  const store = createMemoryRunRecordStore()
+  const genAdapter = createFakeGenerationAdapter({
+    simulateError: new GenerationError("PROVIDER_HTTP_ERROR", "HTTP 400 Bad Request", 400),
+  })
+
+  const failResult = await Effect.runPromise(
+    advance({
+      runDirectory: "generated/runs/qwen-fail",
+      plannedRun: result.run,
+      runId: "qwen-fail",
+    }).pipe(
+      Effect.provideService(RunRecordStore, store),
+      Effect.provideService(GenerationAdapter, genAdapter),
+      Effect.provideService(Assembly, deterministicAssembly),
+      Effect.provideService(Verification, orderedVerification),
+      Effect.provideService(ApplicationFiles, fixture.files),
+    ),
+  )
+
+  assert.equal(failResult._tag, "Failed")
+  assert.match(failResult.failureReason, /HTTP 400/i)
+  assert.match(failResult.normalView.spendRisk, /provider attempt was made/i)
+  assert.equal(failResult.state.status, "failed")
 })

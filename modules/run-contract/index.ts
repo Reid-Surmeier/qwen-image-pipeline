@@ -42,6 +42,7 @@ export type {
 export { PlanningIdentity } from "./types.js"
 export type {
   CanonicalRunRequest,
+  NormalView,
   PlannedRun,
   PlanningIdentityService,
   RawPlanningDocuments,
