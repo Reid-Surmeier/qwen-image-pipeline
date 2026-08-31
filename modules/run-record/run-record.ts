@@ -434,6 +434,7 @@ const validateVideoReport = (
     report.requestedCount !== runRequest.requestedCount || report.completedCount !== completedCount ||
     canonicalJson(report.expected as JsonValue) !== canonicalJson(runRequest.videoPlan.expectedMedia as unknown as JsonValue) ||
     !Array.isArray(outputs) || outputs.length !== runRequest.requestedCount ||
+    expectedOutputEvidence.length !== runRequest.requestedCount ||
     !Array.isArray(checks) ||
     canonicalJson(checks as JsonValue) !== canonicalJson([
       { name: "integrity", passed: true, measured: 0 },
@@ -456,18 +457,20 @@ const validateVideoReport = (
   ) {
     throw new RunRecordError("CHECKS_NOT_PASSED", "Video checks cost evidence contradicts the recorded Run cost state.", "repair-evidence")
   }
+  const coveredOutputs = new Set<string>()
   for (const outputValue of outputs) {
     if (outputValue === null || typeof outputValue !== "object" || Array.isArray(outputValue)) {
       throw new RunRecordError("CHECKS_NOT_PASSED", "Video output checks are malformed.", "repair-evidence")
     }
     const output = outputValue as Readonly<Record<string, unknown>>
+    const outputIdentity = `${String(output.applicationPath)}\0${String(output.sha256)}`
     const matchingEvidence = expectedOutputEvidence.find((item) =>
       item.applicationPath === output.applicationPath && item.sha256 === output.sha256)
     const actual = output.actual
     const outputBytes = matchingEvidence === undefined ? undefined : evidenceBytes[matchingEvidence.applicationPath]
     const recomputed = outputBytes === undefined ? undefined : inspectVideoForReplay(outputBytes)
     if (
-      matchingEvidence === undefined || output.mediaType !== "video/mp4" ||
+      matchingEvidence === undefined || coveredOutputs.has(outputIdentity) || output.mediaType !== "video/mp4" ||
       outputBytes === undefined || sha256(outputBytes) !== matchingEvidence.sha256 || recomputed === undefined ||
       actual === null || typeof actual !== "object" || Array.isArray(actual) ||
       canonicalJson(actual as JsonValue) !== canonicalJson(recomputed as unknown as JsonValue) ||
@@ -478,6 +481,10 @@ const validateVideoReport = (
     ) {
       throw new RunRecordError("CHECKS_NOT_PASSED", "Video output checks do not match persisted output evidence.", "repair-evidence")
     }
+    coveredOutputs.add(outputIdentity)
+  }
+  if (expectedOutputEvidence.some((item) => !coveredOutputs.has(`${item.applicationPath}\0${item.sha256}`))) {
+    throw new RunRecordError("CHECKS_NOT_PASSED", "Video checks must cover every persisted output exactly once.", "repair-evidence")
   }
 }
 
@@ -488,40 +495,177 @@ const readReplayUint32 = (value: Uint8Array, offset: number): number => {
   return new DataView(value.buffer, value.byteOffset, value.byteLength).getUint32(offset)
 }
 
+const readReplayUint64 = (value: Uint8Array, offset: number): number => {
+  if (offset < 0 || offset + 8 > value.byteLength) {
+    throw new RunRecordError("CHECKS_NOT_PASSED", "The replayed MP4 box is truncated.", "repair-evidence")
+  }
+  const parsed = new DataView(value.buffer, value.byteOffset, value.byteLength).getBigUint64(offset)
+  if (parsed > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new RunRecordError("CHECKS_NOT_PASSED", "The replayed MP4 box is too large to inspect safely.", "repair-evidence")
+  }
+  return Number(parsed)
+}
+
+type ReplayMp4Box = Readonly<{
+  type: string
+  contentStart: number
+  end: number
+}>
+
 const replayBoxes = (
   value: Uint8Array,
-  kind: string,
-): ReadonlyArray<Readonly<{ start: number; size: number }>> => {
-  const wanted = Buffer.from(kind, "ascii")
-  const found: Array<Readonly<{ start: number; size: number }>> = []
-  for (let index = 4; index <= value.length - 4; index += 1) {
-    if (
-      value[index] === wanted[0] && value[index + 1] === wanted[1] &&
-      value[index + 2] === wanted[2] && value[index + 3] === wanted[3]
-    ) {
-      const start = index - 4
-      const size = readReplayUint32(value, start)
-      if (size >= 8 && start + size <= value.length) found.push({ start, size })
+  start = 0,
+  end = value.byteLength,
+): ReadonlyArray<ReplayMp4Box> => {
+  const found: Array<ReplayMp4Box> = []
+  let cursor = start
+  while (cursor < end) {
+    if (end - cursor < 8) {
+      throw new RunRecordError("CHECKS_NOT_PASSED", "The replayed MP4 hierarchy is truncated.", "repair-evidence")
     }
+    const declaredSize = readReplayUint32(value, cursor)
+    const type = Buffer.from(value.subarray(cursor + 4, cursor + 8)).toString("ascii")
+    let headerSize = 8
+    let size = declaredSize
+    if (declaredSize === 1) {
+      headerSize = 16
+      size = readReplayUint64(value, cursor + 8)
+    } else if (declaredSize === 0) {
+      size = end - cursor
+    }
+    if (!/^[\x20-\x7e]{4}$/.test(type) || size < headerSize || cursor + size > end) {
+      throw new RunRecordError("CHECKS_NOT_PASSED", "The replayed MP4 hierarchy is malformed.", "repair-evidence")
+    }
+    found.push({ type, contentStart: cursor + headerSize, end: cursor + size })
+    cursor += size
+  }
+  if (cursor !== end) {
+    throw new RunRecordError("CHECKS_NOT_PASSED", "The replayed MP4 hierarchy is malformed.", "repair-evidence")
   }
   return found
+}
+
+const requireReplayBox = (boxes: ReadonlyArray<ReplayMp4Box>, type: string): ReplayMp4Box => {
+  const box = boxes.find((candidate) => candidate.type === type)
+  if (box === undefined) {
+    throw new RunRecordError("CHECKS_NOT_PASSED", `The replayed MP4 is missing its ${type} box.`, "repair-evidence")
+  }
+  return box
+}
+
+const validReplaySampleTable = (
+  value: Uint8Array,
+  stbl: ReplayMp4Box,
+  mediaData: ReadonlyArray<ReplayMp4Box>,
+  handler: string,
+): boolean => {
+  const children = replayBoxes(value, stbl.contentStart, stbl.end)
+  const stsd = children.find((box) => box.type === "stsd")
+  const stts = children.find((box) => box.type === "stts")
+  const stsc = children.find((box) => box.type === "stsc")
+  const stsz = children.find((box) => box.type === "stsz")
+  const offsets = children.find((box) => box.type === "stco" || box.type === "co64")
+  if (
+    stsd === undefined || stts === undefined || stsc === undefined || stsz === undefined || offsets === undefined ||
+    stsd.contentStart + 16 > stsd.end || stts.contentStart + 8 > stts.end ||
+    stsc.contentStart + 8 > stsc.end || stsz.contentStart + 12 > stsz.end ||
+    offsets.contentStart + 12 > offsets.end
+  ) return false
+  const descriptionCount = readReplayUint32(value, stsd.contentStart + 4)
+  const timingCount = readReplayUint32(value, stts.contentStart + 4)
+  const chunkMapCount = readReplayUint32(value, stsc.contentStart + 4)
+  const offsetCount = readReplayUint32(value, offsets.contentStart + 4)
+  const offsetWidth = offsets.type === "co64" ? 8 : 4
+  if (
+    descriptionCount < 1 || timingCount < 1 || chunkMapCount < 1 || offsetCount < 1 ||
+    stts.contentStart + 8 + timingCount * 8 > stts.end ||
+    stsc.contentStart + 8 + chunkMapCount * 12 > stsc.end ||
+    offsets.contentStart + 8 + offsetCount * offsetWidth > offsets.end
+  ) return false
+  const sampleEntrySize = readReplayUint32(value, stsd.contentStart + 8)
+  if (sampleEntrySize < 8 || stsd.contentStart + 8 + sampleEntrySize > stsd.end) return false
+  const codec = Buffer.from(value.subarray(stsd.contentStart + 12, stsd.contentStart + 16)).toString("ascii")
+  if (
+    (handler === "vide" && !/^(?:avc1|avc3|hvc1|hev1|av01|vp09|mp4v)$/.test(codec)) ||
+    (handler === "soun" && !/^(?:mp4a|ac-3|ec-3|Opus)$/.test(codec)) ||
+    (handler !== "vide" && handler !== "soun")
+  ) return false
+  const sampleSize = readReplayUint32(value, stsz.contentStart + 4)
+  const sampleCount = readReplayUint32(value, stsz.contentStart + 8)
+  if (sampleCount < 1) return false
+  let sampleBytes = sampleSize * sampleCount
+  if (sampleSize === 0) {
+    if (stsz.contentStart + 12 + sampleCount * 4 > stsz.end) return false
+    sampleBytes = 0
+    for (let index = 0; index < sampleCount; index += 1) {
+      sampleBytes += readReplayUint32(value, stsz.contentStart + 12 + index * 4)
+    }
+  }
+  const chunkOffsets = Array.from({ length: offsetCount }, (_, index) => offsetWidth === 8
+    ? readReplayUint64(value, offsets.contentStart + 8 + index * offsetWidth)
+    : readReplayUint32(value, offsets.contentStart + 8 + index * offsetWidth))
+  const totalMediaBytes = mediaData.reduce((total, box) => total + box.end - box.contentStart, 0)
+  return chunkOffsets.every((offset) => mediaData.some((box) => offset >= box.contentStart && offset < box.end)) &&
+    Number.isSafeInteger(sampleBytes) && sampleBytes > 0 && sampleBytes <= totalMediaBytes
 }
 
 const inspectVideoForReplay = (
   value: Uint8Array,
 ): Readonly<{ width: number; height: number; durationSeconds: number; hasAudio: boolean }> => {
-  if (value.length < 12 || Buffer.from(value.subarray(4, 8)).toString("ascii") !== "ftyp") {
-    throw new RunRecordError("CHECKS_NOT_PASSED", "The replayed output is not an MP4 container.", "repair-evidence")
+  const topLevel = replayBoxes(value)
+  requireReplayBox(topLevel, "ftyp")
+  const moov = requireReplayBox(topLevel, "moov")
+  const mediaData = topLevel.filter((box) => box.type === "mdat" && box.end > box.contentStart)
+  if (mediaData.length === 0) {
+    throw new RunRecordError("CHECKS_NOT_PASSED", "The replayed MP4 has no media data.", "repair-evidence")
   }
-  const mvhd = replayBoxes(value, "mvhd")[0]
-  const tkhd = replayBoxes(value, "tkhd")[0]
-  if (mvhd === undefined || tkhd === undefined || value[mvhd.start + 8] !== 0) {
-    throw new RunRecordError("CHECKS_NOT_PASSED", "The replayed MP4 timing or track is malformed.", "repair-evidence")
+  const movie = replayBoxes(value, moov.contentStart, moov.end)
+  const mvhd = requireReplayBox(movie, "mvhd")
+  const version = value[mvhd.contentStart]
+  if (
+    (version === 0 && mvhd.contentStart + 20 > mvhd.end) ||
+    (version === 1 && mvhd.contentStart + 32 > mvhd.end)
+  ) {
+    throw new RunRecordError("CHECKS_NOT_PASSED", "The replayed MP4 movie timing is truncated.", "repair-evidence")
   }
-  const timescale = readReplayUint32(value, mvhd.start + 20)
-  const duration = readReplayUint32(value, mvhd.start + 24)
-  const width = readReplayUint32(value, tkhd.start + tkhd.size - 8) / 65536
-  const height = readReplayUint32(value, tkhd.start + tkhd.size - 4) / 65536
+  const timescale = version === 0
+    ? readReplayUint32(value, mvhd.contentStart + 12)
+    : version === 1
+      ? readReplayUint32(value, mvhd.contentStart + 20)
+      : 0
+  const duration = version === 0
+    ? readReplayUint32(value, mvhd.contentStart + 16)
+    : version === 1
+      ? readReplayUint64(value, mvhd.contentStart + 24)
+      : 0
+  let videoTrack: Readonly<{ width: number; height: number }> | undefined
+  let hasAudio = false
+  for (const track of movie.filter((box) => box.type === "trak")) {
+    const trackChildren = replayBoxes(value, track.contentStart, track.end)
+    const tkhd = requireReplayBox(trackChildren, "tkhd")
+    const mdia = requireReplayBox(trackChildren, "mdia")
+    const mediaChildren = replayBoxes(value, mdia.contentStart, mdia.end)
+    const hdlr = requireReplayBox(mediaChildren, "hdlr")
+    const minf = requireReplayBox(mediaChildren, "minf")
+    if (hdlr.contentStart + 12 > hdlr.end || tkhd.end - tkhd.contentStart < 8) {
+      throw new RunRecordError("CHECKS_NOT_PASSED", "The replayed MP4 track metadata is truncated.", "repair-evidence")
+    }
+    const handler = Buffer.from(value.subarray(hdlr.contentStart + 8, hdlr.contentStart + 12)).toString("ascii")
+    const stbl = requireReplayBox(replayBoxes(value, minf.contentStart, minf.end), "stbl")
+    if (!validReplaySampleTable(value, stbl, mediaData, handler)) continue
+    if (handler === "vide") {
+      videoTrack = {
+        width: readReplayUint32(value, tkhd.end - 8) / 65_536,
+        height: readReplayUint32(value, tkhd.end - 4) / 65_536,
+      }
+    } else if (handler === "soun") {
+      hasAudio = true
+    }
+  }
+  if (videoTrack === undefined) {
+    throw new RunRecordError("CHECKS_NOT_PASSED", "The replayed MP4 has no structurally valid video sample track.", "repair-evidence")
+  }
+  const { width, height } = videoTrack
   if (
     timescale === 0 || duration === 0 ||
     !Number.isSafeInteger(width) || width < 1 ||
@@ -529,8 +673,6 @@ const inspectVideoForReplay = (
   ) {
     throw new RunRecordError("CHECKS_NOT_PASSED", "The replayed MP4 dimensions or duration are invalid.", "repair-evidence")
   }
-  const hasAudio = replayBoxes(value, "hdlr").some((box) =>
-    box.size >= 20 && Buffer.from(value.subarray(box.start + 16, box.start + 20)).toString("ascii") === "soun")
   return { width, height, durationSeconds: duration / timescale, hasAudio }
 }
 
@@ -1453,6 +1595,7 @@ export const recordOperation = (
         !Number.isSafeInteger(operation.completedCount) ||
         operation.completedCount !== current.maximumCount ||
         operation.outputs.length !== operation.completedCount ||
+        (operation.cost.state !== "actual" && operation.cost.state !== "estimated-only" && operation.cost.state !== "unknown") ||
         (operation.cost.state !== "actual" && operation.cost.actualCostUsd !== undefined) ||
         (operation.cost.state === "actual" &&
           (operation.cost.actualCostUsd === undefined || !/^(?:0|[1-9]\d*)\.\d{2,6}$/.test(operation.cost.actualCostUsd)))

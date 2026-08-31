@@ -29,6 +29,7 @@ import {
   record,
   reserve,
   type MemoryRunRecordHarness,
+  type RecordOperation,
   type RunRecordClockService,
   type RunLink,
   type RunRecordStoreService,
@@ -70,11 +71,16 @@ const plannedRun = async (linkedRun?: RunLink, requestedCount = 1): Promise<Plan
   )
 }
 
-const plannedSeedanceRun = async (): Promise<Readonly<{
+const plannedSeedanceRun = async (requestedCount = 1): Promise<Readonly<{
   planned: PlannedRun
   body: Uint8Array
 }>> => {
-  const fixture = makeFixture("seedance-video")
+  const fixture = makeFixture("seedance-video", {
+    objective: (objective) => {
+      objective.requestedCount = requestedCount
+      if (requestedCount > 1) objective.budgetCeilingUsd = "0.50"
+    },
+  })
   const planned = await Effect.runPromise(
     compilePlannedRun(fixture.documents).pipe(
       Effect.provideService(ApplicationFiles, fixture.files),
@@ -84,6 +90,21 @@ const plannedSeedanceRun = async (): Promise<Readonly<{
   )
   const body = (await Effect.runPromise(fixture.files.read("references/neutral.mp4"))).bytes
   return { planned, body }
+}
+
+const markerOnlyMp4 = (): Uint8Array => {
+  const body = Buffer.alloc(76)
+  body.writeUInt32BE(12, 0)
+  body.write("ftyp", 4, "ascii")
+  body.writeUInt32BE(28, 12)
+  body.write("mvhd", 16, "ascii")
+  body.writeUInt32BE(1_000, 32)
+  body.writeUInt32BE(200, 36)
+  body.writeUInt32BE(36, 40)
+  body.write("tkhd", 44, "ascii")
+  body.writeUInt32BE(64 * 65_536, 68)
+  body.writeUInt32BE(48 * 65_536, 72)
+  return body
 }
 
 const raster = (pixels: ReadonlyArray<number>): Uint8Array =>
@@ -588,6 +609,155 @@ test("persists one Seedance job, polls only that identity, and records verified 
     },
   }))))
   assert.equal(wrongJob.code, "ILLEGAL_TRANSITION")
+})
+
+test("video checks must cover every persisted Seedance output exactly once", async () => {
+  const { planned, body: videoBody } = await plannedSeedanceRun(2)
+  const memory = await memoryHarness()
+  const provide = <Success, Error>(
+    effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
+  ): Effect.Effect<Success, Error> => effect.pipe(
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, clock),
+  )
+  const reserved = await Effect.runPromise(provide(reserve(reservationFor(planned))))
+  await Effect.runPromise(provide(record({
+    _tag: "SubmissionMayHaveStarted",
+    runId: reserved.runId,
+    operationId: "seedance-two-submit-marker",
+  })))
+  const submissionBody = Buffer.from('{"job_id":"seedance-job-two","status":"submitted"}')
+  await Effect.runPromise(provide(record({
+    _tag: "CommitProviderEvidence",
+    runId: reserved.runId,
+    operationId: "seedance-two-submission-evidence",
+    evidence: {
+      mediaType: "application/json",
+      body: submissionBody,
+      sha256: createHash("sha256").update(submissionBody).digest("hex"),
+    },
+  })))
+  const badBody = markerOnlyMp4()
+  const completedBody = Buffer.from('{"job_id":"seedance-job-two","status":"completed"}')
+  const goodSha256 = createHash("sha256").update(videoBody).digest("hex")
+  const badSha256 = createHash("sha256").update(badBody).digest("hex")
+  await Effect.runPromise(provide(record({
+    _tag: "CommitSeedancePoll",
+    runId: reserved.runId,
+    operationId: "seedance-two-complete",
+    jobId: "seedance-job-two",
+    status: "completed",
+    evidence: {
+      mediaType: "application/json",
+      body: completedBody,
+      sha256: createHash("sha256").update(completedBody).digest("hex"),
+    },
+    outputs: [
+      {
+        applicationPath: "outputs/good.mp4",
+        mediaType: "video/mp4",
+        body: videoBody,
+        sha256: goodSha256,
+      },
+      {
+        applicationPath: "outputs/bad.mp4",
+        mediaType: "video/mp4",
+        body: badBody,
+        sha256: badSha256,
+      },
+    ],
+    completedCount: 2,
+    cost: { state: "estimated-only" },
+  })))
+  const oneOutputReport = await Effect.runPromise(verifyVideo({
+    outputs: [{
+      applicationPath: "outputs/good.mp4",
+      mediaType: "video/mp4",
+      body: videoBody,
+      sha256: goodSha256,
+    }],
+    expected: planned.request.videoPlan!.expectedMedia,
+    requestedCount: 1,
+    completedCount: 1,
+    cost: {
+      state: "estimated-only",
+      estimatedMaximumCostUsd: planned.request.estimatedMaximumCostUsd,
+    },
+  }))
+  const duplicatedReport = {
+    ...oneOutputReport,
+    outputs: [oneOutputReport.outputs[0]!, oneOutputReport.outputs[0]!],
+    requestedCount: 2,
+    completedCount: 2,
+  }
+  const failure = await Effect.runPromise(Effect.flip(provide(record({
+    _tag: "CommitVideoChecks",
+    runId: reserved.runId,
+    operationId: "seedance-two-video-checks",
+    jobId: "seedance-job-two",
+    report: duplicatedReport,
+  }))))
+
+  assert.equal(failure.code, "CHECKS_NOT_PASSED")
+  const reloaded = await Effect.runPromise(load(reserved.runId).pipe(Effect.provide(memory.layer)))
+  assert.equal(reloaded.phase, "generated_outputs_received")
+  assert.equal(reloaded.classification, undefined)
+})
+
+test("invalid runtime Seedance cost state is rejected before any poll evidence is written", async () => {
+  const { planned, body: videoBody } = await plannedSeedanceRun()
+  const memory = await memoryHarness()
+  const provide = <Success, Error>(
+    effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
+  ): Effect.Effect<Success, Error> => effect.pipe(
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, clock),
+  )
+  const reserved = await Effect.runPromise(provide(reserve(reservationFor(planned))))
+  await Effect.runPromise(provide(record({
+    _tag: "SubmissionMayHaveStarted",
+    runId: reserved.runId,
+    operationId: "seedance-invalid-cost-submit-marker",
+  })))
+  const submissionBody = Buffer.from('{"job_id":"seedance-invalid-cost","status":"submitted"}')
+  await Effect.runPromise(provide(record({
+    _tag: "CommitProviderEvidence",
+    runId: reserved.runId,
+    operationId: "seedance-invalid-cost-submission",
+    evidence: {
+      mediaType: "application/json",
+      body: submissionBody,
+      sha256: createHash("sha256").update(submissionBody).digest("hex"),
+    },
+  })))
+  const completedBody = Buffer.from('{"job_id":"seedance-invalid-cost","status":"completed"}')
+  const forgedOperation = {
+    _tag: "CommitSeedancePoll",
+    runId: reserved.runId,
+    operationId: "seedance-invalid-cost-complete",
+    jobId: "seedance-invalid-cost",
+    status: "completed",
+    evidence: {
+      mediaType: "application/json",
+      body: completedBody,
+      sha256: createHash("sha256").update(completedBody).digest("hex"),
+    },
+    outputs: [{
+      applicationPath: "outputs/seedance-result.mp4",
+      mediaType: "video/mp4",
+      body: videoBody,
+      sha256: createHash("sha256").update(videoBody).digest("hex"),
+    }],
+    completedCount: 1,
+    cost: { state: "forged-runtime-state" },
+  } as unknown as RecordOperation
+  const failure = await Effect.runPromise(Effect.flip(provide(record(forgedOperation))))
+
+  assert.equal(failure.code, "RESERVATION_OUTSIDE_PLAN")
+  const reloaded = await Effect.runPromise(load(reserved.runId).pipe(Effect.provide(memory.layer)))
+  assert.equal(reloaded.phase, "provider_evidence_received")
+  assert.equal(reloaded.pollCount, undefined)
+  assert.deepEqual(reloaded.evidence.map((item) => item.applicationPath), ["provider-response.json"])
 })
 
 test("a definitive pre-submit failure remains immutable and only supports a proved linked Run", async () => {

@@ -15,45 +15,183 @@ const readUint32 = (bytes: Uint8Array, offset: number): number => {
   return new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getUint32(offset)
 }
 
-const locateBoxes = (
+const readUint64 = (bytes: Uint8Array, offset: number): number => {
+  if (offset < 0 || offset + 8 > bytes.byteLength) {
+    throw new VideoVerificationError("VIDEO_MEDIA_INVALID", "The MP4 box is truncated.")
+  }
+  const value = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength).getBigUint64(offset)
+  if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new VideoVerificationError("VIDEO_MEDIA_INVALID", "The MP4 box is too large to inspect safely.")
+  }
+  return Number(value)
+}
+
+type Mp4Box = Readonly<{
+  type: string
+  start: number
+  contentStart: number
+  end: number
+}>
+
+const parseBoxes = (
   bytes: Uint8Array,
-  kind: string,
-): ReadonlyArray<Readonly<{ start: number; size: number }>> => {
-  const wanted = Buffer.from(kind, "ascii")
-  const found: Array<Readonly<{ start: number; size: number }>> = []
-  for (let index = 4; index <= bytes.length - 4; index += 1) {
-    if (
-      bytes[index] === wanted[0] &&
-      bytes[index + 1] === wanted[1] &&
-      bytes[index + 2] === wanted[2] &&
-      bytes[index + 3] === wanted[3]
-    ) {
-      const start = index - 4
-      const size = readUint32(bytes, start)
-      if (size >= 8 && start + size <= bytes.length) found.push({ start, size })
+  start = 0,
+  end = bytes.byteLength,
+): ReadonlyArray<Mp4Box> => {
+  const boxes: Array<Mp4Box> = []
+  let cursor = start
+  while (cursor < end) {
+    if (end - cursor < 8) {
+      throw new VideoVerificationError("VIDEO_MEDIA_INVALID", "The MP4 box hierarchy is truncated.")
+    }
+    const declaredSize = readUint32(bytes, cursor)
+    const type = Buffer.from(bytes.subarray(cursor + 4, cursor + 8)).toString("ascii")
+    let headerSize = 8
+    let size = declaredSize
+    if (declaredSize === 1) {
+      headerSize = 16
+      size = readUint64(bytes, cursor + 8)
+    } else if (declaredSize === 0) {
+      size = end - cursor
+    }
+    if (!/^[\x20-\x7e]{4}$/.test(type) || size < headerSize || cursor + size > end) {
+      throw new VideoVerificationError("VIDEO_MEDIA_INVALID", "The MP4 box hierarchy is malformed.")
+    }
+    boxes.push({ type, start: cursor, contentStart: cursor + headerSize, end: cursor + size })
+    cursor += size
+  }
+  if (cursor !== end) {
+    throw new VideoVerificationError("VIDEO_MEDIA_INVALID", "The MP4 box hierarchy is malformed.")
+  }
+  return boxes
+}
+
+const requireBox = (boxes: ReadonlyArray<Mp4Box>, type: string): Mp4Box => {
+  const box = boxes.find((candidate) => candidate.type === type)
+  if (box === undefined) {
+    throw new VideoVerificationError("VIDEO_MEDIA_INVALID", `The MP4 is missing its ${type} box.`)
+  }
+  return box
+}
+
+const fullBoxEntryCount = (bytes: Uint8Array, box: Mp4Box, relativeOffset = 4): number =>
+  readUint32(bytes, box.contentStart + relativeOffset)
+
+const validSampleTable = (
+  bytes: Uint8Array,
+  stbl: Mp4Box,
+  mediaData: ReadonlyArray<Mp4Box>,
+  handler: string,
+): boolean => {
+  const children = parseBoxes(bytes, stbl.contentStart, stbl.end)
+  const stsd = children.find((box) => box.type === "stsd")
+  const stts = children.find((box) => box.type === "stts")
+  const stsc = children.find((box) => box.type === "stsc")
+  const stsz = children.find((box) => box.type === "stsz")
+  const offsets = children.find((box) => box.type === "stco" || box.type === "co64")
+  if (
+    stsd === undefined || stts === undefined || stsc === undefined || stsz === undefined || offsets === undefined ||
+    stsd.contentStart + 16 > stsd.end || stts.contentStart + 8 > stts.end ||
+    stsc.contentStart + 8 > stsc.end || stsz.contentStart + 12 > stsz.end ||
+    offsets.contentStart + 12 > offsets.end
+  ) return false
+  const descriptionCount = fullBoxEntryCount(bytes, stsd)
+  const timingCount = fullBoxEntryCount(bytes, stts)
+  const chunkMapCount = fullBoxEntryCount(bytes, stsc)
+  const offsetCount = fullBoxEntryCount(bytes, offsets)
+  const offsetWidth = offsets.type === "co64" ? 8 : 4
+  if (
+    descriptionCount < 1 || timingCount < 1 || chunkMapCount < 1 || offsetCount < 1 ||
+    stts.contentStart + 8 + timingCount * 8 > stts.end ||
+    stsc.contentStart + 8 + chunkMapCount * 12 > stsc.end ||
+    offsets.contentStart + 8 + offsetCount * offsetWidth > offsets.end
+  ) return false
+  const sampleEntrySize = readUint32(bytes, stsd.contentStart + 8)
+  if (sampleEntrySize < 8 || stsd.contentStart + 8 + sampleEntrySize > stsd.end) return false
+  const codec = Buffer.from(bytes.subarray(stsd.contentStart + 12, stsd.contentStart + 16)).toString("ascii")
+  if (
+    (handler === "vide" && !/^(?:avc1|avc3|hvc1|hev1|av01|vp09|mp4v)$/.test(codec)) ||
+    (handler === "soun" && !/^(?:mp4a|ac-3|ec-3|Opus)$/.test(codec)) ||
+    (handler !== "vide" && handler !== "soun")
+  ) return false
+  const sampleSize = readUint32(bytes, stsz.contentStart + 4)
+  const sampleCount = readUint32(bytes, stsz.contentStart + 8)
+  if (sampleCount < 1) return false
+  let sampleBytes = sampleSize * sampleCount
+  if (sampleSize === 0) {
+    if (stsz.contentStart + 12 + sampleCount * 4 > stsz.end) return false
+    sampleBytes = 0
+    for (let index = 0; index < sampleCount; index += 1) {
+      sampleBytes += readUint32(bytes, stsz.contentStart + 12 + index * 4)
     }
   }
-  return found
+  const chunkOffsets = Array.from({ length: offsetCount }, (_, index) => offsetWidth === 8
+    ? readUint64(bytes, offsets.contentStart + 8 + index * offsetWidth)
+    : readUint32(bytes, offsets.contentStart + 8 + index * offsetWidth))
+  const everyChunkIsInMedia = chunkOffsets.every((offset) =>
+    mediaData.some((box) => offset >= box.contentStart && offset < box.end))
+  const totalMediaBytes = mediaData.reduce((total, box) => total + box.end - box.contentStart, 0)
+  return Number.isSafeInteger(sampleBytes) && everyChunkIsInMedia && sampleBytes > 0 && sampleBytes <= totalMediaBytes
 }
 
 const inspectMp4 = (
   bytes: Uint8Array,
 ): Readonly<{ width: number; height: number; durationSeconds: number; hasAudio: boolean }> => {
+  const topLevel = parseBoxes(bytes)
+  requireBox(topLevel, "ftyp")
+  const moov = requireBox(topLevel, "moov")
+  const mediaData = topLevel.filter((box) => box.type === "mdat" && box.end > box.contentStart)
+  if (mediaData.length === 0) {
+    throw new VideoVerificationError("VIDEO_MEDIA_INVALID", "The MP4 has no media data.")
+  }
+  const movie = parseBoxes(bytes, moov.contentStart, moov.end)
+  const mvhd = requireBox(movie, "mvhd")
+  const version = bytes[mvhd.contentStart]
   if (
-    bytes.length < 12 ||
-    Buffer.from(bytes.subarray(4, 8)).toString("ascii") !== "ftyp"
+    (version === 0 && mvhd.contentStart + 20 > mvhd.end) ||
+    (version === 1 && mvhd.contentStart + 32 > mvhd.end)
   ) {
-    throw new VideoVerificationError("VIDEO_MEDIA_INVALID", "The output is not a recognized MP4 container.")
+    throw new VideoVerificationError("VIDEO_MEDIA_INVALID", "The MP4 movie timing is truncated.")
   }
-  const mvhd = locateBoxes(bytes, "mvhd")[0]
-  const tkhd = locateBoxes(bytes, "tkhd")[0]
-  if (mvhd === undefined || tkhd === undefined || bytes[mvhd.start + 8] !== 0) {
-    throw new VideoVerificationError("VIDEO_MEDIA_INVALID", "The MP4 timing or video track is malformed.")
+  const timescale = version === 0
+    ? readUint32(bytes, mvhd.contentStart + 12)
+    : version === 1
+      ? readUint32(bytes, mvhd.contentStart + 20)
+      : 0
+  const duration = version === 0
+    ? readUint32(bytes, mvhd.contentStart + 16)
+    : version === 1
+      ? readUint64(bytes, mvhd.contentStart + 24)
+      : 0
+  let videoTrack: Readonly<{ width: number; height: number }> | undefined
+  let hasAudio = false
+  for (const track of movie.filter((box) => box.type === "trak")) {
+    const trackChildren = parseBoxes(bytes, track.contentStart, track.end)
+    const tkhd = requireBox(trackChildren, "tkhd")
+    const mdia = requireBox(trackChildren, "mdia")
+    const mediaChildren = parseBoxes(bytes, mdia.contentStart, mdia.end)
+    const hdlr = requireBox(mediaChildren, "hdlr")
+    const minf = requireBox(mediaChildren, "minf")
+    if (hdlr.contentStart + 12 > hdlr.end || tkhd.end - tkhd.contentStart < 8) {
+      throw new VideoVerificationError("VIDEO_MEDIA_INVALID", "The MP4 track metadata is truncated.")
+    }
+    const handler = Buffer.from(bytes.subarray(hdlr.contentStart + 8, hdlr.contentStart + 12)).toString("ascii")
+    const mediaInformation = parseBoxes(bytes, minf.contentStart, minf.end)
+    const stbl = requireBox(mediaInformation, "stbl")
+    if (!validSampleTable(bytes, stbl, mediaData, handler)) continue
+    if (handler === "vide") {
+      videoTrack = {
+        width: readUint32(bytes, tkhd.end - 8) / 65_536,
+        height: readUint32(bytes, tkhd.end - 4) / 65_536,
+      }
+    } else if (handler === "soun") {
+      hasAudio = true
+    }
   }
-  const timescale = readUint32(bytes, mvhd.start + 20)
-  const duration = readUint32(bytes, mvhd.start + 24)
-  const width = readUint32(bytes, tkhd.start + tkhd.size - 8) / 65536
-  const height = readUint32(bytes, tkhd.start + tkhd.size - 4) / 65536
+  if (videoTrack === undefined) {
+    throw new VideoVerificationError("VIDEO_MEDIA_INVALID", "The MP4 has no structurally valid video sample track.")
+  }
+  const { width, height } = videoTrack
   if (
     timescale === 0 || duration === 0 ||
     !Number.isSafeInteger(width) || width < 1 ||
@@ -61,8 +199,6 @@ const inspectMp4 = (
   ) {
     throw new VideoVerificationError("VIDEO_MEDIA_INVALID", "The MP4 dimensions or duration are invalid.")
   }
-  const hasAudio = locateBoxes(bytes, "hdlr").some((box) =>
-    box.size >= 20 && Buffer.from(bytes.subarray(box.start + 16, box.start + 20)).toString("ascii") === "soun")
   return { width, height, durationSeconds: duration / timescale, hasAudio }
 }
 
@@ -85,6 +221,7 @@ export const verifyVideoArtifact = (
       !Number.isSafeInteger(input.expected.height) || input.expected.height < 1 ||
       !Number.isFinite(input.expected.durationSeconds) || input.expected.durationSeconds <= 0 ||
       typeof input.expected.audioExpected !== "boolean" ||
+      (input.cost.state !== "actual" && input.cost.state !== "estimated-only" && input.cost.state !== "unknown") ||
       !validMoney(input.cost.estimatedMaximumCostUsd) ||
       (input.cost.state === "actual" &&
         (input.cost.actualCostUsd === undefined || !validMoney(input.cost.actualCostUsd))) ||

@@ -5,7 +5,7 @@ import test from "node:test"
 import { Effect } from "effect"
 
 import { makeFixture } from "../../tests/control-plane-fixture.js"
-import { verifyVideo } from "./index.js"
+import { verifyVideo, type VerifyVideoInput } from "./index.js"
 
 const hash = (bytes: Uint8Array): string =>
   createHash("sha256").update(bytes).digest("hex")
@@ -13,6 +13,21 @@ const hash = (bytes: Uint8Array): string =>
 const fixtureVideo = async (): Promise<Uint8Array> => {
   const fixture = makeFixture("seedance-video")
   return (await Effect.runPromise(fixture.files.read("references/neutral.mp4"))).bytes
+}
+
+const markerOnlyMp4 = (): Uint8Array => {
+  const body = Buffer.alloc(76)
+  body.writeUInt32BE(12, 0)
+  body.write("ftyp", 4, "ascii")
+  body.writeUInt32BE(28, 12)
+  body.write("mvhd", 16, "ascii")
+  body.writeUInt32BE(1_000, 32)
+  body.writeUInt32BE(200, 36)
+  body.writeUInt32BE(36, 40)
+  body.write("tkhd", 44, "ascii")
+  body.writeUInt32BE(64 * 65_536, 68)
+  body.writeUInt32BE(48 * 65_536, 72)
+  return body
 }
 
 test("verifies exact Seedance MP4 properties, counts, audio expectation, hash, and cost state", async () => {
@@ -83,4 +98,57 @@ test("catches an independently mutated bad-media fixture", async () => {
   })))
 
   assert.equal(failure.code, "VIDEO_MEDIA_INVALID")
+})
+
+test("rejects marker-shaped bytes without a structural playable MP4 track", async () => {
+  const body = markerOnlyMp4()
+  const failure = await Effect.runPromise(Effect.flip(verifyVideo({
+    outputs: [{
+      applicationPath: "outputs/marker-only.mp4",
+      mediaType: "video/mp4",
+      body,
+      sha256: hash(body),
+    }],
+    expected: {
+      width: 64,
+      height: 48,
+      durationSeconds: 0.2,
+      audioExpected: false,
+    },
+    requestedCount: 1,
+    completedCount: 1,
+    cost: {
+      state: "unknown",
+      estimatedMaximumCostUsd: "0.20",
+    },
+  })))
+
+  assert.equal(failure.code, "VIDEO_MEDIA_INVALID")
+})
+
+test("rejects an invalid runtime cost state as typed evidence failure", async () => {
+  const body = await fixtureVideo()
+  const forged = {
+    outputs: [{
+      applicationPath: "outputs/seedance-result.mp4",
+      mediaType: "video/mp4",
+      body,
+      sha256: hash(body),
+    }],
+    expected: {
+      width: 64,
+      height: 48,
+      durationSeconds: 0.2,
+      audioExpected: false,
+    },
+    requestedCount: 1,
+    completedCount: 1,
+    cost: {
+      state: "forged-runtime-state",
+      estimatedMaximumCostUsd: "0.20",
+    },
+  } as unknown as VerifyVideoInput
+  const failure = await Effect.runPromise(Effect.flip(verifyVideo(forged)))
+
+  assert.equal(failure.code, "VIDEO_EVIDENCE_INVALID")
 })

@@ -12,6 +12,21 @@ import {
 } from "./index.js"
 import { makeFixture, sha256 } from "../../tests/control-plane-fixture.js"
 
+const markerOnlyMp4 = (): Uint8Array => {
+  const body = Buffer.alloc(76)
+  body.writeUInt32BE(12, 0)
+  body.write("ftyp", 4, "ascii")
+  body.writeUInt32BE(28, 12)
+  body.write("mvhd", 16, "ascii")
+  body.writeUInt32BE(1_000, 32)
+  body.writeUInt32BE(200, 36)
+  body.writeUInt32BE(36, 40)
+  body.write("tkhd", 44, "ascii")
+  body.writeUInt32BE(64 * 65_536, 68)
+  body.writeUInt32BE(48 * 65_536, 72)
+  return body
+}
+
 test("refuses a PNG-like prefix without the complete signature and IHDR structure", async () => {
   const forged = Buffer.alloc(24)
   forged.set([0x89, 0x50, 0x4e, 0x47], 0)
@@ -19,6 +34,16 @@ test("refuses a PNG-like prefix without the complete signature and IHDR structur
   forged.writeUInt32BE(16, 20)
   const result = await Effect.runPromiseExit(byteMediaInspector.inspect({
     applicationPath: "references/forged.png",
+    bytes: forged,
+    sha256: sha256(forged),
+  }))
+  assert.equal(result._tag, "Failure")
+})
+
+test("refuses MP4 marker bytes without a structural playable video track", async () => {
+  const forged = markerOnlyMp4()
+  const result = await Effect.runPromiseExit(byteMediaInspector.inspect({
+    applicationPath: "references/forged.mp4",
     bytes: forged,
     sha256: sha256(forged),
   }))
