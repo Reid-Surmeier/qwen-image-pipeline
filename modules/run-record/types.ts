@@ -5,6 +5,27 @@ import type { RunRecordError } from "./errors.js"
 
 export type RunLink = LinkedRunRelationship
 
+export type CorrectionOwner =
+  | "Reference Planning"
+  | "Generation"
+  | "Assembly"
+  | "Verification"
+  | "application decision owner"
+
+export type ClassifiedFailureClass =
+  | "ambiguous_provider_timeout"
+  | "malformed_provider_response"
+  | "output_count_mismatch"
+  | "post_submit_persistence_failure"
+  | "budget_exhausted"
+  | "repeated_bad_output"
+
+export type RunFinding = Readonly<{
+  class: string
+  message: string
+  correctionOwner: CorrectionOwner
+}>
+
 export type ReserveRun = Readonly<{
   plannedRun: PlannedRun
   payloadSha256: string
@@ -157,10 +178,21 @@ export type RecordOperation =
       operationId: string
       failure: Readonly<{ class: string; message: string }>
     }>
+  | Readonly<{
+      _tag: "ClassifyFailure"
+      runId: string
+      operationId: string
+      failure: Readonly<{
+        class: ClassifiedFailureClass
+        message: string
+      }>
+    }>
 
 export type RunRecordPhase =
   | "reserved"
   | "definitive_pre_submit_failure"
+  | "blocked"
+  | "failed"
   | "submission_may_have_started"
   | "provider_evidence_received"
   | "generated_outputs_received"
@@ -177,6 +209,8 @@ export type RunRecordView = Readonly<{
   estimatedMaximumCostUsd: string
   maximumCount: number
   maximumSpendUsd: string
+  maximumCorrectionRuns: number
+  correctionDepth: number
   phase: RunRecordPhase
   chainHeadSha256: string
   spendState: "not_spent" | "possibly_spent" | "unknown"
@@ -192,7 +226,8 @@ export type RunRecordView = Readonly<{
   assemblyOutputSha256?: string
   assemblyReportSha256?: string
   checksSha256?: string
-  classification?: "verified_candidate"
+  classification?: "verified_candidate" | "human_decision_required" | "blocked" | "failed"
+  finding?: RunFinding
   providerJobId?: string
   pollCount?: number
   completedCount?: number

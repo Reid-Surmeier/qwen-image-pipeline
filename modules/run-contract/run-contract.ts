@@ -434,6 +434,13 @@ export const compileDocuments = (
         throw new RunContractError("UNSAFE_APPLICATION_PATH", "Project Contract paths must be safe application-relative paths.")
       }
       const requestedCount = numberField(objective, "requestedCount")
+      const maximumCorrectionRuns = numberField(contract, "maximumCorrectionRuns")
+      if (maximumCorrectionRuns < 0 || maximumCorrectionRuns > 10) {
+        throw new RunContractError(
+          "DOCUMENT_INVALID",
+          "maximumCorrectionRuns must be an integer from 0 through 10.",
+        )
+      }
       const maximumCount = Math.min(
         numberField(contract, "maximumCount"),
         numberField(procedure, "maximumCount"),
@@ -458,6 +465,7 @@ export const compileDocuments = (
         referenceRoots,
         outputRoot,
         requestedCount,
+        maximumCorrectionRuns,
         estimatedCost,
         objectiveBudget,
         linkedRun: decodeLinkedRun(objective),
@@ -514,6 +522,7 @@ export const compileDocuments = (
     requestedCount: decoded.requestedCount,
     estimatedMaximumCostUsd: formatCents(decoded.estimatedCost),
     budgetCeilingUsd: formatCents(decoded.objectiveBudget),
+    maximumCorrectionRuns: decoded.maximumCorrectionRuns,
     outputRoot: decoded.outputRoot,
     ...(decoded.linkedRun === undefined ? {} : { linkedRun: decoded.linkedRun }),
     ...(assemblyPlan === undefined ? {} : { assemblyPlan }),

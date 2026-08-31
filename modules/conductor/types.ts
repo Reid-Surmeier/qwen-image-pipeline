@@ -13,6 +13,25 @@ export type NormalView = Readonly<{
   humanDecision: string
 }>
 
+export type MachineOutcome =
+  | "verified_candidate"
+  | "human_decision_required"
+  | "blocked"
+  | "failed"
+
+export type CorrectionOwner =
+  | "Reference Planning"
+  | "Generation"
+  | "Assembly"
+  | "Verification"
+  | "application decision owner"
+
+export type OutcomeFinding = Readonly<{
+  code: string
+  message: string
+  correctionOwner: CorrectionOwner
+}>
+
 export type PlanDecision =
   | Readonly<{
       _tag: "Planned"
@@ -21,6 +40,8 @@ export type PlanDecision =
     }>
   | Readonly<{
       _tag: "Refused"
+      outcome: "blocked" | "failed"
+      finding: OutcomeFinding
       refusal: PlanningRefusal
       normalView: NormalView
     }>
@@ -45,6 +66,8 @@ export type AdvanceDecision =
     }>
   | Readonly<{
       _tag: "HumanDecisionRequired"
+      outcome: "human_decision_required"
+      finding: OutcomeFinding
       runId: string
       decision: Readonly<{
         kind: "donor-choice"
@@ -54,7 +77,24 @@ export type AdvanceDecision =
       diagnostics: RunRecordDiagnostics
     }>
   | Readonly<{
+      _tag: "Blocked"
+      outcome: "blocked"
+      runId: string
+      finding: OutcomeFinding
+      normalView: NormalView
+      diagnostics: RunRecordDiagnostics
+    }>
+  | Readonly<{
+      _tag: "Failed"
+      outcome: "failed"
+      runId: string
+      finding: OutcomeFinding
+      normalView: NormalView
+      diagnostics: RunRecordDiagnostics
+    }>
+  | Readonly<{
       _tag: "VerifiedCandidate"
+      outcome: "verified_candidate"
       runId: string
       candidate: Readonly<{
         applicationPath: `outputs/${string}`

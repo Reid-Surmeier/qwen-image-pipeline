@@ -81,8 +81,28 @@ An immutable, hash-identified Run Request that passed planning but has not reser
 _Avoid_: Attempt, submitted job
 
 **Linked Run**:
-A distinct Planned Run whose canonical Run Request names one parent Run and its exact definitive pre-submit failure event.
+A distinct Planned Run whose canonical Run Request names one parent Run and its exact definitive pre-submit failure event. It is permitted only when no submission started, changes material objective, reference, model, Procedure, or parameter evidence, and remains inside the Project Contract's fixed correction limit.
 _Avoid_: Retrying the same Planned Run, reservation-time parent override
+
+**Reconciliation**:
+Continuing only the already-recorded provider identity and durable evidence of one possibly-spent or unknown Run. Reconciliation may poll, recover, or finish persistence for that identity; it never authorizes another submission or a successor Run.
+_Avoid_: Retry, regenerate, submit again
+
+**Machine Outcome**:
+Exactly one of `verified_candidate`, `human_decision_required`, `blocked`, or `failed`, derived from replayable evidence rather than agent confidence.
+_Avoid_: Done, looks good, probably failed
+
+**Finding**:
+The evidence-backed reason for a non-success Machine Outcome, including its stable class, safe message, and one Correction Owner.
+_Avoid_: Raw provider exception, unowned error
+
+**Correction Owner**:
+Exactly one of Reference Planning, Generation, Assembly, Verification, or the application decision owner. It identifies where the evidence says correction belongs; it does not authorize spend or Approval.
+_Avoid_: Whoever is available, the agent
+
+**Approval**:
+The application owner's separate subjective acceptance of a Verified Candidate. No Machine Outcome, check result, or agent statement can create Approval.
+_Avoid_: Verified Candidate, tests passed
 
 **Normal View**:
 The plain-language account of the objective, evidence, next action, spend risk, and remaining human decision returned for every planning result.
@@ -111,6 +131,9 @@ _Avoid_: Retry token, persisted credential
 - One durable submission-may-have-started event may issue one in-process **Submission Permit**; replay issues none.
 - One Seedance **Submission Permit** may create one persisted provider job identity; every later advance polls only that identity and cannot submit another job.
 - A definitively failed pre-submit **Run Record** remains immutable and may be named by a distinct **Linked Run** whose relationship is fixed in its Run Request before reservation.
+- A **Linked Run** increments its replayed correction depth; a child cannot change the application or raise the inherited correction ceiling.
+- Possibly-spent or unknown work permits **Reconciliation** of its existing provider identity only. Ambiguity, malformed paid evidence, output-count mismatch, interrupted post-submit persistence, repeated bad output, and budget exhaustion never authorize another paid submission.
+- Every terminal result has one **Machine Outcome**. Every failure **Finding** names one **Correction Owner**, while **Approval** remains separate and human-owned.
 
 ## Example dialogue
 

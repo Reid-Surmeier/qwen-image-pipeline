@@ -92,11 +92,16 @@ const completedPollBody = (
   },
 }))
 
-const plannedRun = async (linkedRun?: RunLink, requestedCount = 1): Promise<PlannedRun> => {
+const plannedRun = async (
+  linkedRun?: RunLink,
+  requestedCount = 1,
+  summary?: string,
+): Promise<PlannedRun> => {
   const fixture = makeFixture("qwen-image", {
     objective: (objective) => {
       if (linkedRun !== undefined) objective.linkedRun = linkedRun
       objective.requestedCount = requestedCount
+      if (summary !== undefined) objective.summary = summary
       if (requestedCount > 1) objective.budgetCeilingUsd = "0.20"
     },
   })
@@ -1846,6 +1851,8 @@ test("a definitive pre-submit failure remains immutable and only supports a prov
   })))
   assert.equal(failed._tag, "Recorded")
   assert.equal(failed.view.phase, "definitive_pre_submit_failure")
+  assert.equal(failed.view.classification, "failed")
+  assert.equal(failed.view.finding?.correctionOwner, "Generation")
   assert.equal(failed.view.spendState, "not_spent")
   assert.equal(failed.view.retryState, "new-linked-run-only")
 
@@ -1855,12 +1862,28 @@ test("a definitive pre-submit failure remains immutable and only supports a prov
     relation: "retry-after-definitive-pre-submit-failure" as const,
   }
   const successorPlan = await plannedRun(linkedFrom)
-  const successor = await Effect.runPromise(provide(reserve(reservationFor(successorPlan))))
+  const unchanged = await Effect.runPromise(Effect.flip(
+    provide(reserve(reservationFor(successorPlan))),
+  ))
+  assert.equal(unchanged.code, "CORRECTION_NOT_MATERIAL")
+
+  const correctedPlan = await plannedRun(
+    linkedFrom,
+    1,
+    "Corrected objective after a definitive client initialization refusal.",
+  )
+  const successor = await Effect.runPromise(provide(reserve(reservationFor(correctedPlan))))
   assert.notEqual(successor.runId, original.runId)
   assert.deepEqual(successor.linkedFrom, linkedFrom)
   assert.equal(successor.phase, "reserved")
+  assert.equal(successor.correctionDepth, 1)
+  assert.equal(successor.maximumCorrectionRuns, 2)
 
-  const falseLinkPlan = await plannedRun({ ...linkedFrom, parentFailureEventSha256: "0".repeat(64) })
+  const falseLinkPlan = await plannedRun(
+    { ...linkedFrom, parentFailureEventSha256: "0".repeat(64) },
+    1,
+    "Different objective with a false parent event.",
+  )
   const falseLink = await Effect.runPromise(Effect.flip(
     provide(reserve(reservationFor(falseLinkPlan))),
   ))
@@ -1870,6 +1893,230 @@ test("a definitive pre-submit failure remains immutable and only supports a prov
     load(original.runId).pipe(Effect.provide(memory.layer)),
   )
   assert.deepEqual(originalAfter, failed.view)
+})
+
+test("definitive unspent failures permit only bounded, material correction Runs", async () => {
+  const memory = await memoryHarness()
+  const provide = <Success, Error>(
+    effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
+  ): Effect.Effect<Success, Error> => effect.pipe(
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, clock),
+  )
+  const failBeforeSubmission = async (planned: PlannedRun, suffix: string) => {
+    const reserved = await Effect.runPromise(provide(reserve(reservationFor(planned))))
+    const failed = await Effect.runPromise(provide(record({
+      _tag: "DefinitivePreSubmitFailure",
+      runId: reserved.runId,
+      operationId: `${suffix}-failure`,
+      failure: {
+        class: "client_initialization",
+        message: `Definitive unspent refusal ${suffix}.`,
+      },
+    })))
+    return failed.view
+  }
+
+  const parent = await failBeforeSubmission(await plannedRun(), "parent")
+  assert.equal(parent.correctionDepth, 0)
+  assert.equal(parent.maximumCorrectionRuns, 2)
+  const linkOne: RunLink = {
+    parentRunId: parent.runId,
+    parentFailureEventSha256: parent.chainHeadSha256,
+    relation: "retry-after-definitive-pre-submit-failure",
+  }
+
+  const unchanged = await plannedRun(linkOne)
+  const unchangedError = await Effect.runPromise(Effect.flip(
+    provide(reserve(reservationFor(unchanged))),
+  ))
+  assert.equal(unchangedError.code, "CORRECTION_NOT_MATERIAL")
+
+  const correctedOne = await plannedRun(linkOne, 1, "Corrected objective after malformed provider response.")
+  const firstCorrection = await Effect.runPromise(provide(reserve(reservationFor(correctedOne))))
+  assert.equal(firstCorrection.correctionDepth, 1)
+  const failedCorrection = await failBeforeSubmission(correctedOne, "correction-one")
+  const linkTwo: RunLink = {
+    parentRunId: failedCorrection.runId,
+    parentFailureEventSha256: failedCorrection.chainHeadSha256,
+    relation: "retry-after-definitive-pre-submit-failure",
+  }
+  const correctedTwo = await plannedRun(linkTwo, 1, "Second material correction.")
+  const secondCorrection = await Effect.runPromise(provide(reserve(reservationFor(correctedTwo))))
+  assert.equal(secondCorrection.correctionDepth, 2)
+  const failedSecond = await failBeforeSubmission(correctedTwo, "correction-two")
+  const linkThree: RunLink = {
+    parentRunId: failedSecond.runId,
+    parentFailureEventSha256: failedSecond.chainHeadSha256,
+    relation: "retry-after-definitive-pre-submit-failure",
+  }
+  const exhausted = await plannedRun(linkThree, 1, "Third correction exceeds the approved limit.")
+  const exhaustedError = await Effect.runPromise(Effect.flip(
+    provide(reserve(reservationFor(exhausted))),
+  ))
+  assert.equal(exhaustedError.code, "CORRECTION_LIMIT_EXHAUSTED")
+})
+
+test("possibly-spent blocked Runs can reconcile only and never create a correction Run", async () => {
+  const memory = await memoryHarness()
+  const provide = <Success, Error>(
+    effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
+  ): Effect.Effect<Success, Error> => effect.pipe(
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, clock),
+  )
+  const planned = await plannedRun()
+  const reserved = await Effect.runPromise(provide(reserve(reservationFor(planned))))
+  await Effect.runPromise(provide(record({
+    _tag: "SubmissionMayHaveStarted",
+    runId: reserved.runId,
+    operationId: "ambiguous-submission",
+  })))
+  const blocked = await Effect.runPromise(provide(record({
+    _tag: "ClassifyFailure",
+    runId: reserved.runId,
+    operationId: "ambiguous-outcome",
+    failure: {
+      class: "ambiguous_provider_timeout",
+      message: "Provider identity must be reconciled.",
+    },
+  })))
+  const linked: RunLink = {
+    parentRunId: blocked.view.runId,
+    parentFailureEventSha256: blocked.view.chainHeadSha256,
+    relation: "retry-after-definitive-pre-submit-failure",
+  }
+  const successor = await plannedRun(linked, 1, "A changed objective must not permit another submission.")
+  const error = await Effect.runPromise(Effect.flip(
+    provide(reserve(reservationFor(successor))),
+  ))
+  assert.equal(error.code, "LINK_NOT_ALLOWED")
+})
+
+test("persists a closed failure record with fixed spend, retry, outcome, and correction ownership", async () => {
+  const cases = [
+    ["ambiguous_provider_timeout", "blocked", "possibly_spent", "reconcile-only", "Generation", true],
+    ["malformed_provider_response", "failed", "possibly_spent", "reconcile-only", "Generation", true],
+    ["output_count_mismatch", "failed", "possibly_spent", "reconcile-only", "Generation", true],
+    ["post_submit_persistence_failure", "blocked", "possibly_spent", "reconcile-only", "Generation", true],
+    ["budget_exhausted", "blocked", "not_spent", "never-resubmit", "application decision owner", false],
+    ["repeated_bad_output", "failed", "unknown", "reconcile-only", "Verification", true],
+  ] as const
+
+  for (const [failureClass, outcome, spend, retry, owner, afterSubmission] of cases) {
+    const planned = await plannedRun()
+    const memory = await memoryHarness()
+    const provide = <Success, Error>(
+      effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
+    ): Effect.Effect<Success, Error> => effect.pipe(
+      Effect.provide(memory.layer),
+      Effect.provideService(RunRecordClock, clock),
+    )
+    const reserved = await Effect.runPromise(provide(reserve(reservationFor(planned))))
+    if (afterSubmission) {
+      await Effect.runPromise(provide(record({
+        _tag: "SubmissionMayHaveStarted",
+        runId: reserved.runId,
+        operationId: `${failureClass}-submission`,
+      })))
+      if (failureClass === "repeated_bad_output") {
+        const providerBody = Buffer.from('{"request_id":"repeated-output","status":"accepted"}', "utf8")
+        await Effect.runPromise(provide(record({
+          _tag: "CommitProviderEvidence",
+          runId: reserved.runId,
+          operationId: `${failureClass}-provider`,
+          evidence: {
+            mediaType: "application/json",
+            body: providerBody,
+            sha256: createHash("sha256").update(providerBody).digest("hex"),
+          },
+        })))
+        const outputBody = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
+        await Effect.runPromise(provide(record({
+          _tag: "CommitGeneratedOutput",
+          runId: reserved.runId,
+          operationId: `${failureClass}-output`,
+          output: {
+            applicationPath: "outputs/repeated-bad.png",
+            mediaType: "image/png",
+            body: outputBody,
+            sha256: createHash("sha256").update(outputBody).digest("hex"),
+          },
+        })))
+      }
+    }
+    const classified = await Effect.runPromise(provide(record({
+      _tag: "ClassifyFailure",
+      runId: reserved.runId,
+      operationId: `${failureClass}-outcome`,
+      failure: {
+        class: failureClass,
+        message: `Safe fixture failure for ${failureClass}.`,
+      },
+    } as unknown as RecordOperation)))
+    assert.equal(classified.view.classification, outcome)
+    assert.equal(classified.view.phase, outcome)
+    assert.equal(classified.view.spendState, spend)
+    assert.equal(classified.view.retryState, retry)
+    assert.equal(classified.view.finding?.class, failureClass)
+    assert.equal(classified.view.finding?.correctionOwner, owner)
+    assert.equal("approval" in classified.view, false)
+
+    const failureBytes = await Effect.runPromise(
+      readEvidence(reserved.runId, "failure.json").pipe(Effect.provide(memory.layer)),
+    )
+    assert.deepEqual(JSON.parse(Buffer.from(failureBytes).toString("utf8")), {
+      class: failureClass,
+      correctionOwner: owner,
+      message: `Safe fixture failure for ${failureClass}.`,
+      outcome,
+      retryState: retry,
+      spendState: spend,
+    })
+  }
+})
+
+test("replays an interrupted classified failure to one durable evidence-backed outcome", async () => {
+  for (const failedWrite of ["append-event", "write-evidence", "write-state"] as const) {
+    const planned = await plannedRun()
+    const memory = await memoryHarness()
+    const provide = <Success, Error>(
+      effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
+    ): Effect.Effect<Success, Error> => effect.pipe(
+      Effect.provide(memory.layer),
+      Effect.provideService(RunRecordClock, clock),
+    )
+    const reserved = await Effect.runPromise(provide(reserve(reservationFor(planned))))
+    await Effect.runPromise(provide(record({
+      _tag: "SubmissionMayHaveStarted",
+      runId: reserved.runId,
+      operationId: `classified-interruption-${failedWrite}-submission`,
+    })))
+    const operation = {
+      _tag: "ClassifyFailure" as const,
+      runId: reserved.runId,
+      operationId: `classified-interruption-${failedWrite}`,
+      failure: {
+        class: "post_submit_persistence_failure" as const,
+        message: `Interrupted ${failedWrite} while preserving a terminal classification.`,
+      },
+    }
+    await Effect.runPromise(memory.failNext(failedWrite))
+    const interruption = await Effect.runPromise(Effect.flip(provide(record(operation))))
+    assert.equal(interruption.code, "DURABILITY_FAILURE")
+
+    const recovered = await Effect.runPromise(provide(record(operation)))
+    assert.equal(recovered.view.phase, "blocked")
+    assert.equal(recovered.view.classification, "blocked")
+    assert.equal(recovered.view.spendState, "possibly_spent")
+    assert.equal(recovered.view.retryState, "reconcile-only")
+    assert.equal(recovered.view.finding?.correctionOwner, "Generation")
+    assert.deepEqual(await Effect.runPromise(provide(load(reserved.runId))), recovered.view)
+    const failureBytes = await Effect.runPromise(
+      readEvidence(reserved.runId, "failure.json").pipe(Effect.provide(memory.layer)),
+    )
+    assert.equal(JSON.parse(Buffer.from(failureBytes).toString("utf8")).class, "post_submit_persistence_failure")
+  }
 })
 
 test("interruption at every persistence and network seam never creates a second submission", async () => {

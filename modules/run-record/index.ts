@@ -41,6 +41,8 @@ export type { RunRecordErrorCode } from "./errors.js"
 export { RunRecordClock } from "./types.js"
 export type {
   ProviderEvidenceInput,
+  ClassifiedFailureClass,
+  CorrectionOwner,
   BaselineEvidenceInput,
   GeneratedOutputEvidenceInput,
   AssemblyReportInput,
@@ -49,6 +51,7 @@ export type {
   RecordResult,
   ReserveRun,
   RunLink,
+  RunFinding,
   RunRecordClockService,
   RunRecordPhase,
   RunRecordStoreService,

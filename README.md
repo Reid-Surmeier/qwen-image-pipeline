@@ -6,7 +6,7 @@ Application repositories own their references, assets, generations, Assembly out
 
 ## Current build
 
-Development of the successor procedure happens on `build/v0.3.0` and is reviewed through one draft build pull request. The current inherited commands remain available while callers migrate; the governed planner/enforcer procedure described below is the v0.3.0 target and is not yet fully implemented.
+Development of the successor procedure happens on `build/v0.3.0` and is reviewed through one draft build pull request. The current inherited commands remain available while callers migrate; the governed planner/enforcer procedure described below is being completed ticket by ticket on that release line.
 
 ## Target normal path
 
@@ -17,5 +17,7 @@ Development of the successor procedure happens on `build/v0.3.0` and is reviewed
 5. Validators and deterministic Assembly produce a classified final result with provenance and a safe next action.
 
 Subjective final visual approval remains human. Missing references, mismatched hashes, provider rejection, failed checks, ambiguous billing, and exhausted correction budgets become explicit outcomes rather than hidden agent judgment.
+
+The machine returns exactly four terminal outcomes: Verified Candidate, Human Decision Required, Blocked, or Failed. A finding always names Reference Planning, Generation, Assembly, Verification, or the application decision owner as the correction owner. Possibly-spent or unknown work can only reconcile its existing provider identity and can never submit again. A distinct linked correction Run is available only after a definitive unspent pre-submit refusal, only for a material change, and only inside the application-owned correction ceiling. Machine verification never records owner Approval.
 
 See [`CONTEXT.md`](CONTEXT.md), the generated [`MODULES.md`](MODULES.md), and [`docs/adr/`](docs/adr/) for current vocabulary and accepted decisions. The map names only modules with frozen interfaces now; later #17 tickets add the remaining Conductor-led modules as they are implemented.

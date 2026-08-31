@@ -16,6 +16,7 @@ import {
 } from "./index.js"
 import {
   GenerationAdapter,
+  GenerationError,
   invoke,
   prepare,
   type GenerationAdapterService,
@@ -134,6 +135,29 @@ test("a secret-bearing objective is refused without echoing secret material", as
     assert.equal(result.refusal.code, "SECRET_MATERIAL_DETECTED")
     assert.doesNotMatch(JSON.stringify(result.normalView), new RegExp(secret.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
     assert.match(result.normalView.objective, /could not be read safely/i)
+  }
+})
+
+test("planning refusals are terminal machine outcomes with one named correction owner", async () => {
+  const missing = await execute("qwen-image", {
+    files: (files) => files.delete("references/neutral.png"),
+  })
+  assert.equal(missing.result._tag, "Refused")
+  if (missing.result._tag === "Refused") {
+    assert.equal(missing.result.outcome, "blocked")
+    assert.equal(missing.result.finding.correctionOwner, "Reference Planning")
+  }
+
+  const exhausted = await execute("qwen-image", {
+    objective: (objective) => {
+      objective.requestedCount = 2
+      objective.budgetCeilingUsd = "0.07"
+    },
+  })
+  assert.equal(exhausted.result._tag, "Refused")
+  if (exhausted.result._tag === "Refused") {
+    assert.equal(exhausted.result.outcome, "blocked")
+    assert.equal(exhausted.result.finding.correctionOwner, "application decision owner")
   }
 })
 
@@ -264,7 +288,10 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
   if (checkpoint._tag !== "HumanDecisionRequired") return
   assert.equal(adapterCalls, 1)
   assert.equal(checkpoint.diagnostics.view.phase, "awaiting_donor_choice")
-  assert.equal(checkpoint.diagnostics.view.classification, undefined)
+  assert.equal(checkpoint.outcome, "human_decision_required")
+  assert.equal(checkpoint.finding.correctionOwner, "application decision owner")
+  assert.equal(checkpoint.diagnostics.view.classification, "human_decision_required")
+  assert.equal("approval" in checkpoint, false)
   assert.equal(Buffer.from(checkpoint.diagnostics.request).toString("utf8"), canonicalRequest)
   assert.match(Buffer.from(checkpoint.diagnostics.events).toString("utf8"), /donor_choice_opened/)
   assert.deepEqual(checkpoint.decision.candidateSha256s, [hash(donor)])
@@ -279,7 +306,9 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
   assert.equal(completed.diagnostics.view.runId, checkpoint.diagnostics.view.runId)
   assert.equal(completed.diagnostics.view.selectedDonorSha256, hash(donor))
   assert.equal(completed.diagnostics.view.phase, "verified_candidate")
+  assert.equal(completed.outcome, "verified_candidate")
   assert.equal(completed.diagnostics.view.classification, "verified_candidate")
+  assert.equal("approval" in completed, false)
   assert.equal(completed.normalView.objective, request.objective)
   assert.notEqual(completed.candidate.sha256, hash(donor))
   assert.deepEqual(
@@ -501,8 +530,14 @@ test("advances one Seedance Run by submitting once and polling the same job to v
   assert.equal(pollCalls, 0)
 
   await Effect.runPromise(memory.failNext("append-event"))
-  await assert.rejects(executeAdvance(), (error: unknown) =>
-    typeof error === "object" && error !== null && "code" in error && error.code === "RUN_RECORD_FAILURE")
+  const interrupted = await executeAdvance()
+  assert.equal(interrupted._tag, "Blocked")
+  if (interrupted._tag !== "Blocked") return
+  assert.equal(interrupted.outcome, "blocked")
+  assert.equal(interrupted.finding.code, "POST_SUBMIT_PERSISTENCE_FAILURE")
+  assert.equal(interrupted.finding.correctionOwner, "Generation")
+  assert.equal(interrupted.diagnostics.view.providerJobId, "seedance-job-1")
+  assert.equal("approval" in interrupted, false)
   assert.equal(submitCalls, 1)
   assert.equal(pollCalls, 1)
 
@@ -526,6 +561,8 @@ test("advances one Seedance Run by submitting once and polling the same job to v
   assert.equal(completed.diagnostics.view.pollCount, 2)
   assert.equal(completed.diagnostics.view.completedCount, 1)
   assert.equal(completed.diagnostics.view.costState, "estimated-only")
+  assert.equal(completed.outcome, "verified_candidate")
+  assert.equal("approval" in completed, false)
   assert.equal(plannedDecision.run.request.videoPlan?.assembly.pixelOwnership, "none-authoritative")
   assert.equal("assemblyPlan" in plannedDecision.run.request, false)
   assert.equal(submitCalls, 1)
@@ -609,4 +646,101 @@ test("advances one Seedance Run by submitting once and polling the same job to v
   assert.equal(recoveredSubmission._tag, "ProviderPending")
   assert.equal(submitCalls, submitsBeforeRecovery)
   assert.equal(recoveryPollCalls, 1)
+})
+
+test("classifies ambiguous, malformed, and count-mismatched provider results without resubmission", async () => {
+  for (const variant of ["ambiguous", "malformed", "count"] as const) {
+    const fixture = makeFixture("seedance-video")
+    const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(MediaInspector, byteMediaInspector),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+    ))
+    assert.equal(planned._tag, "Planned")
+    if (planned._tag !== "Planned") continue
+    const submissionBody = Buffer.from(`{"job_id":"${variant}-job","status":"submitted"}`)
+    const completedBody = Buffer.from(JSON.stringify({
+      job_id: `${variant}-job`,
+      status: "completed",
+      outputs: [],
+      completed_count: 0,
+      cost: { state: "estimated-only" },
+    }))
+    let submitCalls = 0
+    let pollCalls = 0
+    const adapter: GenerationAdapterService = {
+      invoke: () => Effect.die("Qwen must not run"),
+      submitSeedance: (prepared) => {
+        submitCalls += 1
+        if (variant === "ambiguous") {
+          return Effect.fail(new GenerationError("PROVIDER_AMBIGUOUS", "Fake timeout after dispatch."))
+        }
+        if (variant === "malformed") return Effect.succeed({ malformed: true } as never)
+        return Effect.succeed({
+          provider: "openrouter" as const,
+          model: prepared.request.model,
+          jobId: `${variant}-job`,
+          providerEvidence: {
+            mediaType: "application/json" as const,
+            body: submissionBody,
+            sha256: hash(submissionBody),
+          },
+        })
+      },
+      pollSeedance: (prepared, jobId) => {
+        pollCalls += 1
+        if (variant === "count") {
+          return Effect.fail(new GenerationError(
+            "OUTPUT_COUNT_MISMATCH",
+            "Fake provider completed with zero outputs for a one-output Run.",
+          ))
+        }
+        return Effect.succeed({
+          status: "completed" as const,
+          provider: "openrouter" as const,
+          model: prepared.request.model,
+          jobId,
+          providerEvidence: {
+            mediaType: "application/json" as const,
+            body: completedBody,
+            sha256: hash(completedBody),
+          },
+          outputs: [],
+          completedCount: 0,
+          cost: { state: "estimated-only" as const },
+        })
+      },
+    }
+    const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+    const clock: RunRecordClockService = { now: () => Effect.succeed("2026-08-31T12:00:00.000Z") }
+    const executeAdvance = () => Effect.runPromise(advance({ run: planned.run }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(GenerationAdapter, adapter),
+      Effect.provide(memory.layer),
+      Effect.provideService(RunRecordClock, clock),
+    ))
+
+    if (variant === "count") {
+      const pending = await executeAdvance()
+      assert.equal(pending._tag, "ProviderPending")
+    }
+    const terminal = await executeAdvance()
+    const expectedTag = variant === "ambiguous" ? "Blocked" : "Failed"
+    const expectedClass = variant === "ambiguous"
+      ? "ambiguous_provider_timeout"
+      : variant === "count"
+        ? "output_count_mismatch"
+        : "malformed_provider_response"
+    assert.equal(terminal._tag, expectedTag)
+    if (terminal._tag !== "Blocked" && terminal._tag !== "Failed") continue
+    assert.equal(terminal.finding.code, expectedClass)
+    assert.equal(terminal.finding.correctionOwner, "Generation")
+    assert.equal(terminal.diagnostics.view.spendState, "possibly_spent")
+    assert.equal(terminal.diagnostics.view.retryState, "reconcile-only")
+    assert.equal("approval" in terminal, false)
+    const callsBeforeReplay = { submitCalls, pollCalls }
+    const replayed = await executeAdvance()
+    assert.equal(replayed._tag, expectedTag)
+    assert.deepEqual({ submitCalls, pollCalls }, callsBeforeReplay)
+  }
 })

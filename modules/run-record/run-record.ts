@@ -12,6 +12,8 @@ import {
 import { RunRecordError } from "./errors.js"
 import type { CanonicalRunRequest } from "../run-contract/index.js"
 import type {
+  ClassifiedFailureClass,
+  CorrectionOwner,
   GeneratedOutputEvidenceInput,
   ProviderEvidenceInput,
   RecordOperation,
@@ -71,7 +73,7 @@ type RunEvent = Readonly<{
   operationId: string
   runId: string
   timestamp: string
-  kind: "attempt_reserved" | "submission_may_have_started" | "provider_evidence_intent" | "provider_evidence_received" | "generated_output_persisted" | "seedance_poll_persisted" | "donor_choice_opened" | "donor_selected" | "assembly_persisted" | "checks_persisted" | "video_checks_persisted" | "definitive_pre_submit_failure"
+  kind: "attempt_reserved" | "submission_may_have_started" | "provider_evidence_intent" | "provider_evidence_received" | "generated_output_persisted" | "seedance_poll_persisted" | "donor_choice_opened" | "donor_selected" | "assembly_persisted" | "checks_persisted" | "video_checks_persisted" | "definitive_pre_submit_failure" | "classified_outcome_intent" | "classified_outcome"
   previousEventSha256: string | null
   payload: Readonly<Record<string, JsonValue>>
   eventSha256: string
@@ -93,6 +95,58 @@ const canonicalJson = (value: JsonValue): string => JSON.stringify(canonicalValu
 const sha256 = (value: Uint8Array | string): string =>
   createHash("sha256").update(value).digest("hex")
 const bytes = (value: string): Uint8Array => Buffer.from(value, "utf8")
+
+type ClassifiedFailurePolicy = Readonly<{
+  outcome: "blocked" | "failed"
+  spendState: "not_spent" | "possibly_spent" | "unknown"
+  retryState: "new-linked-run-only" | "reconcile-only" | "never-resubmit"
+  correctionOwner: CorrectionOwner
+}>
+
+const classifiedFailurePolicies = {
+  ambiguous_provider_timeout: {
+    outcome: "blocked",
+    spendState: "possibly_spent",
+    retryState: "reconcile-only",
+    correctionOwner: "Generation",
+  },
+  malformed_provider_response: {
+    outcome: "failed",
+    spendState: "possibly_spent",
+    retryState: "reconcile-only",
+    correctionOwner: "Generation",
+  },
+  output_count_mismatch: {
+    outcome: "failed",
+    spendState: "possibly_spent",
+    retryState: "reconcile-only",
+    correctionOwner: "Generation",
+  },
+  post_submit_persistence_failure: {
+    outcome: "blocked",
+    spendState: "possibly_spent",
+    retryState: "reconcile-only",
+    correctionOwner: "Generation",
+  },
+  budget_exhausted: {
+    outcome: "blocked",
+    spendState: "not_spent",
+    retryState: "never-resubmit",
+    correctionOwner: "application decision owner",
+  },
+  repeated_bad_output: {
+    outcome: "failed",
+    spendState: "unknown",
+    retryState: "reconcile-only",
+    correctionOwner: "Verification",
+  },
+} as const satisfies Record<ClassifiedFailureClass, ClassifiedFailurePolicy>
+
+const isClassifiedFailureClass = (value: unknown): value is ClassifiedFailureClass =>
+  typeof value === "string" && Object.hasOwn(classifiedFailurePolicies, value)
+
+const classifiedFailurePolicy = (value: ClassifiedFailureClass): ClassifiedFailurePolicy =>
+  classifiedFailurePolicies[value]
 
 const immutable = <Value>(value: Value): Value => {
   if (value !== null && typeof value === "object") {
@@ -161,6 +215,22 @@ const validateReservation = (input: ReserveRun): CanonicalRunRequest => {
   }
   return request
 }
+
+const correctionMaterial = (request: CanonicalRunRequest): JsonValue => ({
+  adapterProtocolVersion: request.adapterProtocolVersion,
+  assemblyPlan: request.assemblyPlan ?? null,
+  budgetCeilingUsd: request.budgetCeilingUsd,
+  estimatedMaximumCostUsd: request.estimatedMaximumCostUsd,
+  mode: request.mode,
+  model: request.model,
+  objective: request.objective,
+  procedureId: request.procedureId,
+  provider: request.provider,
+  references: request.references,
+  requestedCount: request.requestedCount,
+  toolProcedureVersion: request.tool.procedureVersion,
+  videoPlan: request.videoPlan ?? null,
+} as unknown as JsonValue)
 
 const runIdentity = (requestSha256: string): string => `run-${requestSha256.slice(0, 24)}`
 
@@ -890,6 +960,9 @@ const replay = (
     stringPayload(genesis.payload, "estimatedMaximumCostUsd") !== requestDocument.estimatedMaximumCostUsd ||
     numberPayload(genesis.payload, "maximumCount") !== requestDocument.requestedCount ||
     stringPayload(genesis.payload, "maximumSpendUsd") !== requestDocument.budgetCeilingUsd ||
+    numberPayload(genesis.payload, "maximumCorrectionRuns") !== requestDocument.maximumCorrectionRuns ||
+    numberPayload(genesis.payload, "correctionDepth") < 0 ||
+    numberPayload(genesis.payload, "correctionDepth") > numberPayload(genesis.payload, "maximumCorrectionRuns") ||
     canonicalJson((linkedFrom ?? null) as unknown as JsonValue) !==
       canonicalJson((requestDocument.linkedRun ?? null) as JsonValue)
   ) {
@@ -903,6 +976,8 @@ const replay = (
     estimatedMaximumCostUsd: stringPayload(genesis.payload, "estimatedMaximumCostUsd"),
     maximumCount: numberPayload(genesis.payload, "maximumCount"),
     maximumSpendUsd: stringPayload(genesis.payload, "maximumSpendUsd"),
+    maximumCorrectionRuns: numberPayload(genesis.payload, "maximumCorrectionRuns"),
+    correctionDepth: numberPayload(genesis.payload, "correctionDepth"),
     chainHeadSha256: events.at(-1)!.eventSha256,
     evidence: [] as RunRecordView["evidence"],
     ...(linkedFrom === undefined ? {} : { linkedFrom }),
@@ -917,7 +992,7 @@ const replay = (
   let assemblyOutputSha256: string | undefined
   let assemblyReportSha256: string | undefined
   let checksSha256: string | undefined
-  let classification: "verified_candidate" | undefined
+  let classification: RunRecordView["classification"]
   let providerJobId: string | undefined
   let pollCount = 0
   let completedCount: number | undefined
@@ -929,6 +1004,13 @@ const replay = (
     byteLength: number
     mediaType: string
   }> | undefined
+  let classifiedOutcomeIntent: Readonly<{
+    completionOperationId: string
+    sha256: string
+    byteLength: number
+    failureClass: ClassifiedFailureClass
+  }> | undefined
+  let finding: RunRecordView["finding"]
   for (const event of events.slice(1)) {
     if (event.kind === "submission_may_have_started") {
       if (phase !== "reserved" || stringPayload(event.payload, "attemptId") !== base.attemptId) {
@@ -1160,6 +1242,7 @@ const replay = (
       }
       donorCandidateSha256s = [...candidates]
       phase = "awaiting_donor_choice"
+      classification = "human_decision_required"
       continue
     }
     if (event.kind === "donor_selected") {
@@ -1173,6 +1256,7 @@ const replay = (
       }
       selectedDonorSha256 = selected
       phase = "donor_selected"
+      classification = undefined
       continue
     }
     if (event.kind === "assembly_persisted") {
@@ -1342,6 +1426,90 @@ const replay = (
       phase = "verified_candidate"
       continue
     }
+    if (event.kind === "classified_outcome_intent") {
+      if (classifiedOutcomeIntent !== undefined || classification !== undefined) {
+        throw new RunRecordError("ILLEGAL_TRANSITION", "A classified outcome intent was recorded after an outcome.")
+      }
+      const completionOperationId = stringPayload(event.payload, "completionOperationId")
+      const evidenceSha256 = stringPayload(event.payload, "sha256")
+      const byteLength = numberPayload(event.payload, "byteLength")
+      const failureClass = stringPayload(event.payload, "class")
+      if (
+        !isIdentifier(completionOperationId) || !isSha256(evidenceSha256) || byteLength < 1 ||
+        !isClassifiedFailureClass(failureClass)
+      ) {
+        throw new RunRecordError("ILLEGAL_TRANSITION", "The classified outcome intent is malformed.")
+      }
+      classifiedOutcomeIntent = {
+        completionOperationId,
+        sha256: evidenceSha256,
+        byteLength,
+        failureClass,
+      }
+      continue
+    }
+    if (event.kind === "classified_outcome") {
+      if (classifiedOutcomeIntent === undefined) {
+        throw new RunRecordError("ILLEGAL_TRANSITION", "A classified outcome has no durable evidence intent.")
+      }
+      const applicationPath = stringPayload(event.payload, "applicationPath")
+      const evidenceSha256 = stringPayload(event.payload, "sha256")
+      const byteLength = numberPayload(event.payload, "byteLength")
+      const failureClass = stringPayload(event.payload, "class")
+      const policy = isClassifiedFailureClass(failureClass)
+        ? classifiedFailurePolicy(failureClass)
+        : undefined
+      if (
+        applicationPath !== "failure.json" || policy === undefined ||
+        classifiedOutcomeIntent.completionOperationId !== event.operationId ||
+        classifiedOutcomeIntent.sha256 !== evidenceSha256 ||
+        classifiedOutcomeIntent.byteLength !== byteLength ||
+        classifiedOutcomeIntent.failureClass !== failureClass
+      ) {
+        throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "The classified outcome contradicts its durable intent.", "repair-evidence")
+      }
+      const storedFailure = evidenceBytes[applicationPath]
+      if (
+        storedFailure === undefined || storedFailure.byteLength !== byteLength ||
+        sha256(storedFailure) !== evidenceSha256
+      ) {
+        throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "The classified failure evidence is missing or changed.", "repair-evidence")
+      }
+      let document: unknown
+      try {
+        document = JSON.parse(Buffer.from(storedFailure).toString("utf8"))
+      } catch {
+        throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "The classified failure evidence is not valid JSON.", "repair-evidence")
+      }
+      if (
+        document === null || typeof document !== "object" || Array.isArray(document) ||
+        canonicalJson(document as JsonValue) !== Buffer.from(storedFailure).toString("utf8")
+      ) {
+        throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "The classified failure evidence is not canonical JSON.", "repair-evidence")
+      }
+      const failure = document as Readonly<Record<string, JsonValue>>
+      const message = stringPayload(failure, "message")
+      if (
+        Object.keys(failure).sort().join(",") !== "class,correctionOwner,message,outcome,retryState,spendState" ||
+        stringPayload(failure, "class") !== failureClass ||
+        stringPayload(event.payload, "message") !== message ||
+        stringPayload(failure, "correctionOwner") !== policy.correctionOwner ||
+        stringPayload(failure, "outcome") !== policy.outcome ||
+        stringPayload(failure, "spendState") !== policy.spendState ||
+        stringPayload(failure, "retryState") !== policy.retryState ||
+        message.trim().length === 0 || message.length > 500 || hasProviderCredentialMaterial(failure)
+      ) {
+        throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "The classified failure evidence contradicts its fixed policy.", "repair-evidence")
+      }
+      evidence.push({ applicationPath, sha256: evidenceSha256, byteLength, mediaType: "application/json" })
+      phase = policy.outcome
+      classification = policy.outcome
+      spendState = policy.spendState
+      retryState = policy.retryState
+      finding = { class: failureClass, message, correctionOwner: policy.correctionOwner }
+      classifiedOutcomeIntent = undefined
+      continue
+    }
     if (event.kind === "definitive_pre_submit_failure") {
       if (phase !== "reserved") {
         throw new RunRecordError("ILLEGAL_TRANSITION", "A definitive pre-submit failure was recorded after submission uncertainty.")
@@ -1351,6 +1519,12 @@ const replay = (
       phase = "definitive_pre_submit_failure"
       spendState = "not_spent"
       retryState = "new-linked-run-only"
+      classification = "failed"
+      finding = {
+        class: stringPayload(event.payload, "class"),
+        message: stringPayload(event.payload, "message"),
+        correctionOwner: "Generation",
+      }
       continue
     }
     throw new RunRecordError("ILLEGAL_TRANSITION", `${event.kind} is not valid in the current Run phase.`)
@@ -1367,6 +1541,7 @@ const replay = (
     ...(assemblyReportSha256 === undefined ? {} : { assemblyReportSha256 }),
     ...(checksSha256 === undefined ? {} : { checksSha256 }),
     ...(classification === undefined ? {} : { classification }),
+    ...(finding === undefined ? {} : { finding }),
     ...(providerJobId === undefined ? {} : { providerJobId }),
     ...(pollCount === 0 ? {} : { pollCount }),
     ...(completedCount === undefined ? {} : { completedCount }),
@@ -1419,15 +1594,55 @@ export const reserveRun = (
       : new RunRecordError("INVALID_PLANNED_RUN", "The Planned Run could not be validated."),
   })
   const store = yield* RunRecordStore
+  let correctionDepth = 0
   if (request.linkedRun !== undefined) {
     const parent = yield* loadRun(request.linkedRun.parentRunId)
-    if (
-      parent.phase !== "definitive_pre_submit_failure" ||
-      parent.chainHeadSha256 !== request.linkedRun.parentFailureEventSha256
-    ) {
+    if (parent.phase !== "definitive_pre_submit_failure") {
+      return yield* Effect.fail(new RunRecordError(
+        "LINK_NOT_ALLOWED",
+        "Only a definitive, unspent pre-submit refusal can create a correction Run.",
+        "reconcile",
+      ))
+    }
+    if (parent.chainHeadSha256 !== request.linkedRun.parentFailureEventSha256) {
       return yield* Effect.fail(new RunRecordError(
         "LINK_FAILURE_MISMATCH",
         "The successor does not name the verified definitive failure event.",
+        "new-linked-run",
+      ))
+    }
+    const parentStored = yield* store.read(parent.runId)
+    const parentRequest = yield* Effect.try({
+      try: () => JSON.parse(Buffer.from(parentStored.request).toString("utf8")) as CanonicalRunRequest,
+      catch: () => new RunRecordError(
+        "REQUEST_TAMPERED",
+        "The linked parent Run Request could not be decoded.",
+        "repair-evidence",
+      ),
+    })
+    if (
+      request.applicationId !== parentRequest.applicationId ||
+      request.maximumCorrectionRuns !== parent.maximumCorrectionRuns ||
+      parent.maximumCorrectionRuns !== parentRequest.maximumCorrectionRuns
+    ) {
+      return yield* Effect.fail(new RunRecordError(
+        "LINK_NOT_ALLOWED",
+        "A correction Run cannot change its application or correction ceiling.",
+        "new-linked-run",
+      ))
+    }
+    correctionDepth = parent.correctionDepth + 1
+    if (correctionDepth > request.maximumCorrectionRuns) {
+      return yield* Effect.fail(new RunRecordError(
+        "CORRECTION_LIMIT_EXHAUSTED",
+        "The approved correction Run limit is exhausted.",
+        "new-linked-run",
+      ))
+    }
+    if (canonicalJson(correctionMaterial(request)) === canonicalJson(correctionMaterial(parentRequest))) {
+      return yield* Effect.fail(new RunRecordError(
+        "CORRECTION_NOT_MATERIAL",
+        "A linked correction Run must materially change the objective, references, model, procedure, or parameters.",
         "new-linked-run",
       ))
     }
@@ -1451,6 +1666,8 @@ export const reserveRun = (
       estimatedMaximumCostUsd: request.estimatedMaximumCostUsd,
       maximumCount: request.requestedCount,
       maximumSpendUsd: request.budgetCeilingUsd,
+      maximumCorrectionRuns: request.maximumCorrectionRuns,
+      correctionDepth,
       linkedFrom: request.linkedRun === undefined ? null : request.linkedRun,
     },
   })
@@ -1550,6 +1767,31 @@ const validateProviderEvidence = (operation: Extract<RecordOperation, { _tag: "C
 const exactOwnKeys = (value: object, keys: ReadonlyArray<string>): boolean => {
   const ownKeys = Reflect.ownKeys(value)
   return ownKeys.length === keys.length && keys.every((key) => Object.hasOwn(value, key))
+}
+
+const snapshotClassifiedFailure = (
+  value: unknown,
+): Readonly<{ class: ClassifiedFailureClass; message: string }> | undefined => {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) return undefined
+  const failure = value as Readonly<Record<string, unknown>>
+  const keys = ["class", "message"]
+  if (
+    Reflect.ownKeys(failure).length !== keys.length ||
+    keys.some((key) => {
+      const descriptor = Object.getOwnPropertyDescriptor(failure, key)
+      return descriptor === undefined || !Object.hasOwn(descriptor, "value")
+    })
+  ) return undefined
+  const failureClass = failure.class
+  const message = failure.message
+  if (
+    !isClassifiedFailureClass(failureClass) || typeof message !== "string" ||
+    message.trim().length === 0 || message.length > 500 ||
+    hasProviderCredentialMaterial(failure)
+  ) return undefined
+  return { class: failureClass, message }
 }
 
 const snapshotGeneratedOutput = (value: unknown): GeneratedOutputEvidenceInput | undefined => {
@@ -1736,6 +1978,19 @@ export const recordOperation = (
     stableSeedanceOutputs = snapshot.outputs
     stableSeedanceCost = snapshot.cost
   }
+  let stableClassifiedFailure: Readonly<{ class: ClassifiedFailureClass; message: string }> | undefined
+  if (operation._tag === "ClassifyFailure") {
+    stableClassifiedFailure = yield* Effect.try({
+      try: () => snapshotClassifiedFailure(operation.failure),
+      catch: () => new RunRecordError("ILLEGAL_TRANSITION", "The classified failure could not be snapshotted safely."),
+    })
+    if (stableClassifiedFailure === undefined) {
+      return yield* Effect.fail(new RunRecordError(
+        hasProviderCredentialMaterial(operation.failure) ? "SECRET_MATERIAL_DETECTED" : "ILLEGAL_TRANSITION",
+        "The classified failure must match its closed safe schema.",
+      ))
+    }
+  }
   const expectedKind = operation._tag === "SubmissionMayHaveStarted"
     ? "submission_may_have_started"
     : operation._tag === "CommitProviderEvidence"
@@ -1754,7 +2009,9 @@ export const recordOperation = (
                 ? "checks_persisted"
                 : operation._tag === "CommitVideoChecks"
                   ? "video_checks_persisted"
-                : "definitive_pre_submit_failure"
+                  : operation._tag === "ClassifyFailure"
+                    ? "classified_outcome"
+                    : "definitive_pre_submit_failure"
   const replayed = events.find((event) => event.operationId === operation.operationId)
   if (replayed !== undefined) {
     if (replayed.kind !== expectedKind) {
@@ -1857,6 +2114,15 @@ export const recordOperation = (
       )
     ) {
       return yield* Effect.fail(new RunRecordError("IDEMPOTENCY_CONFLICT", "The operation identity was replayed with a different failure."))
+    }
+    if (
+      operation._tag === "ClassifyFailure" &&
+      (
+        stringPayload(replayed.payload, "class") !== stableClassifiedFailure!.class ||
+        stringPayload(replayed.payload, "message") !== stableClassifiedFailure!.message
+      )
+    ) {
+      return yield* Effect.fail(new RunRecordError("IDEMPOTENCY_CONFLICT", "The operation identity was replayed with a different classified failure."))
     }
     return { _tag: "ReplayObserved" as const, view: current }
   }
@@ -2461,6 +2727,92 @@ export const recordOperation = (
       ...stored.evidence,
       [applicationPath]: reportBytes,
     })
+    yield* store.writeState(operation.runId, encodeView(next))
+    return { _tag: "Recorded" as const, view: next }
+  }
+  if (operation._tag === "ClassifyFailure") {
+    const failure = stableClassifiedFailure!
+    const policy = classifiedFailurePolicy(failure.class)
+    const phaseAllowed = failure.class === "budget_exhausted"
+      ? current.phase === "reserved"
+      : failure.class === "repeated_bad_output"
+        ? current.phase === "generated_outputs_received" || current.phase === "assembly_completed"
+        : current.phase === "submission_may_have_started" || current.phase === "provider_evidence_received"
+    if (!phaseAllowed) {
+      return yield* Effect.fail(new RunRecordError(
+        "ILLEGAL_TRANSITION",
+        `The ${failure.class} classification is not valid from ${current.phase}.`,
+      ))
+    }
+    const document = {
+      class: failure.class,
+      correctionOwner: policy.correctionOwner,
+      message: failure.message,
+      outcome: policy.outcome,
+      retryState: policy.retryState,
+      spendState: policy.spendState,
+    }
+    const failureBytes = bytes(canonicalJson(document))
+    const failureSha256 = sha256(failureBytes)
+    const applicationPath = "failure.json"
+    const clock = yield* RunRecordClock
+    const timestamp = yield* clock.now()
+    const intentOperationId = `failure-intent-${sha256(operation.operationId).slice(0, 24)}`
+    const existingIntent = events.find((event) => event.operationId === intentOperationId)
+    if (existingIntent !== undefined && (
+      existingIntent.kind !== "classified_outcome_intent" ||
+      existingIntent.eventSha256 !== events.at(-1)?.eventSha256 ||
+      stringPayload(existingIntent.payload, "completionOperationId") !== operation.operationId ||
+      stringPayload(existingIntent.payload, "sha256") !== failureSha256 ||
+      numberPayload(existingIntent.payload, "byteLength") !== failureBytes.byteLength ||
+      stringPayload(existingIntent.payload, "class") !== failure.class
+    )) {
+      return yield* Effect.fail(new RunRecordError("IDEMPOTENCY_CONFLICT", "The classified failure contradicts its durable write intent."))
+    }
+    const intent = existingIntent ?? makeEvent({
+      schemaVersion: "1",
+      sequence: events.length + 1,
+      operationId: intentOperationId,
+      runId: operation.runId,
+      timestamp,
+      kind: "classified_outcome_intent",
+      previousEventSha256: current.chainHeadSha256,
+      payload: {
+        completionOperationId: operation.operationId,
+        sha256: failureSha256,
+        byteLength: failureBytes.byteLength,
+        class: failure.class,
+      },
+    })
+    const eventsWithIntent = existingIntent === undefined ? [...events, intent] : events
+    const receipt = makeEvent({
+      schemaVersion: "1",
+      sequence: eventsWithIntent.length + 1,
+      operationId: operation.operationId,
+      runId: operation.runId,
+      timestamp,
+      kind: "classified_outcome",
+      previousEventSha256: intent.eventSha256,
+      payload: {
+        applicationPath,
+        sha256: failureSha256,
+        byteLength: failureBytes.byteLength,
+        class: failure.class,
+        message: failure.message,
+      },
+    })
+    const evidenceWithFailure = { ...stored.evidence, [applicationPath]: failureBytes }
+    const next = yield* Effect.try({
+      try: () => replay(operation.runId, stored.request, [...eventsWithIntent, receipt], evidenceWithFailure),
+      catch: (error) => error instanceof RunRecordError
+        ? error
+        : new RunRecordError("EVIDENCE_HASH_MISMATCH", "The classified failure trial replay failed.", "repair-evidence"),
+    })
+    if (existingIntent === undefined) {
+      yield* store.appendEvent(operation.runId, current.chainHeadSha256, encodeEvent(intent))
+    }
+    yield* store.writeEvidence(operation.runId, applicationPath, failureBytes)
+    yield* store.appendEvent(operation.runId, intent.eventSha256, encodeEvent(receipt))
     yield* store.writeState(operation.runId, encodeView(next))
     return { _tag: "Recorded" as const, view: next }
   }

@@ -45,7 +45,25 @@ test("compiles canonical, recursively immutable run evidence", async () => {
   assert.equal(Object.isFrozen(run.request), true)
   assert.equal(Object.isFrozen(run.request.references), true)
   assert.equal(Object.isFrozen(run.request.references[0]), true)
+  assert.equal(run.request.maximumCorrectionRuns, 2)
   assert.equal("assemblyPlan" in run.request, false)
+})
+
+test("prices the maximum possible paid effect before a Run can be reserved", async () => {
+  const fixture = makeFixture("qwen-image", {
+    objective: (objective) => {
+      objective.requestedCount = 2
+      objective.budgetCeilingUsd = "0.07"
+    },
+  })
+
+  await assert.rejects(
+    compileFixture(fixture),
+    (error: unknown) =>
+      error instanceof Error &&
+      "code" in error &&
+      error.code === "BUDGET_EXCEEDED",
+  )
 })
 
 test("seals a hash-locked Assembly plan into an immutable Qwen Run Request", async () => {

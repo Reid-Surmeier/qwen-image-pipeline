@@ -48,7 +48,10 @@ export {
 export type {
   AdvanceCommand,
   AdvanceDecision,
+  CorrectionOwner,
+  MachineOutcome,
   NormalView,
+  OutcomeFinding,
   PlanCommand,
   PlanDecision,
 } from "./types.js"

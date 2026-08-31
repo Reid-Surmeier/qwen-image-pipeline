@@ -21,6 +21,7 @@ import { verifyVideo } from "../video-verification/index.js"
 import type {
   AdvanceCommand,
   AdvanceDecision,
+  CorrectionOwner,
   NormalView,
   PlanCommand,
   PlanDecision,
@@ -89,6 +90,34 @@ const refusalGuidance = {
   DECLARED_MEDIA_MISMATCH: fixReference,
   SEEDANCE_VIDEO_REFERENCE_REQUIRED: fixReference,
 } satisfies Record<PlanningRefusalCode, RefusalGuidance>
+
+const planningCorrectionOwner = (code: PlanningRefusalCode): CorrectionOwner => {
+  if (
+    code === "REFERENCE_MISSING" || code === "REFERENCE_HASH_MISMATCH" ||
+    code === "REFERENCE_KIND_MISMATCH" || code === "REFERENCE_AUTHORITY_MISSING" ||
+    code === "REFERENCE_PATH_UNSAFE" || code === "PAYLOAD_DESTINATION_INVALID" ||
+    code === "MEDIA_INSPECTION_FAILED" || code === "DECLARED_MEDIA_MISMATCH" ||
+    code === "SEEDANCE_VIDEO_REFERENCE_REQUIRED"
+  ) return "Reference Planning"
+  return "application decision owner"
+}
+
+const refusedDecision = (
+  refusal: PlanningRefusal,
+  objective?: string,
+): Extract<PlanDecision, { _tag: "Refused" }> => ({
+  _tag: "Refused",
+  outcome: refusal.code === "DOCUMENT_INVALID" || refusal.code === "SECRET_MATERIAL_DETECTED"
+    ? "failed"
+    : "blocked",
+  finding: {
+    code: refusal.code,
+    message: refusal.message,
+    correctionOwner: planningCorrectionOwner(refusal.code),
+  },
+  refusal,
+  normalView: refusedView(refusal, objective),
+})
 
 const isPlanningRefusalCode = (value: unknown): value is PlanningRefusalCode =>
   typeof value === "string" && Object.hasOwn(refusalGuidance, value)
@@ -172,7 +201,7 @@ export const planObjective = (
       code: "UNSAFE_APPLICATION_PATH",
       message: "The objective path must remain inside the application repository.",
     }
-    return Effect.succeed({ _tag: "Refused", refusal, normalView: refusedView(refusal) })
+    return Effect.succeed(refusedDecision(refusal))
   }
 
   let describedObjective: string | undefined
@@ -199,20 +228,22 @@ export const planObjective = (
   }).pipe(
     Effect.catchEager((error) => {
       const refusal = asRefusal(error)
-      return Effect.succeed({
-        _tag: "Refused" as const,
+      return Effect.succeed(refusedDecision(
         refusal,
-        normalView: refusedView(
-          refusal,
-          refusal.code === "SECRET_MATERIAL_DETECTED" ? undefined : describedObjective,
-        ),
-      })
+        refusal.code === "SECRET_MATERIAL_DETECTED" ? undefined : describedObjective,
+      ))
     }),
   )
 }
 
 const humanDecision = (diagnostics: RunRecordDiagnostics, objective: string): AdvanceDecision => ({
   _tag: "HumanDecisionRequired",
+  outcome: "human_decision_required",
+  finding: {
+    code: "DONOR_CHOICE_REQUIRED",
+    message: "A persisted donor must be selected before deterministic Assembly can continue.",
+    correctionOwner: "application decision owner",
+  },
   runId: diagnostics.view.runId,
   decision: {
     kind: "donor-choice",
@@ -231,6 +262,7 @@ const humanDecision = (diagnostics: RunRecordDiagnostics, objective: string): Ad
 const verifiedDecision = (diagnostics: RunRecordDiagnostics, objective: string): AdvanceDecision => {
   return {
     _tag: "VerifiedCandidate",
+    outcome: "verified_candidate",
     runId: diagnostics.view.runId,
     candidate: {
       applicationPath: "outputs/assembled.rgba.json",
@@ -274,6 +306,7 @@ const verifiedVideoDecision = (
     item.applicationPath.startsWith("outputs/") && item.mediaType === "video/mp4")!
   return {
     _tag: "VerifiedCandidate",
+    outcome: "verified_candidate",
     runId: diagnostics.view.runId,
     candidate: {
       applicationPath: output.applicationPath as `outputs/${string}`,
@@ -290,6 +323,116 @@ const verifiedVideoDecision = (
     diagnostics,
   }
 }
+
+const terminalFailureDecision = (
+  diagnostics: RunRecordDiagnostics,
+  objective: string,
+  finding: Extract<AdvanceDecision, { _tag: "Blocked" | "Failed" }>["finding"],
+  outcome: "blocked" | "failed",
+): Extract<AdvanceDecision, { _tag: "Blocked" | "Failed" }> => {
+  const normalView: NormalView = {
+    objective,
+    evidence: `${finding.code}: ${finding.message}`,
+    nextAction: outcome === "blocked"
+      ? "Reconcile only the existing Run and provider identity; do not submit again or start autonomous correction."
+      : diagnostics.view.retryState === "new-linked-run-only"
+        ? `Correct the material owned by ${finding.correctionOwner}, then plan a distinct linked Run.`
+        : "Stop autonomous correction and preserve this failed Run unchanged.",
+    spendRisk: diagnostics.view.spendState === "not_spent"
+      ? "The evidence proves no provider spend occurred on this Run."
+      : diagnostics.view.spendState === "possibly_spent"
+        ? "This Run may have spent its locked provider budget and must not submit again."
+        : "Provider spend is unknown; this Run must not submit again.",
+    humanDecision: finding.correctionOwner === "application decision owner"
+      ? "The application owner must decide the named correction; machine classification is not Approval."
+      : "No subjective Approval is being recorded; the named module owns any technical correction.",
+  }
+  return outcome === "blocked"
+    ? { _tag: "Blocked", outcome, runId: diagnostics.view.runId, finding, normalView, diagnostics }
+    : { _tag: "Failed", outcome, runId: diagnostics.view.runId, finding, normalView, diagnostics }
+}
+
+const replayedTerminalDecision = (
+  diagnostics: RunRecordDiagnostics,
+  objective: string,
+): Extract<AdvanceDecision, { _tag: "Blocked" | "Failed" }> => {
+  const finding = diagnostics.view.finding
+  if (
+    (diagnostics.view.classification !== "blocked" && diagnostics.view.classification !== "failed") ||
+    finding === undefined
+  ) {
+    throw new ConductorError("RUN_STATE_UNSUPPORTED", "The terminal Run has no replay-verified failure classification.")
+  }
+  return terminalFailureDecision(diagnostics, objective, {
+    code: finding.class,
+    message: finding.message,
+    correctionOwner: finding.correctionOwner,
+  }, diagnostics.view.classification)
+}
+
+const classifyGenerationFailure = (
+  runId: string,
+  objective: string,
+  error: unknown,
+): Effect.Effect<AdvanceDecision, ConductorError, import("../run-record/index.js").RunRecordStoreService | import("../run-record/index.js").RunRecordClockService> => {
+  const code = namedCause(error)
+  const failureClass = code === "PROVIDER_AMBIGUOUS"
+    ? "ambiguous_provider_timeout" as const
+    : code === "OUTPUT_COUNT_MISMATCH"
+      ? "output_count_mismatch" as const
+      : code === "ADAPTER_RESULT_INVALID" || code === "PROVIDER_SUBSTITUTION"
+        ? "malformed_provider_response" as const
+        : undefined
+  if (failureClass === undefined) {
+    return Effect.fail(asConductorError(
+      "GENERATION_FAILURE",
+      "Generation failed without a safe terminal classification.",
+    )(error))
+  }
+  const message = failureClass === "ambiguous_provider_timeout"
+    ? "The provider result is ambiguous and this Run cannot submit again."
+    : failureClass === "output_count_mismatch"
+      ? "The provider returned a completed output count that contradicts the immutable request."
+      : "The provider response or normalized adapter evidence is malformed."
+  return Effect.gen(function*() {
+    const result = yield* record({
+      _tag: "ClassifyFailure",
+      runId,
+      operationId: `conductor-${failureClass}`,
+      failure: { class: failureClass, message },
+    }).pipe(Effect.mapError(asConductorError(
+      "RUN_RECORD_FAILURE",
+      "The terminal Generation failure could not be persisted.",
+    )))
+    const diagnostics = yield* readDiagnostics(result.view.runId).pipe(Effect.mapError(asConductorError(
+      "RUN_RECORD_FAILURE",
+      "The terminal Generation failure could not be replayed.",
+    )))
+    return replayedTerminalDecision(diagnostics, objective)
+  })
+}
+
+const interruptedPersistenceDecision = (
+  runId: string,
+  objective: string,
+  cause: unknown,
+): Effect.Effect<AdvanceDecision, ConductorError, import("../run-record/index.js").RunRecordStoreService> =>
+  readDiagnostics(runId).pipe(
+    Effect.map((diagnostics) => terminalFailureDecision(
+      diagnostics,
+      objective,
+      {
+        code: "POST_SUBMIT_PERSISTENCE_FAILURE",
+        message: "Provider work may have completed, but its durable receipt is interrupted and must be reconciled.",
+        correctionOwner: "Generation",
+      },
+      "blocked",
+    )),
+    Effect.mapError(() => asConductorError(
+      "RUN_RECORD_FAILURE",
+      "The interrupted post-submit Run could not be replayed safely.",
+    )(cause)),
+  )
 
 const advanceSeedanceRun = (
   command: AdvanceCommand,
@@ -338,6 +481,14 @@ const advanceSeedanceRun = (
       "The immutable Seedance Run could not be reserved or reloaded.",
     )))
 
+    if (current.phase === "blocked" || current.phase === "failed") {
+      const diagnostics = yield* readDiagnostics(current.runId).pipe(Effect.mapError(asConductorError(
+        "RUN_RECORD_FAILURE",
+        "The terminal Seedance outcome could not be replayed.",
+      )))
+      return replayedTerminalDecision(diagnostics, request.objective)
+    }
+
     if (current.phase === "reserved") {
       const marked = yield* record({
         _tag: "SubmissionMayHaveStarted",
@@ -353,21 +504,27 @@ const advanceSeedanceRun = (
           "The Seedance Run did not issue its one in-process Submission Permit.",
         ))
       }
-      const submitted = yield* submitSeedance(prepared, marked.permit).pipe(
-        Effect.mapError(asConductorError(
-          "GENERATION_FAILURE",
-          "The one permitted Seedance submission did not return a trustworthy job identity.",
-        )),
-      )
-      const persisted = yield* record({
+      const submissionAttempt = yield* submitSeedance(prepared, marked.permit).pipe(Effect.match({
+        onFailure: (error) => ({ _tag: "Failure" as const, error }),
+        onSuccess: (value) => ({ _tag: "Success" as const, value }),
+      }))
+      if (submissionAttempt._tag === "Failure") {
+        return yield* classifyGenerationFailure(current.runId, request.objective, submissionAttempt.error)
+      }
+      const submitted = submissionAttempt.value
+      const persistenceAttempt = yield* record({
         _tag: "CommitProviderEvidence",
         runId: current.runId,
         operationId: "conductor-seedance-submission-evidence",
         evidence: submitted.providerEvidence,
-      }).pipe(Effect.mapError(asConductorError(
-        "RUN_RECORD_FAILURE",
-        "The sanitized Seedance submission response and job identity could not be persisted.",
-      )))
+      }).pipe(Effect.match({
+        onFailure: (error) => ({ _tag: "Failure" as const, error }),
+        onSuccess: (value) => ({ _tag: "Success" as const, value }),
+      }))
+      if (persistenceAttempt._tag === "Failure") {
+        return yield* interruptedPersistenceDecision(current.runId, request.objective, persistenceAttempt.error)
+      }
+      const persisted = persistenceAttempt.value
       const diagnostics = yield* readDiagnostics(persisted.view.runId).pipe(Effect.mapError(asConductorError(
         "RUN_RECORD_FAILURE",
         "The submitted Seedance job diagnostics could not be replayed.",
@@ -395,15 +552,19 @@ const advanceSeedanceRun = (
           "The persisted Seedance submission response could not be verified and read.",
         )),
       )
-      const polled = yield* pollSeedance(prepared, current.providerJobId, {
+      const pollAttempt = yield* pollSeedance(prepared, current.providerJobId, {
         mediaType: "application/json",
         body: submissionBody,
         sha256: submissionReceipt.sha256,
-      }).pipe(Effect.mapError(asConductorError(
-        "GENERATION_FAILURE",
-        "The persisted Seedance job could not be polled through trustworthy evidence.",
-      )))
-      const persisted = yield* record(polled.status === "pending"
+      }).pipe(Effect.match({
+        onFailure: (error) => ({ _tag: "Failure" as const, error }),
+        onSuccess: (value) => ({ _tag: "Success" as const, value }),
+      }))
+      if (pollAttempt._tag === "Failure") {
+        return yield* classifyGenerationFailure(current.runId, request.objective, pollAttempt.error)
+      }
+      const polled = pollAttempt.value
+      const persistenceAttempt = yield* record(polled.status === "pending"
         ? {
             _tag: "CommitSeedancePoll" as const,
             runId: current.runId,
@@ -422,10 +583,14 @@ const advanceSeedanceRun = (
             outputs: polled.outputs,
             completedCount: polled.completedCount,
             cost: polled.cost,
-          }).pipe(Effect.mapError(asConductorError(
-            "RUN_RECORD_FAILURE",
-            "The Seedance poll response could not be persisted.",
-          )))
+          }).pipe(Effect.match({
+            onFailure: (error) => ({ _tag: "Failure" as const, error }),
+            onSuccess: (value) => ({ _tag: "Success" as const, value }),
+          }))
+      if (persistenceAttempt._tag === "Failure") {
+        return yield* interruptedPersistenceDecision(current.runId, request.objective, persistenceAttempt.error)
+      }
+      const persisted = persistenceAttempt.value
       current = persisted.view
       if (polled.status === "pending" || current.phase === "provider_evidence_received") {
         const diagnostics = yield* readDiagnostics(current.runId).pipe(Effect.mapError(asConductorError(
@@ -543,6 +708,14 @@ export const advanceRun = (
     )))
     let generated: GenerationResult | undefined
 
+    if (current.phase === "blocked" || current.phase === "failed") {
+      const diagnostics = yield* readDiagnostics(current.runId).pipe(Effect.mapError(asConductorError(
+        "RUN_RECORD_FAILURE",
+        "The terminal Qwen outcome could not be replayed.",
+      )))
+      return replayedTerminalDecision(diagnostics, request.objective)
+    }
+
     if (current.phase === "reserved") {
       const marked = yield* record({
         _tag: "SubmissionMayHaveStarted",
@@ -558,21 +731,27 @@ export const advanceRun = (
           "The Run did not issue its one in-process Submission Permit.",
         ))
       }
-      generated = yield* invoke(prepared, marked.permit).pipe(
-        Effect.mapError(asConductorError(
-          "GENERATION_FAILURE",
-          "The one permitted Generation invocation did not return trustworthy normalized evidence.",
-        )),
-      )
-      const provider = yield* record({
+      const generationAttempt = yield* invoke(prepared, marked.permit).pipe(Effect.match({
+        onFailure: (error) => ({ _tag: "Failure" as const, error }),
+        onSuccess: (value) => ({ _tag: "Success" as const, value }),
+      }))
+      if (generationAttempt._tag === "Failure") {
+        return yield* classifyGenerationFailure(current.runId, request.objective, generationAttempt.error)
+      }
+      generated = generationAttempt.value
+      const persistenceAttempt = yield* record({
         _tag: "CommitProviderEvidence",
         runId: current.runId,
         operationId: "conductor-provider-evidence",
         evidence: generated.providerEvidence,
-      }).pipe(Effect.mapError(asConductorError(
-        "RUN_RECORD_FAILURE",
-        "Normalized provider evidence could not be persisted.",
-      )))
+      }).pipe(Effect.match({
+        onFailure: (error) => ({ _tag: "Failure" as const, error }),
+        onSuccess: (value) => ({ _tag: "Success" as const, value }),
+      }))
+      if (persistenceAttempt._tag === "Failure") {
+        return yield* interruptedPersistenceDecision(current.runId, request.objective, persistenceAttempt.error)
+      }
+      const provider = persistenceAttempt.value
       current = provider.view
     }
 

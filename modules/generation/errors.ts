@@ -4,6 +4,7 @@ export type GenerationErrorCode =
   | "ADAPTER_RESULT_INVALID"
   | "PROVIDER_SUBSTITUTION"
   | "OUTPUT_COUNT_MISMATCH"
+  | "PROVIDER_AMBIGUOUS"
 
 export class GenerationError extends Error {
   readonly code: GenerationErrorCode

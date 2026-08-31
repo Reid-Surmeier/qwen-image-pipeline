@@ -289,6 +289,7 @@ export const makeFixture = (
     outputRoot: "generated",
     maximumCount: 4,
     maximumBudgetUsd: "1.00",
+    maximumCorrectionRuns: 2,
     procedures: [
       {
         id: "qwen-neutral",
