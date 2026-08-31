@@ -4,11 +4,8 @@ export type EvidenceIdentity = Readonly<{ applicationPath: string; sha256: strin
 
 export type CompletedLearningEvidence = Readonly<{
   runId: string
-  request: EvidenceIdentity
   candidate: EvidenceIdentity
   provenance: Readonly<{
-    provider: "openrouter"
-    model: string
     providerReceipt: EvidenceIdentity
   }>
   supportingEvidence: ReadonlyArray<EvidenceIdentity>
@@ -33,7 +30,11 @@ export type LearningProposal = Readonly<{
   excludedApplicationDetail: string
   supportingEvidence: ReadonlyArray<EvidenceIdentity>
   counterevidence: ReadonlyArray<ReviewInvalidationEvidence>
-  provenance: CompletedLearningEvidence["provenance"]
+  provenance: Readonly<{
+    provider: "openrouter"
+    model: string
+    providerReceipt: EvidenceIdentity
+  }>
   proposalSha256: string
 }>
 

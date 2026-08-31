@@ -1,16 +1,16 @@
+import { Context } from "effect"
+
 export type ReviewEvidenceIdentity = Readonly<{
   applicationPath: string
   sha256: string
 }>
 
 export type ReviewPacketInput = Readonly<{
-  applicationCommit: string
   acceptanceContract: ReviewEvidenceIdentity
+  reviewBrief: ReviewEvidenceIdentity
   runId: string
   references: ReadonlyArray<ReviewEvidenceIdentity>
   candidate: ReviewEvidenceIdentity
-  instructions: string
-  unresolvedHumanDecisions: ReadonlyArray<string>
 }>
 
 export type ReviewPacket = Readonly<{
@@ -19,6 +19,7 @@ export type ReviewPacket = Readonly<{
   applicationCommit: string
   toolCommit: string
   acceptanceContract: ReviewEvidenceIdentity
+  reviewBrief: ReviewEvidenceIdentity
   run: Readonly<{
     runId: string
     canonicalRequest: string
@@ -40,12 +41,33 @@ export type ReviewPacket = Readonly<{
   packetSha256: string
 }>
 
-export type ReviewPacketBindings = Readonly<{
+export interface ReviewApplicationService {
+  readonly _tag: "VerifiedReviewApplication"
+}
+
+export const ReviewApplication = Context.Service<ReviewApplicationService>(
+  "qwen-pipeline/ReviewApplication",
+)
+
+export type ReviewApplicationSnapshot = Readonly<{
   applicationCommit: string
+  files: ReadonlyMap<string, Uint8Array>
+}>
+
+export type ReviewCounterexample = Readonly<{
+  proposedRule: string
+  affectedSeam: string
+  mutationDescription: string
 }>
 
 export type ReviewInvalidationEvidence = Readonly<{
   name: "candidate-changed" | "reference-changed"
+  sourceRunId: string
+  sourcePacketSha256: string
+  proposedRuleSha256: string
+  affectedSeam: string
+  mutationDescription: string
+  expectedSha256: string
   mutationSha256: string
   caughtBy: "Review"
   evidenceSha256: string

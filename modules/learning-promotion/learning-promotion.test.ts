@@ -1,67 +1,60 @@
 import assert from "node:assert/strict"
-import { createHash } from "node:crypto"
 import test from "node:test"
 
 import { Effect } from "effect"
 
-import { ApplicationFiles, ApplicationReadError, type ApplicationFilesService } from "../reference-planning/index.js"
 import type { ReviewInvalidationEvidence } from "../review/index.js"
+import { issueReferenceInvalidation, learningCounterexample } from "../../tests/review-evidence-fixture.js"
 import { openLearningDecision, promoteLearning, type CompletedLearningEvidence } from "./index.js"
-import { issueReferenceInvalidation } from "../../tests/review-evidence-fixture.js"
-
-const hash = (value: Uint8Array | string): string => createHash("sha256").update(value).digest("hex")
 
 const setup = async () => {
-  const bodies = new Map<string, Uint8Array>([
-    ["runs/run-a/request.json", Buffer.from("request")],
-    ["outputs/candidate.png", Buffer.from("candidate")],
-    ["provider/receipt.json", Buffer.from("receipt")],
-    ["checks/verification.json", Buffer.from("checks")],
-  ])
-  const files: ApplicationFilesService = { read: (applicationPath) => {
-    const bytes = bodies.get(applicationPath)
-    return bytes === undefined
-      ? Effect.fail(new ApplicationReadError("APPLICATION_PATH_MISSING", applicationPath))
-      : Effect.succeed({ applicationPath, bytes: Uint8Array.from(bytes) })
-  } }
-  const provide = <Success, Error, Requirements>(effect: Effect.Effect<Success, Error, Requirements>) =>
-    effect.pipe(Effect.provideService(ApplicationFiles, files)) as Effect.Effect<Success, Error>
-  const knownBad = await issueReferenceInvalidation()
-  const identity = (applicationPath: string) => ({ applicationPath, sha256: hash(bodies.get(applicationPath)!) })
-  const complete = (proof: ReviewInvalidationEvidence = knownBad): CompletedLearningEvidence => ({
-    runId: "run-a",
-    request: identity("runs/run-a/request.json"),
-    candidate: identity("outputs/candidate.png"),
-    provenance: { provider: "openrouter", model: "qwen/qwen-image-edit", providerReceipt: identity("provider/receipt.json") },
-    supportingEvidence: [identity("checks/verification.json")],
+  const issued = await issueReferenceInvalidation()
+  const diagnostics = issued.fixture.completed.diagnostics
+  const providerReceipt = [...diagnostics.view.evidence].reverse().find((item) => item.applicationPath.startsWith("polls/"))!
+  const checks = diagnostics.view.evidence.find((item) => item.sha256 === diagnostics.view.checksSha256)!
+  const complete = (proof: ReviewInvalidationEvidence = issued.evidence): CompletedLearningEvidence => ({
+    runId: issued.fixture.completed.runId,
+    candidate: {
+      applicationPath: issued.fixture.completed.candidate.applicationPath,
+      sha256: issued.fixture.completed.candidate.sha256,
+    },
+    provenance: { providerReceipt: { applicationPath: providerReceipt.applicationPath, sha256: providerReceipt.sha256 } },
+    supportingEvidence: [{ applicationPath: checks.applicationPath, sha256: checks.sha256 }],
     knownBadCases: [proof],
-    proposedRule: "Reject any candidate that changes pixels outside the owned region.",
-    scope: "normalized RGBA assembly candidates",
-    affectedSeam: "Verification.verify",
-    compatibilityRisk: "Previously accepted candidates with unowned drift will fail.",
+    proposedRule: learningCounterexample.proposedRule,
+    scope: "hash-locked application review packets",
+    affectedSeam: learningCounterexample.affectedSeam,
+    compatibilityRisk: "Review packets with changed reference bytes will be invalidated.",
     excludedApplicationDetail: "No application names, prompts, art, or paths are generalized.",
   })
-  return { complete, knownBad, provide }
+  return { ...issued, complete }
 }
 
-test("refuses a pretty candidate without provenance, positive evidence, or independently issued counterevidence", async () => {
+test("refuses evidence that is not one replay-authenticated Run or whose known-bad misses the proposed rule", async (t) => {
   const fixture = await setup()
-  const fakeProof = { ...fixture.knownBad }
+  t.after(fixture.fixture.cleanup)
+  const fakeProof = { ...fixture.evidence }
   for (const evidence of [
-    { ...fixture.complete(), provenance: { ...fixture.complete().provenance, model: "" } },
+    { ...fixture.complete(), provenance: { providerReceipt: { applicationPath: "provider/unrelated.json", sha256: "1".repeat(64) } } },
     { ...fixture.complete(), supportingEvidence: [] },
     { ...fixture.complete(), knownBadCases: [fakeProof] },
+    { ...fixture.complete(), proposedRule: "An unrelated proposed rule." },
   ]) {
-    await assert.rejects(Effect.runPromise(fixture.provide(promoteLearning(evidence))),
+    await assert.rejects(Effect.runPromise(fixture.fixture.provide(promoteLearning(evidence))),
       (error: unknown) => error instanceof Error && "code" in error)
   }
 })
 
-test("creates one complete immutable proposal and only that issued proposal can open review", async () => {
+test("creates one complete Run-authenticated proposal and only that issued proposal can open review", async (t) => {
   const fixture = await setup()
-  const proposal = await Effect.runPromise(fixture.provide(promoteLearning(fixture.complete())))
+  t.after(fixture.fixture.cleanup)
+  const proposal = await Effect.runPromise(fixture.fixture.provide(promoteLearning(fixture.complete())))
   assert.equal(proposal.counterevidence[0]!.caughtBy, "Review")
+  assert.equal(proposal.counterevidence[0]!.sourceRunId, proposal.sourceRunId)
   assert.equal(proposal.scope, fixture.complete().scope)
+  assert.equal(proposal.provenance.provider, "openrouter")
+  assert.equal(proposal.provenance.model, fixture.fixture.planned.run.request.model)
+  assert.equal(proposal.sourceRequest.sha256, fixture.fixture.planned.run.requestSha256)
   assert.match(proposal.proposalSha256, /^[a-f0-9]{64}$/)
   assert.equal(Object.isFrozen(proposal), true)
   const decision = await Effect.runPromise(openLearningDecision(proposal, "a".repeat(40)))
