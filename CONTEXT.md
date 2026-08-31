@@ -108,6 +108,14 @@ _Avoid_: Whoever is available, the agent
 The application owner's separate subjective acceptance of a Verified Candidate. No Machine Outcome, check result, or agent statement can create Approval.
 _Avoid_: Verified Candidate, tests passed
 
+**Learning Proposal**:
+A hash-locked, review-only generalization from complete Run provenance, positive evidence, and independently caught known-bad evidence. It names scope, affected seam, compatibility risk, and excluded application detail but cannot change a Procedure, interface, error, test, or application lock.
+_Avoid_: Self-modifying rule, application anecdote
+
+**Review Packet**:
+The hash-locked plain-language bundle of one acceptance contract, exact Run Request and event head, references, candidate, instructions, deterministic verification evidence, and unresolved human decisions. Any changed Run, reference, candidate, or packet content invalidates it; machine verification remains separate from Approval.
+_Avoid_: Screenshot alone, implementer narration
+
 **Normal View**:
 The plain-language account of the objective, evidence, next action, spend risk, and remaining human decision returned for every planning result.
 _Avoid_: Debug dump, success banner
