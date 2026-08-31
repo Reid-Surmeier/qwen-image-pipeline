@@ -5,7 +5,7 @@
 - Errors: `modules/generation/errors.ts`
 - Acceptance: `modules/generation/generation.test.ts`
 
-Provider sanitization recursively inspects JSON-shaped string values, including duplicate keys inside them, so serialized debug payloads cannot conceal credential material.
+The shared Provider Evidence Sanitizer recursively inspects JSON-shaped string values, including duplicate keys and loose diagnostic fields, before Generation can return evidence.
 
 Generation prepares a deterministic provider payload before reservation, verifies that each evidence media type equals the inspector-locked media type and matches its exact image or video payload location, and exposes the immutable request and payload SHA-256 values. Before consuming authority, invocation decodes every supplied reference from the payload, reconstructs the canonical payload from the immutable request, and requires exact equality; a self-consistent digest cannot hide a missing or substituted reference. Invocation then consumes Run Record's runtime-authenticated, one-use Submission Permit bound to both digests and only afterward invokes the adapter itself; no public Run Record operation can execute a caller-supplied submission Effect.
 

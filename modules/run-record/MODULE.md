@@ -6,6 +6,7 @@
 - Acceptance: `modules/run-record/run-record.test.ts`
 
 Secret checks recursively inspect JSON-shaped string values, including duplicate keys inside them, before any provider or failure evidence is persisted.
+The shared Provider Evidence Sanitizer owns that classifier and parser; Run Record owns the typed refusal and persistence decision.
 
 Before writing `provider-response.json`, Run Record validates the mode-specific document, proves a complete trial replay, and journals a pre-write intent containing its expected hash, length, media type, and completion identity. Reservation reload reconciles an interrupted write only when the orphaned bytes match that earlier durable intent; substituted or intent-free storage is refused, and recovery never issues a new Submission Permit.
 

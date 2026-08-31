@@ -2,6 +2,10 @@ import { createHash } from "node:crypto"
 
 import { Effect } from "effect"
 
+import {
+  hasDuplicateJsonKeys,
+  hasProviderCredentialMaterial,
+} from "../provider-evidence-sanitizer/index.js"
 import type { CanonicalRunRequest } from "../run-contract/index.js"
 import { consumeSubmission, type SubmissionPermit } from "../run-record/index.js"
 import { GenerationError } from "./errors.js"
@@ -92,152 +96,6 @@ const isNormalizedRgbaRaster = (body: Uint8Array): boolean => {
 const isSafeJobId = (value: unknown): value is string =>
   typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)
 
-const credentialFieldName = (key: string): boolean => {
-  const compatibleKey = key.normalize("NFKC")
-  if (/[^\x20-\x7e]/.test(compatibleKey)) return true
-  const normalized = compatibleKey.toLowerCase().replace(/[^a-z0-9]/g, "").replace(/^x/, "")
-  if (["prompttokens", "completiontokens", "totaltokens", "cachedtokens", "reasoningtokens"].includes(normalized)) {
-    return false
-  }
-  return /(?:api|access|private)key$/.test(normalized) ||
-    /(?:secret|password|credential)(?:key|value)?$/.test(normalized) ||
-    /authorization$/.test(normalized) ||
-    /(?:sig|signature)$/.test(normalized) ||
-    /credentials?$/.test(normalized) ||
-    /^(?:auth|authentication|authorization)(?:data|header|info|token|value)?$/.test(normalized) ||
-    /token$/.test(normalized) ||
-    /cookie$/.test(normalized) ||
-    /^(?:request|response)?headers$/.test(normalized) ||
-    normalized === "credential"
-}
-
-const stringHasCredentialField = (value: string): boolean => {
-  const fields = /"((?:\\.|[^"\\])*)"\s*:/g
-  for (const match of value.matchAll(fields)) {
-    try {
-      const decoded = JSON.parse(`"${match[1]}"`) as unknown
-      if (typeof decoded !== "string" || credentialFieldName(decoded)) return true
-    } catch {
-      return true
-    }
-  }
-  const looseFieldIsCredential = (encoded: string): boolean => {
-    if (!encoded.includes("\\")) return credentialFieldName(encoded)
-    try {
-      const decoded = JSON.parse(`"${encoded}"`) as unknown
-      return typeof decoded !== "string" || credentialFieldName(decoded)
-    } catch {
-      return true
-    }
-  }
-  for (const match of value.matchAll(/'((?:\\.|[^'\\])*)'\s*[:=]/g)) {
-    if (looseFieldIsCredential(match[1] ?? "")) return true
-  }
-  for (const match of value.matchAll(/([\\\p{L}\p{N}_-]+)\s*[:=]/gu)) {
-    if (looseFieldIsCredential(match[1] ?? "")) return true
-  }
-  return false
-}
-
-const hasSecretMaterial = (value: unknown, parentKey = "", embeddedDepth = 0): boolean => {
-  if (credentialFieldName(parentKey)) {
-    return true
-  }
-  if (typeof value === "string") {
-    if (
-      /(?:sk-|gh[pousr]_|Bearer\s+)[A-Za-z0-9_-]{6,}/i.test(value) ||
-      /https?:\/\/[^/\s:@]+:[^/\s@]+@/i.test(value) ||
-      stringHasCredentialField(value) ||
-      /"(?:credential|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|authorization|password|secret|(?:access|refresh|id)[_-]?token)"\s*:/i.test(value)
-    ) return true
-    if (/^\s*[\[{]/.test(value)) {
-      if (embeddedDepth >= 4) return true
-      try {
-        if (hasDuplicateJsonKeys(value)) return true
-        if (hasSecretMaterial(JSON.parse(value), parentKey, embeddedDepth + 1)) return true
-      } catch {
-        return true
-      }
-    }
-    return false
-  }
-  if (Array.isArray(value)) return value.some((child) => hasSecretMaterial(child, parentKey, embeddedDepth))
-  if (value !== null && typeof value === "object") {
-    return Object.entries(value).some(([key, child]) => hasSecretMaterial(child, key, embeddedDepth))
-  }
-  return false
-}
-
-const hasDuplicateJsonKeys = (source: string): boolean => {
-  let cursor = 0
-  const whitespace = () => { while (/\s/.test(source[cursor] ?? "")) cursor += 1 }
-  const string = (): string => {
-    const start = cursor
-    cursor += 1
-    while (cursor < source.length) {
-      if (source[cursor] === "\\") { cursor += 2; continue }
-      if (source[cursor] === '"') {
-        cursor += 1
-        return JSON.parse(source.slice(start, cursor)) as string
-      }
-      cursor += 1
-    }
-    throw new Error("unterminated JSON string")
-  }
-  const value = (): boolean => {
-    whitespace()
-    if (source[cursor] === "{") return object()
-    if (source[cursor] === "[") return array()
-    if (source[cursor] === '"') { string(); return false }
-    const start = cursor
-    while (cursor < source.length && !/[\s,}\]]/.test(source[cursor]!)) cursor += 1
-    if (cursor === start) throw new Error("missing JSON value")
-    return false
-  }
-  const object = (): boolean => {
-    cursor += 1
-    whitespace()
-    const keys = new Set<string>()
-    if (source[cursor] === "}") { cursor += 1; return false }
-    while (cursor < source.length) {
-      whitespace()
-      if (source[cursor] !== '"') throw new Error("missing JSON key")
-      const key = string()
-      if (keys.has(key)) return true
-      keys.add(key)
-      whitespace()
-      if (source[cursor] !== ":") throw new Error("missing JSON colon")
-      cursor += 1
-      if (value()) return true
-      whitespace()
-      if (source[cursor] === "}") { cursor += 1; return false }
-      if (source[cursor] !== ",") throw new Error("missing JSON object separator")
-      cursor += 1
-    }
-    throw new Error("unterminated JSON object")
-  }
-  const array = (): boolean => {
-    cursor += 1
-    whitespace()
-    if (source[cursor] === "]") { cursor += 1; return false }
-    while (cursor < source.length) {
-      if (value()) return true
-      whitespace()
-      if (source[cursor] === "]") { cursor += 1; return false }
-      if (source[cursor] !== ",") throw new Error("missing JSON array separator")
-      cursor += 1
-    }
-    throw new Error("unterminated JSON array")
-  }
-  try {
-    const duplicate = value()
-    whitespace()
-    return duplicate
-  } catch {
-    return false
-  }
-}
-
 const parseProviderDocument = (
   evidence: GenerationProviderEvidence,
 ): Record<string, unknown> | undefined => {
@@ -251,7 +109,12 @@ const parseProviderDocument = (
     const source = Buffer.from(evidence.body).toString("utf8")
     if (hasDuplicateJsonKeys(source)) return undefined
     const document: unknown = JSON.parse(source)
-    if (document === null || typeof document !== "object" || Array.isArray(document) || hasSecretMaterial(document)) {
+    if (
+      document === null ||
+      typeof document !== "object" ||
+      Array.isArray(document) ||
+      hasProviderCredentialMaterial(document)
+    ) {
       return undefined
     }
     return document as Record<string, unknown>

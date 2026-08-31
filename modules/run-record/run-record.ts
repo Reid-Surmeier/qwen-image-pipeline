@@ -3,6 +3,10 @@ import { spawnSync } from "node:child_process"
 
 import { Effect } from "effect"
 
+import {
+  hasDuplicateJsonKeys,
+  hasProviderCredentialMaterial,
+} from "../provider-evidence-sanitizer/index.js"
 import { RunRecordError } from "./errors.js"
 import type { CanonicalRunRequest } from "../run-contract/index.js"
 import type {
@@ -978,7 +982,7 @@ const replay = (
         const provider = providerDocument as Readonly<Record<string, unknown>>
         if (
           providerDocument === null || typeof providerDocument !== "object" || Array.isArray(providerDocument) ||
-          valueHasSecret(providerDocument) ||
+          hasProviderCredentialMaterial(providerDocument) ||
           typeof provider.job_id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(provider.job_id) ||
           (provider.status !== "submitted" && provider.status !== "queued")
         ) {
@@ -1025,7 +1029,7 @@ const replay = (
       const poll = pollDocument as Readonly<Record<string, unknown>>
       if (
         pollDocument === null || typeof pollDocument !== "object" || Array.isArray(pollDocument) ||
-        valueHasSecret(pollDocument) ||
+        hasProviderCredentialMaterial(pollDocument) ||
         poll.job_id !== providerJobId || poll.status !== status
       ) {
         throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance poll evidence substituted its job identity or status.", "repair-evidence")
@@ -1503,160 +1507,6 @@ export const reserveRun = (
   )
 })
 
-const credentialFieldName = (key: string): boolean => {
-  const compatibleKey = key.normalize("NFKC")
-  if (/[^\x20-\x7e]/.test(compatibleKey)) return true
-  const normalized = compatibleKey.toLowerCase().replace(/[^a-z0-9]/g, "").replace(/^x/, "")
-  if (["prompttokens", "completiontokens", "totaltokens", "cachedtokens", "reasoningtokens"].includes(normalized)) {
-    return false
-  }
-  return /(?:api|access|private)key$/.test(normalized) ||
-    /(?:secret|password|credential)(?:key|value)?$/.test(normalized) ||
-    /authorization$/.test(normalized) ||
-    /(?:sig|signature)$/.test(normalized) ||
-    /credentials?$/.test(normalized) ||
-    /^(?:auth|authentication|authorization)(?:data|header|info|token|value)?$/.test(normalized) ||
-    /token$/.test(normalized) ||
-    /cookie$/.test(normalized) ||
-    /^(?:request|response)?headers$/.test(normalized) ||
-    normalized === "credential"
-}
-
-const stringHasCredentialField = (value: string): boolean => {
-  const fields = /"((?:\\.|[^"\\])*)"\s*:/g
-  for (const match of value.matchAll(fields)) {
-    try {
-      const decoded = JSON.parse(`"${match[1]}"`) as unknown
-      if (typeof decoded !== "string" || credentialFieldName(decoded)) return true
-    } catch {
-      return true
-    }
-  }
-  const looseFieldIsCredential = (encoded: string): boolean => {
-    if (!encoded.includes("\\")) return credentialFieldName(encoded)
-    try {
-      const decoded = JSON.parse(`"${encoded}"`) as unknown
-      return typeof decoded !== "string" || credentialFieldName(decoded)
-    } catch {
-      return true
-    }
-  }
-  for (const match of value.matchAll(/'((?:\\.|[^'\\])*)'\s*[:=]/g)) {
-    if (looseFieldIsCredential(match[1] ?? "")) return true
-  }
-  for (const match of value.matchAll(/([\\\p{L}\p{N}_-]+)\s*[:=]/gu)) {
-    if (looseFieldIsCredential(match[1] ?? "")) return true
-  }
-  return false
-}
-
-const valueHasSecret = (value: unknown, key?: string, embeddedDepth = 0): boolean => {
-  if (key !== undefined && credentialFieldName(key)) {
-    return true
-  }
-  if (typeof value === "string") {
-    let credentialQuery = false
-    try {
-      const parsed = new URL(value, "https://run-record.invalid")
-      credentialQuery = [...parsed.searchParams.keys()].some(credentialFieldName)
-    } catch {
-      credentialQuery = /[?&](?:api[_-]?key|access[_-]?key|password|secret|authorization|(?:access|refresh|id)?[_-]?token)=/i.test(value)
-    }
-    if (credentialQuery ||
-      /(?:sk-|gh[pousr]_|Bearer\s+)[A-Za-z0-9_-]{6,}/i.test(value) ||
-      /-----BEGIN [A-Z ]*PRIVATE KEY-----/.test(value) ||
-      /https?:\/\/[^/\s:@]+:[^/\s@]+@/i.test(value) ||
-      stringHasCredentialField(value) ||
-      /"(?:credential|api[_-]?key|access[_-]?key|private[_-]?key|client[_-]?secret|authorization|password|secret|(?:access|refresh|id)[_-]?token)"\s*:/i.test(value)
-    ) return true
-    if (/^\s*[\[{]/.test(value)) {
-      if (embeddedDepth >= 4) return true
-      try {
-        if (hasDuplicateJsonKeys(value)) return true
-        if (valueHasSecret(JSON.parse(value), key, embeddedDepth + 1)) return true
-      } catch {
-        return true
-      }
-    }
-    return false
-  }
-  if (Array.isArray(value)) return value.some((child) => valueHasSecret(child, undefined, embeddedDepth))
-  if (value !== null && typeof value === "object") {
-    return Object.entries(value).some(([childKey, child]) => valueHasSecret(child, childKey, embeddedDepth))
-  }
-  return false
-}
-
-const hasDuplicateJsonKeys = (source: string): boolean => {
-  let cursor = 0
-  const whitespace = () => { while (/\s/.test(source[cursor] ?? "")) cursor += 1 }
-  const string = (): string => {
-    const start = cursor
-    cursor += 1
-    while (cursor < source.length) {
-      if (source[cursor] === "\\") { cursor += 2; continue }
-      if (source[cursor] === '"') {
-        cursor += 1
-        return JSON.parse(source.slice(start, cursor)) as string
-      }
-      cursor += 1
-    }
-    throw new Error("unterminated JSON string")
-  }
-  const value = (): boolean => {
-    whitespace()
-    if (source[cursor] === "{") return object()
-    if (source[cursor] === "[") return array()
-    if (source[cursor] === '"') { string(); return false }
-    const start = cursor
-    while (cursor < source.length && !/[\s,}\]]/.test(source[cursor]!)) cursor += 1
-    if (cursor === start) throw new Error("missing JSON value")
-    return false
-  }
-  const object = (): boolean => {
-    cursor += 1
-    whitespace()
-    const keys = new Set<string>()
-    if (source[cursor] === "}") { cursor += 1; return false }
-    while (cursor < source.length) {
-      whitespace()
-      if (source[cursor] !== '"') throw new Error("missing JSON key")
-      const key = string()
-      if (keys.has(key)) return true
-      keys.add(key)
-      whitespace()
-      if (source[cursor] !== ":") throw new Error("missing JSON colon")
-      cursor += 1
-      if (value()) return true
-      whitespace()
-      if (source[cursor] === "}") { cursor += 1; return false }
-      if (source[cursor] !== ",") throw new Error("missing JSON object separator")
-      cursor += 1
-    }
-    throw new Error("unterminated JSON object")
-  }
-  const array = (): boolean => {
-    cursor += 1
-    whitespace()
-    if (source[cursor] === "]") { cursor += 1; return false }
-    while (cursor < source.length) {
-      if (value()) return true
-      whitespace()
-      if (source[cursor] === "]") { cursor += 1; return false }
-      if (source[cursor] !== ",") throw new Error("missing JSON array separator")
-      cursor += 1
-    }
-    throw new Error("unterminated JSON array")
-  }
-  try {
-    const duplicate = value()
-    whitespace()
-    return duplicate
-  } catch {
-    return false
-  }
-}
-
 const validateProviderEvidence = (operation: Extract<RecordOperation, { _tag: "CommitProviderEvidence" }>): unknown => {
   if (
     operation.evidence.mediaType !== "application/json" ||
@@ -1674,7 +1524,7 @@ const validateProviderEvidence = (operation: Extract<RecordOperation, { _tag: "C
   } catch {
     throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Provider evidence must be valid sanitized JSON.", "repair-evidence")
   }
-  if (valueHasSecret(parsed)) {
+  if (hasProviderCredentialMaterial(parsed)) {
     throw new RunRecordError("SECRET_MATERIAL_DETECTED", "Provider evidence contains credential material.", "repair-evidence")
   }
   return parsed
@@ -2483,10 +2333,10 @@ export const recordOperation = (
       !isIdentifier(operation.failure.class) ||
       operation.failure.message.trim().length === 0 ||
       operation.failure.message.length > 500 ||
-      valueHasSecret(operation.failure)
+      hasProviderCredentialMaterial(operation.failure)
     ) {
       return yield* Effect.fail(new RunRecordError(
-        valueHasSecret(operation.failure) ? "SECRET_MATERIAL_DETECTED" : "ILLEGAL_TRANSITION",
+        hasProviderCredentialMaterial(operation.failure) ? "SECRET_MATERIAL_DETECTED" : "ILLEGAL_TRANSITION",
         "The definitive failure must be safe, named, and non-empty.",
       ))
     }

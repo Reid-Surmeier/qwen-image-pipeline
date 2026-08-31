@@ -27,6 +27,26 @@ export const EMBEDDED_PROVIDER_SECRET_CASES = [
     debug: "provider diagnostic: api_key=opaque-private-value",
     status: "accepted",
   })],
+  ["dotted-assignment-diagnostic-field", JSON.stringify({
+    debug: "provider diagnostic: api.key=opaque-private-value",
+    status: "accepted",
+  })],
+  ["spaced-assignment-diagnostic-field", JSON.stringify({
+    debug: "provider diagnostic: api key=opaque-private-value",
+    status: "accepted",
+  })],
+  ["bracketed-assignment-diagnostic-field", JSON.stringify({
+    debug: "provider diagnostic: [api_key]=opaque-private-value",
+    status: "accepted",
+  })],
+  ["multiline-assignment-diagnostic-field", JSON.stringify({
+    debug: "provider diagnostic: api\nkey=opaque-private-value",
+    status: "accepted",
+  })],
+  ["slash-qualified-assignment-diagnostic-field", JSON.stringify({
+    debug: "provider diagnostic: api/key=opaque-private-value",
+    status: "accepted",
+  })],
   ["nested-json-secret", '{"debug":"{\\"api_key\\":\\"actual-private-value\\"}","status":"accepted"}'],
   ["nested-json-duplicate-secret", '{"debug":"{\\"note\\":\\"sk-private-value-123456\\",\\"note\\":\\"redacted\\"}","status":"accepted"}'],
   ["deeply-nested-json-secret", JSON.stringify({

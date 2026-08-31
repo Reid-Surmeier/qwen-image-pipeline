@@ -4,6 +4,7 @@ module.exports = {
       "assembly",
       "conductor",
       "generation",
+      "provider-evidence-sanitizer",
       "reference-planning",
       "run-contract",
       "run-record",
