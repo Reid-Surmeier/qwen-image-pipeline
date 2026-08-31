@@ -75,6 +75,10 @@ def discover_retained_surfaces(repository: Path) -> set[str]:
                 for child in node.body:
                     if isinstance(child, ast.FunctionDef) and child.name in {"generate", "review"}:
                         surfaces.add(f"python-api.{module}.{node.name}.{child.name}")
+    adapter_path = repository / "qwen_ui_pipeline/qwen_adapter.py"
+    for node in _parse(adapter_path).body:
+        if isinstance(node, ast.FunctionDef) and node.name == "invoke_qwen_kernel":
+            surfaces.add(f"python-api.{_module_name(adapter_path, repository)}.{node.name}")
     return surfaces
 
 
@@ -213,6 +217,15 @@ def render_markdown(document: dict[str, Any]) -> str:
         )
         for entry in sorted(document["compatibilitySurfaces"], key=lambda item: item["surface"])
     ]
+    material_rows = [
+        "| {material} | {path} | {disposition} | {evidence} |".format(
+            material=entry["material"],
+            path=entry["path"],
+            disposition=entry["disposition"],
+            evidence=entry["evidence"],
+        )
+        for entry in sorted(document["materials"], key=lambda item: item["material"])
+    ]
     return "\n".join(
         (
             "# Migration ledger",
@@ -232,6 +245,14 @@ def render_markdown(document: dict[str, Any]) -> str:
             "| Surface | Retirement condition |",
             "| --- | --- |",
             *compatibility_rows,
+            "",
+            "## Qwen material dispositions",
+            "",
+            "These records keep implementation, compatibility, fixture, application evidence, and removed history distinct during migration.",
+            "",
+            "| Material | Path or history pointer | Disposition | Evidence and retention rule |",
+            "| --- | --- | --- | --- |",
+            *material_rows,
             "",
             "## Direct-provider bypasses still present",
             "",
@@ -308,6 +329,32 @@ def validate_document(document: Any) -> list[str]:
                 compatibility_surfaces.append(entry["surface"])
         if len(compatibility_surfaces) != len(set(compatibility_surfaces)):
             errors.append("compatibility surface identifiers must be unique")
+
+    materials = document.get("materials")
+    if not isinstance(materials, list):
+        errors.append("materials must be an array")
+    else:
+        material_ids: list[str] = []
+        material_dispositions: set[str] = set()
+        for index, entry in enumerate(materials):
+            label = f"materials[{index}]"
+            if not isinstance(entry, dict):
+                errors.append(f"{label} must be an object")
+                continue
+            for field in ("material", "path", "evidence"):
+                if not isinstance(entry.get(field), str) or not entry[field].strip():
+                    errors.append(f"{label}.{field} must be a non-empty string")
+            if isinstance(entry.get("material"), str) and entry["material"]:
+                material_ids.append(entry["material"])
+            disposition = entry.get("disposition")
+            if disposition not in ALLOWED_DISPOSITIONS:
+                errors.append(f"{label}.disposition is not a closed migration disposition")
+            else:
+                material_dispositions.add(disposition)
+        if len(material_ids) != len(set(material_ids)):
+            errors.append("material identifiers must be unique")
+        if material_dispositions != ALLOWED_DISPOSITIONS:
+            errors.append("materials must exercise every closed migration disposition")
 
     bypass_entries = document.get("directProviderBypasses")
     if not isinstance(bypass_entries, list):

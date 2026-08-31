@@ -15,7 +15,7 @@
     },
     {
       "surface": "python-cli.generate",
-      "retirementCondition": "Issue #28 migrates the Python CLI caller and proves saved-input compatibility."
+      "retirementCondition": "Issue #30 may remove the deprecated command after saved-input callers adopt Conductor plan and advance."
     }
   ],
   "entries": [
@@ -77,13 +77,13 @@
       "surface": "python-api.qwen_ui_pipeline.providers.alibaba.AlibabaImageClient.generate",
       "disposition": "retained implementation",
       "replacement": "Generation.invoke through OpenRouter",
-      "retirementCondition": "Issue #28 removes direct Alibaba reachability after compatibility evidence is preserved."
+      "retirementCondition": "Issue #29 migrates remaining ComfyUI callers; Issue #30 removes direct Alibaba reachability."
     },
     {
       "surface": "python-api.qwen_ui_pipeline.providers.alibaba.build_alibaba_request",
       "disposition": "retained implementation",
       "replacement": "Generation.prepare through the OpenRouter adapter protocol",
-      "retirementCondition": "Issue #28 preserves old request-read fixtures before the direct builder is retired."
+      "retirementCondition": "Issue #30 retains captured request-read fixtures before the direct builder is retired."
     },
     {
       "surface": "python-api.qwen_ui_pipeline.providers.openrouter.OpenRouterImageClient.generate",
@@ -110,6 +110,12 @@
       "retirementCondition": "Issues #28 and #29 migrate all Python and ComfyUI callers; Issue #30 removes the bypass."
     },
     {
+      "surface": "python-api.qwen_ui_pipeline.qwen_adapter.invoke_qwen_kernel",
+      "disposition": "retained implementation",
+      "replacement": "Generation.inheritedQwenAdapter through adapter protocol version 1",
+      "retirementCondition": "Issue #30 may contract the kernel only after the versioned adapter and cross-process qualification replace it."
+    },
+    {
       "surface": "python-api.qwen_ui_pipeline.providers.vision.OpenRouterVisionClient.review",
       "disposition": "retained implementation",
       "replacement": "Review semantic gate through Conductor-authorized evidence",
@@ -117,9 +123,9 @@
     },
     {
       "surface": "python-cli.generate",
-      "disposition": "retained implementation",
+      "disposition": "compatibility adapter",
       "replacement": "Conductor.plan and Conductor.advance",
-      "retirementCondition": "Issue #28 migrates the Python CLI caller and proves saved-input compatibility."
+      "retirementCondition": "Issue #30 may remove the deprecated command after saved-input callers adopt Conductor plan and advance."
     },
     {
       "surface": "python-cli.capacity",
@@ -128,12 +134,39 @@
       "retirementCondition": "Retain while capacity planning remains provider-free and outside normal Run execution."
     }
   ],
-  "directProviderBypasses": [
+  "materials": [
     {
-      "path": "qwen_ui_pipeline/cli.py:main->generate_with_provider",
-      "replacement": "Conductor.advance",
-      "retirementCondition": "Issue #28 migrates the Python CLI caller."
+      "material": "inherited-qwen-openrouter-kernel",
+      "path": "qwen_ui_pipeline/qwen_adapter.py",
+      "disposition": "retained implementation",
+      "evidence": "tests/test_qwen_adapter.py proves closed protocol input, exact model/count/references, success, rejection, and count mismatch."
     },
+    {
+      "material": "legacy-python-generate-command",
+      "path": "qwen_ui_pipeline/cli.py",
+      "disposition": "compatibility adapter",
+      "evidence": "tests/test_cli.py proves saved input remains readable and the command performs no provider submission."
+    },
+    {
+      "material": "neutral-qwen-adapter-fixtures",
+      "path": "tests/test_qwen_adapter.py and modules/generation/inherited-qwen-adapter.test.ts",
+      "disposition": "neutral fixture",
+      "evidence": "A SHA-256-locked sanitized historical response plus hand-authored one-pixel RGBA truth and local dummy transports prove read compatibility, success, rejection, count, protocol, and credential mutations without provider calls."
+    },
+    {
+      "material": "historical-application-generations",
+      "path": "artifacts/runs and artifacts/references",
+      "disposition": "application-owned",
+      "evidence": "Issue #30 must name and hash a destination before any tracked application artifact can be removed."
+    },
+    {
+      "material": "pre-conductor-python-direct-generate-body",
+      "path": "qwen_ui_pipeline/cli.py before Issue #28",
+      "disposition": "Git-history only",
+      "evidence": "The build branch parent of the Issue #28 implementation preserves the prior direct provider caller for reversal and audit."
+    }
+  ],
+  "directProviderBypasses": [
     {
       "path": "qwen_ui_pipeline/comfyui_node.py:QwenImage3Render.render->generate_with_provider",
       "replacement": "Conductor.advance",
@@ -163,6 +196,11 @@
       "path": "qwen_ui_pipeline/providers/router.py:generate_with_provider->openrouter_client.generate",
       "replacement": "Generation.invoke",
       "retirementCondition": "Issue #28 makes Generation the only provider adapter caller."
+    },
+    {
+      "path": "qwen_ui_pipeline/qwen_adapter.py:invoke_qwen_kernel->client.generate",
+      "replacement": "Generation.inheritedQwenAdapter through Conductor.advance",
+      "retirementCondition": "Issue #30 makes the versioned Generation adapter the sole authorized caller of the inherited kernel."
     },
     {
       "path": "qwen_ui_pipeline/providers/vision.py:OpenRouterVisionClient.review->self._opener",

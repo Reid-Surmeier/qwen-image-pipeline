@@ -82,3 +82,31 @@ test("refuses malformed Exact Copy coordinates and channel counts", async () => 
     assert.equal(error.code, "EXACT_COPY_HASH_MISMATCH")
   }
 })
+
+test("preserves independent flat palette bands outside the owned region and reapplies Exact Copy", async () => {
+  const baseline = raster([
+    0, 0, 0, 255, 255, 255, 255, 255,
+    255, 0, 255, 255, 0, 255, 255, 255,
+  ])
+  const donor = raster([
+    17, 18, 19, 255, 20, 21, 22, 255,
+    23, 24, 25, 255, 26, 27, 28, 255,
+  ])
+  const copyCore = { x: 1, y: 1, rgba: [0, 255, 255, 255] as const }
+  const assembled = await Effect.runPromise(assemble({
+    baseline,
+    donor,
+    ownedRegion: { x: 1, y: 0, width: 1, height: 2 },
+    exactCopy: [{ ...copyCore, sha256: sha256(JSON.stringify(copyCore)) }],
+  }))
+  const output = JSON.parse(Buffer.from(assembled.output.body).toString("utf8")) as {
+    pixels: number[]
+  }
+
+  assert.deepEqual(output.pixels, [
+    0, 0, 0, 255, 20, 21, 22, 255,
+    255, 0, 255, 255, 0, 255, 255, 255,
+  ])
+  assert.deepEqual(output.pixels.slice(0, 4), [0, 0, 0, 255])
+  assert.deepEqual(output.pixels.slice(8, 12), [255, 0, 255, 255])
+})

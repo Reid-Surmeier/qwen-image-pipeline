@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import importlib.util
+import base64
+import hashlib
+import io
 import json
 import tempfile
 import unittest
 from unittest import mock
+from contextlib import redirect_stdout
 from pathlib import Path
 
 
@@ -27,6 +31,10 @@ class MigrationLedgerTests(unittest.TestCase):
         errors, document = validator.validate_repository(ROOT)
         self.assertEqual(errors, [])
         self.assertEqual(document["schemaVersion"], 1)
+        self.assertEqual(
+            {material["disposition"] for material in document["materials"]},
+            validator.ALLOWED_DISPOSITIONS,
+        )
 
         recorded_surfaces = {entry["surface"] for entry in document["entries"]}
         self.assertEqual(recorded_surfaces, validator.discover_retained_surfaces(ROOT))
@@ -35,10 +43,8 @@ class MigrationLedgerTests(unittest.TestCase):
             entry["path"] for entry in document["directProviderBypasses"]
         }
         self.assertEqual(recorded_bypasses, validator.discover_direct_provider_bypasses(ROOT))
-        self.assertIn(
-            "qwen_ui_pipeline/cli.py:main->generate_with_provider",
-            recorded_bypasses,
-        )
+        self.assertNotIn("qwen_ui_pipeline/cli.py:main->generate_with_provider", recorded_bypasses)
+        self.assertIn("qwen_ui_pipeline/qwen_adapter.py:invoke_qwen_kernel->client.generate", recorded_bypasses)
         self.assertIn(
             "qwen_ui_pipeline/providers/vision.py:OpenRouterVisionClient.review->self._opener",
             recorded_bypasses,
@@ -67,12 +73,14 @@ class MigrationLedgerTests(unittest.TestCase):
                 "schemaVersion": 1,
                 "entries": [{}],
                 "compatibilitySurfaces": [{}],
+                "materials": [{}],
                 "directProviderBypasses": [{}],
             }
         )
         self.assertGreater(len(errors), 0)
         self.assertTrue(any("entries[0].surface" in error for error in errors))
         self.assertTrue(any("compatibilitySurfaces[0].surface" in error for error in errors))
+        self.assertTrue(any("materials[0].material" in error for error in errors))
         self.assertTrue(any("directProviderBypasses[0].path" in error for error in errors))
 
     def test_unclassified_direct_submission_is_rejected(self) -> None:
@@ -114,6 +122,7 @@ class MigrationLedgerTests(unittest.TestCase):
         from qwen_ui_pipeline.providers.openrouter import OpenRouterImageClient
         from qwen_ui_pipeline.providers.router import ProviderResult, generate_with_provider
         from qwen_ui_pipeline.providers.vision import OpenRouterVisionClient
+        from qwen_ui_pipeline.qwen_adapter import QWEN_ADAPTER_PROTOCOL_VERSION, invoke_qwen_kernel
         from qwen_ui_pipeline.fidelity import FidelityContract, FidelityResult, MutableRegion, RegionChange
         from qwen_ui_pipeline.verifier import RegionReview, VisionClient, run_verification
 
@@ -166,20 +175,45 @@ class MigrationLedgerTests(unittest.TestCase):
             root = Path(directory)
             brief_path = root / "brief.json"
             brief_path.write_text(json.dumps(brief), encoding="utf-8")
-            with (
-                mock.patch.object(
-                    cli,
-                    "generate_with_provider",
-                    side_effect=lambda *_args, **_kwargs: legacy_result(
-                        "qwen_ui_pipeline/cli.py:main->generate_with_provider"
-                    ),
-                ),
-                mock.patch.object(cli, "write_run_artifacts", return_value={}),
-            ):
+            with redirect_stdout(io.StringIO()):
                 self.assertEqual(
                     cli.main(["generate", str(brief_path), "--output-dir", str(root / "run")]),
-                    0,
+                    2,
                 )
+
+        reference = b"runtime-reference"
+
+        class QwenKernelClient:
+            def generate(self, _request):
+                observed.add("qwen_ui_pipeline/qwen_adapter.py:invoke_qwen_kernel->client.generate")
+                return {
+                    "id": "runtime-qwen-probe",
+                    "data": [{
+                        "b64_json": base64.b64encode(b"runtime-image").decode("ascii"),
+                        "media_type": "image/png",
+                    }],
+                }
+
+        invoke_qwen_kernel(
+            {
+                "adapter_protocol_version": QWEN_ADAPTER_PROTOCOL_VERSION,
+                "operation": "invoke",
+                "provider": "openrouter",
+                "model": "qwen/qwen-image-3-pro",
+                "objective": "Runtime bypass inventory probe.",
+                "requested_count": 1,
+                "references": [{
+                    "slot": "source",
+                    "application_path": "references/source.png",
+                    "sha256": hashlib.sha256(reference).hexdigest(),
+                    "payload_destination": "/input_references/0/image_url/url",
+                    "media_type": "image/png",
+                    "bytes_base64": base64.b64encode(reference).decode("ascii"),
+                }],
+            },
+            client=QwenKernelClient(),
+            decode_image=lambda _body, _media_type: (1, 1, [0, 0, 0, 255]),
+        )
 
         with (
             mock.patch.object(comfyui_node, "_provider_clients", return_value=(object(), None)),

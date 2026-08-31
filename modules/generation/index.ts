@@ -48,6 +48,8 @@ export const pollSeedance: (
 export { GenerationError } from "./errors.js"
 export type { GenerationErrorCode } from "./errors.js"
 export { GenerationAdapter } from "./types.js"
+export { inheritedQwenAdapter, QWEN_ADAPTER_PROTOCOL_VERSION } from "./inherited-qwen-adapter.js"
+export type { QwenKernelTransport } from "./inherited-qwen-adapter.js"
 export type {
   GeneratedArtifact,
   GenerationAdapterService,

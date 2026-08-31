@@ -42,7 +42,7 @@ test("additive compatibility planning emits immutable deprecation metadata and d
     status: "deprecated",
     surface: "python-cli.generate",
     replacement: "Conductor.plan",
-    retirementCondition: "Issue #28 migrates the Python CLI caller and proves saved-input compatibility.",
+    retirementCondition: "Issue #30 may remove the deprecated command after saved-input callers adopt Conductor plan and advance.",
   })
   assert.equal(Object.isFrozen(compatibility), true)
   assert.equal(Object.isFrozen(compatibility.compatibility), true)
