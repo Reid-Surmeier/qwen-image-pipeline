@@ -452,9 +452,6 @@ export const invokeGeneration = (
   Effect.gen(function*() {
     const validatedPrepared = yield* validatePreparedGeneration(prepared)
     const adapter = yield* GenerationAdapter
-    if (typeof adapter.invoke !== "function") {
-      return yield* Effect.fail(new GenerationError("ADAPTER_NOT_STARTED", "The adapter cannot submit Qwen."))
-    }
     yield* validateSubmission(permit, {
       requestSha256: validatedPrepared.requestSha256,
       payloadSha256: validatedPrepared.payloadSha256,
@@ -533,9 +530,6 @@ export const submitSeedanceGeneration = (
       ))
     }
     const adapter = yield* GenerationAdapter
-    if (typeof adapter.submitSeedance !== "function") {
-      return yield* Effect.fail(new GenerationError("ADAPTER_NOT_STARTED", "The adapter cannot submit Seedance."))
-    }
     yield* validateSubmission(permit, {
       requestSha256: validatedPrepared.requestSha256,
       payloadSha256: validatedPrepared.payloadSha256,

@@ -919,7 +919,7 @@ test("a synchronous adapter factory throw is unreconciled because adapter code r
   assert.equal(adapterCalls, 1)
 })
 
-test("a missing Seedance submission method is definitive and unspent", async () => {
+test("a missing Seedance submission method is unreconciled because shape inspection is not proof", async () => {
   const fixture = makeFixture("seedance-video")
   const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
@@ -939,10 +939,47 @@ test("a missing Seedance submission method is definitive and unspent", async () 
     Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:45:00.000Z") }),
   ))
 
-  assert.equal(refused._tag, "Failed")
-  if (refused._tag !== "Failed") return
-  assert.equal(refused.finding.code, "submission_not_started")
+  assert.equal(refused._tag, "Blocked")
+  if (refused._tag !== "Blocked") return
+  assert.equal(refused.finding.code, "submission_unreconciled")
   assert.equal(refused.finding.correctionOwner, "Generation")
-  assert.equal(refused.diagnostics.view.spendState, "not_spent")
-  assert.equal(refused.diagnostics.view.retryState, "new-linked-run-only")
+  assert.equal(refused.diagnostics.view.spendState, "possibly_spent")
+  assert.equal(refused.diagnostics.view.retryState, "reconcile-only")
+})
+
+test("an adapter method accessor cannot manufacture an unspent Seedance outcome", async () => {
+  const fixture = makeFixture("seedance-video")
+  const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(MediaInspector, byteMediaInspector),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+  ))
+  assert.equal(planned._tag, "Planned")
+  if (planned._tag !== "Planned") return
+  let accessorCalls = 0
+  const adapter = { invoke: () => Effect.die("Qwen must not run") } as GenerationAdapterService
+  Object.defineProperty(adapter, "submitSeedance", {
+    get: () => {
+      accessorCalls += 1
+      throw new Error("accessor may already have dispatched externally")
+    },
+  })
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const executeAdvance = () => Effect.runPromise(advance({ run: planned.run }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(GenerationAdapter, adapter),
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:50:00.000Z") }),
+  ))
+
+  const refused = await executeAdvance()
+  assert.equal(refused._tag, "Blocked")
+  if (refused._tag !== "Blocked") return
+  assert.equal(refused.finding.code, "submission_unreconciled")
+  assert.equal(refused.diagnostics.view.spendState, "possibly_spent")
+  assert.equal(refused.diagnostics.view.retryState, "reconcile-only")
+  assert.equal(accessorCalls, 1)
+  const replayed = await executeAdvance()
+  assert.equal(replayed._tag, "Blocked")
+  assert.equal(accessorCalls, 1)
 })

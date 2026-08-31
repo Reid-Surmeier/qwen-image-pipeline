@@ -861,6 +861,7 @@ test("normalizes every failure after adapter code is called as post-call uncerta
   }]))
 
   const invalidAdapters: ReadonlyArray<readonly [string, GenerationAdapterService]> = [
+    ["missing method", {} as GenerationAdapterService],
     ["non-effect", { invoke: () => undefined } as unknown as GenerationAdapterService],
     ["defect", { invoke: () => Effect.die("adapter defect") } as unknown as GenerationAdapterService],
     ["untyped failure", { invoke: () => Effect.fail("adapter string failure") } as unknown as GenerationAdapterService],
@@ -868,6 +869,12 @@ test("normalizes every failure after adapter code is called as post-call uncerta
       "ADAPTER_NOT_STARTED",
       "An adapter cannot make this claim after its Effect begins.",
     )) } as unknown as GenerationAdapterService],
+    ["throwing accessor", Object.defineProperty({}, "invoke", {
+      get: () => { throw new Error("accessor may already have dispatched externally") },
+    }) as GenerationAdapterService],
+    ["proxy trap", new Proxy({} as GenerationAdapterService, {
+      get: () => { throw new Error("proxy trap may already have dispatched externally") },
+    })],
   ]
   for (const [index, [name, adapter]] of invalidAdapters.entries()) {
     const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
