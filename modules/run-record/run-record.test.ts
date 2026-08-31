@@ -732,6 +732,29 @@ test("freezes Qwen generated output bytes before validation and durable persiste
     },
   }))))
   assert.equal(malformed.code, "EVIDENCE_HASH_MISMATCH")
+  for (const [index, source] of [
+    '{"height":1,"pixels":[1,2,3,255],"width":999,"width":1}',
+    '{"height":1,"pixels":[1,2,3,255],"unexpected":true,"width":1}',
+    '{"width":1,"height":1,"pixels":[1,2,3,255]}',
+    '{ "height":1,"pixels":[1,2,3,255],"width":1}',
+  ].entries()) {
+    const body = Buffer.from(source)
+    const rejected = await Effect.runPromise(Effect.flip(provide(record({
+      _tag: "CommitGeneratedOutput",
+      runId: reserved.runId,
+      operationId: `noncanonical-qwen-output-${index}`,
+      output: {
+        applicationPath: `outputs/noncanonical-${index}.rgba.json`,
+        mediaType: "application/vnd.qwen.rgba+json",
+        body,
+        sha256: createHash("sha256").update(body).digest("hex"),
+      },
+    }))))
+    assert.equal(rejected.code, "EVIDENCE_HASH_MISMATCH")
+    await assert.rejects(Effect.runPromise(
+      readEvidence(reserved.runId, `outputs/noncanonical-${index}.rgba.json`).pipe(Effect.provide(memory.layer)),
+    ))
+  }
   const safeBody = raster([90, 90, 90, 255, 80, 80, 80, 255])
   const unsafeBody = raster([10, 10, 10, 255, 20, 20, 20, 255])
   let reads = 0

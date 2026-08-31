@@ -806,6 +806,12 @@ test("rejects unknown, null, malformed, and sparse adapter results as typed fail
   }]))
   const providerBody = Buffer.from('{"request_id":"malformed-output","status":"succeeded"}')
   const malformedRasterBody = Buffer.from("not normalized raster evidence")
+  const nonCanonicalRasters = [
+    ['duplicate raster key', '{"height":1,"pixels":[1,2,3,255],"width":999,"width":1}'],
+    ['unknown raster field', '{"height":1,"pixels":[1,2,3,255],"unexpected":true,"width":1}'],
+    ['noncanonical raster order', '{"width":1,"height":1,"pixels":[1,2,3,255]}'],
+    ['noncanonical raster whitespace', '{ "height":1,"pixels":[1,2,3,255],"width":1}'],
+  ] as const
   const malformedResults: ReadonlyArray<readonly [string, unknown]> = [
     ["null", null],
     ["primitive", 42],
@@ -825,6 +831,20 @@ test("rejects unknown, null, malformed, and sparse adapter results as typed fail
         sha256: sha256(malformedRasterBody),
       }],
     }],
+    ...nonCanonicalRasters.map(([name, source]) => {
+      const body = Buffer.from(source)
+      return [name, {
+        provider: "openrouter",
+        model: decision.run.request.model,
+        providerEvidence: { mediaType: "application/json", body: providerBody, sha256: sha256(providerBody) },
+        outputs: [{
+          applicationPath: `outputs/${name.replaceAll(" ", "-")}.rgba.json`,
+          mediaType: "application/vnd.qwen.rgba+json",
+          body,
+          sha256: sha256(body),
+        }],
+      }] as const
+    }),
   ]
 
   for (const [index, [name, malformed]] of malformedResults.entries()) {

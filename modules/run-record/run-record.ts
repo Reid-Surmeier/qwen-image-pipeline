@@ -367,8 +367,10 @@ const expectedPlanBindings = (
 
 const decodeRaster = (body: Uint8Array): Raster => {
   let value: unknown
+  const source = Buffer.from(body).toString("utf8")
   try {
-    value = JSON.parse(Buffer.from(body).toString("utf8"))
+    if (hasDuplicateJsonKeys(source)) throw new Error("duplicate JSON key")
+    value = JSON.parse(source)
   } catch {
     throw new RunRecordError("CHECKS_NOT_PASSED", "A Fidelity Check input is not valid raster JSON.", "repair-evidence")
   }
@@ -377,6 +379,8 @@ const decodeRaster = (body: Uint8Array): Raster => {
   }
   const { width, height, pixels } = value as Record<string, unknown>
   if (
+    Object.keys(value).sort().join(",") !== "height,pixels,width" ||
+    source !== canonicalJson(value as JsonValue) ||
     typeof width !== "number" || !Number.isSafeInteger(width) || width < 1 ||
     typeof height !== "number" || !Number.isSafeInteger(height) || height < 1 ||
     !Array.isArray(pixels) || pixels.length !== width * height * 4 ||

@@ -81,9 +81,16 @@ const normalizeAdapterResult = (value: unknown): GenerationResult | undefined =>
 
 const isNormalizedRgbaRaster = (body: Uint8Array): boolean => {
   try {
-    const value = JSON.parse(Buffer.from(body).toString("utf8")) as Record<string, unknown>
+    const source = Buffer.from(body).toString("utf8")
+    if (hasDuplicateJsonKeys(source)) return false
+    const value = JSON.parse(source) as Record<string, unknown>
+    if (
+      value === null || typeof value !== "object" || Array.isArray(value) ||
+      Object.keys(value).sort().join(",") !== "height,pixels,width"
+    ) return false
     const { width, height, pixels } = value
-    return typeof width === "number" && Number.isSafeInteger(width) && width > 0 &&
+    return source === canonicalize(value) &&
+      typeof width === "number" && Number.isSafeInteger(width) && width > 0 &&
       typeof height === "number" && Number.isSafeInteger(height) && height > 0 &&
       Array.isArray(pixels) && pixels.length === width * height * 4 &&
       pixels.every((channel) => typeof channel === "number" && Number.isInteger(channel) && channel >= 0 && channel <= 255)

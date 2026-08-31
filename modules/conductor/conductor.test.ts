@@ -587,6 +587,120 @@ test("classifies duplicate Qwen output identities before any output persistence"
   assert.equal(submissions, 1)
 })
 
+test("reconciles partial Qwen recovery by persisted output identity instead of recovery order", async () => {
+  const exactCopy = { x: 0, y: 0, rgba: [0, 0, 0, 0] as const }
+  const fixture = makeFixture("qwen-image", {
+    objective: (objective) => {
+      objective.requestedCount = 2
+      objective.budgetCeilingUsd = "0.10"
+      objective.assemblyPlan = {
+        required: true,
+        baselineReferenceSlot: "source",
+        ownedRegion: { x: 0, y: 0, width: 1, height: 1 },
+        exactCopy: [{ ...exactCopy, sha256: hash(JSON.stringify(exactCopy)) }],
+      }
+    },
+  })
+  const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(MediaInspector, byteMediaInspector),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+  ))
+  assert.equal(planned._tag, "Planned")
+  if (planned._tag !== "Planned") return
+  const providerBody = Buffer.from('{"id":"partial-recovery","status":"completed"}')
+  const outputBody = (channel: number) => Buffer.from(JSON.stringify({
+    height: 1,
+    pixels: [channel, channel, channel, 255],
+    width: 1,
+  }))
+  const output = (name: string, channel: number) => {
+    const body = outputBody(channel)
+    return {
+      applicationPath: `outputs/${name}.rgba.json` as const,
+      mediaType: "application/vnd.qwen.rgba+json" as const,
+      body,
+      sha256: hash(body),
+    }
+  }
+  const first = output("partial-first", 41)
+  const second = output("partial-second", 82)
+  const setup = async () => {
+    const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+    const locked = planned.run.request.references[0]!
+    const snapshot = await Effect.runPromise(fixture.files.read(locked.applicationPath))
+    const prepared = await Effect.runPromise(prepare(planned.run.request, [{
+      slot: locked.slot,
+      applicationPath: locked.applicationPath,
+      sha256: locked.sha256,
+      payloadDestination: locked.payloadDestination,
+      mediaType: locked.mediaType,
+      bytes: snapshot.bytes,
+    }]))
+    const reserved = await Effect.runPromise(reserve({ plannedRun: planned.run, payloadSha256: prepared.payloadSha256 }).pipe(
+      Effect.provide(memory.layer),
+      Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:00:00.000Z") }),
+    ))
+    await Effect.runPromise(record({
+      _tag: "SubmissionMayHaveStarted",
+      runId: reserved.runId,
+      operationId: "conductor-submit-once",
+    }).pipe(Effect.provide(memory.layer), Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:00:00.000Z") })))
+    await Effect.runPromise(record({
+      _tag: "CommitProviderEvidence",
+      runId: reserved.runId,
+      operationId: "conductor-provider-evidence",
+      evidence: { mediaType: "application/json", body: providerBody, sha256: hash(providerBody) },
+    }).pipe(Effect.provide(memory.layer), Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:00:00.000Z") })))
+    await Effect.runPromise(record({
+      _tag: "CommitGeneratedOutput",
+      runId: reserved.runId,
+      operationId: "conductor-generated-output-1",
+      output: first,
+    }).pipe(Effect.provide(memory.layer), Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:00:00.000Z") })))
+    return memory
+  }
+  const execute = (memory: Awaited<ReturnType<typeof setup>>, recovered: GenerationResult, onRecover: () => void) =>
+    Effect.runPromise(advance({ run: planned.run }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(GenerationAdapter, {
+        invoke: () => Effect.die("partial recovery must not resubmit"),
+        recover: () => Effect.sync(() => {
+          onRecover()
+          return recovered
+        }),
+      }),
+      Effect.provide(memory.layer),
+      Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:00:00.000Z") }),
+    ))
+  const recovered = (outputs: GenerationResult["outputs"]): GenerationResult => ({
+    provider: "openrouter",
+    model: planned.run.request.model,
+    providerEvidence: { mediaType: "application/json", body: providerBody, sha256: hash(providerBody) },
+    outputs,
+  })
+
+  const matchedMemory = await setup()
+  let matchedCalls = 0
+  const matched = await execute(matchedMemory, recovered([second, first]), () => { matchedCalls += 1 })
+  assert.equal(matched._tag, "HumanDecisionRequired")
+  assert.equal(matchedCalls, 1)
+  assert.equal((await execute(matchedMemory, recovered([second, first]), () => { matchedCalls += 1 }))._tag, "HumanDecisionRequired")
+  assert.equal(matchedCalls, 1)
+
+  const substitutedMemory = await setup()
+  const substituted = output("partial-first", 99)
+  let substitutedCalls = 0
+  const blocked = await execute(substitutedMemory, recovered([second, substituted]), () => { substitutedCalls += 1 })
+  assert.equal(blocked._tag, "Blocked")
+  if (blocked._tag !== "Blocked") return
+  assert.equal(blocked.finding.code, "submission_unreconciled")
+  assert.equal(blocked.finding.correctionOwner, "Generation")
+  assert.equal(blocked.diagnostics.view.evidence.filter((item) => item.applicationPath.startsWith("outputs/")).length, 1)
+  assert.equal((await execute(substitutedMemory, recovered([second, substituted]), () => { substitutedCalls += 1 }))._tag, "Blocked")
+  assert.equal(substitutedCalls, 1)
+})
+
 test("advances one Seedance Run by submitting once and polling the same job to verified video", async () => {
   const fixture = makeFixture("seedance-video")
   const plannedDecision = await Effect.runPromise(

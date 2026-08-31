@@ -1,7 +1,7 @@
 import { Effect } from "effect"
 
 import { assemble } from "../assembly/index.js"
-import { invoke, pollSeedance, prepare, recover, submitSeedance, validatePersisted, type GenerationResult } from "../generation/index.js"
+import { GenerationError, invoke, pollSeedance, prepare, recover, submitSeedance, validatePersisted, type GenerationResult } from "../generation/index.js"
 import {
   ApplicationFiles,
   compilePlannedRun,
@@ -885,11 +885,41 @@ export const advanceRun = (
           "Qwen continuation did not produce or reconstruct the reserved output set.",
         ))
       }
-      for (const [index, output] of generated.outputs.entries()) {
+      const generatedResult = generated
+      const persistedOutputReceipts = current.evidence.filter((item) => item.applicationPath.startsWith("outputs/"))
+      const persistedOutputIdentities = yield* Effect.forEach(persistedOutputReceipts, (receipt) =>
+        readEvidence(current.runId, receipt.applicationPath).pipe(
+          Effect.map((body) => ({ receipt, body })),
+          Effect.mapError(asConductorError(
+            "RUN_RECORD_FAILURE",
+            "Persisted Qwen output identity evidence could not be verified and read.",
+          )),
+        ),
+      )
+      const unmatchedPersistedOutput = persistedOutputIdentities.find(({ receipt, body }) =>
+        !generatedResult.outputs.some((output) =>
+          output.applicationPath === receipt.applicationPath &&
+          output.mediaType === receipt.mediaType &&
+          output.sha256 === receipt.sha256 &&
+          Buffer.from(output.body).equals(Buffer.from(body))),
+      )
+      if (unmatchedPersistedOutput !== undefined) {
+        return yield* classifyGenerationFailure(current.runId, request.objective, new GenerationError(
+          "ADAPTER_RESULT_INVALID",
+          "Recovered Generation evidence substituted a persisted Qwen output identity.",
+        ))
+      }
+      const missingOutputs = generatedResult.outputs.filter((output) =>
+        !persistedOutputReceipts.some((receipt) =>
+          receipt.applicationPath === output.applicationPath &&
+          receipt.mediaType === output.mediaType &&
+          receipt.sha256 === output.sha256),
+      )
+      for (const [index, output] of missingOutputs.entries()) {
         const persisted = yield* record({
           _tag: "CommitGeneratedOutput",
           runId: current.runId,
-          operationId: `conductor-generated-output-${index + 1}`,
+          operationId: `conductor-generated-output-${persistedOutputReceipts.length + index + 1}`,
           output: {
             ...output,
             applicationPath: output.applicationPath as `outputs/${string}`,
@@ -904,7 +934,9 @@ export const advanceRun = (
         _tag: "OpenDonorChoice",
         runId: current.runId,
         operationId: "conductor-open-donor-choice",
-        candidateSha256s: generated.outputs.map((output) => output.sha256),
+        candidateSha256s: current.evidence
+          .filter((item) => item.applicationPath.startsWith("outputs/"))
+          .map((item) => item.sha256),
       }).pipe(Effect.mapError(asConductorError(
         "RUN_RECORD_FAILURE",
         "The donor-choice checkpoint could not be persisted.",
