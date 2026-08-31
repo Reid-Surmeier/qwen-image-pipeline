@@ -47,7 +47,6 @@ const execute = async (
   const result = await Effect.runPromise(
     plan({ objectivePath: fixture.objectivePath }).pipe(
       Effect.provideService(ApplicationFiles, fixture.files),
-      Effect.provideService(PlanningIdentity, fixture.identity),
       Effect.provideService(MediaInspector, byteMediaInspector),
       Effect.provideService(PlanningIdentity, fixture.identity),
     ),
@@ -177,7 +176,6 @@ test("post-plan reference drift returns a Reference Planning outcome before any 
   const planned = await Effect.runPromise(
     plan({ objectivePath: fixture.objectivePath }).pipe(
       Effect.provideService(ApplicationFiles, fixture.files),
-      Effect.provideService(PlanningIdentity, fixture.identity),
       Effect.provideService(MediaInspector, byteMediaInspector),
       Effect.provideService(PlanningIdentity, fixture.identity),
     ),
@@ -226,7 +224,6 @@ test("post-plan Tool Lock drift refuses before any adapter call or reservation",
   const planned = await Effect.runPromise(
     plan({ objectivePath: fixture.objectivePath }).pipe(
       Effect.provideService(ApplicationFiles, fixture.files),
-      Effect.provideService(PlanningIdentity, fixture.identity),
       Effect.provideService(MediaInspector, byteMediaInspector),
       Effect.provideService(PlanningIdentity, fixture.identity),
     ),
@@ -729,7 +726,6 @@ test("classifies duplicate Qwen output identities before any output persistence"
   })
   const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
-    Effect.provideService(PlanningIdentity, fixture.identity),
     Effect.provideService(MediaInspector, byteMediaInspector),
     Effect.provideService(PlanningIdentity, fixture.identity),
   ))
@@ -793,7 +789,6 @@ test("returns a classified persistence interruption after a paid result cannot b
   })
   const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
-    Effect.provideService(PlanningIdentity, fixture.identity),
     Effect.provideService(MediaInspector, byteMediaInspector),
     Effect.provideService(PlanningIdentity, fixture.identity),
   ))
@@ -860,7 +855,6 @@ test("classifies an interrupted unreconciled-submission write after one adapter 
   })
   const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
-    Effect.provideService(PlanningIdentity, fixture.identity),
     Effect.provideService(MediaInspector, byteMediaInspector),
     Effect.provideService(PlanningIdentity, fixture.identity),
   ))
@@ -903,7 +897,6 @@ test("classifies interrupted generated-output persistence after the provider rec
   })
   const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
-    Effect.provideService(PlanningIdentity, fixture.identity),
     Effect.provideService(MediaInspector, byteMediaInspector),
     Effect.provideService(PlanningIdentity, fixture.identity),
   ))
@@ -961,7 +954,6 @@ test("reconciles partial Qwen recovery by persisted output identity instead of r
   })
   const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
-    Effect.provideService(PlanningIdentity, fixture.identity),
     Effect.provideService(MediaInspector, byteMediaInspector),
     Effect.provideService(PlanningIdentity, fixture.identity),
   ))
@@ -1066,7 +1058,6 @@ test("advances one Seedance Run by submitting once and polling the same job to v
   const plannedDecision = await Effect.runPromise(
     plan({ objectivePath: fixture.objectivePath }).pipe(
       Effect.provideService(ApplicationFiles, fixture.files),
-      Effect.provideService(PlanningIdentity, fixture.identity),
       Effect.provideService(MediaInspector, byteMediaInspector),
       Effect.provideService(PlanningIdentity, fixture.identity),
     ),
@@ -1293,7 +1284,6 @@ test("persists a real Seedance verification failure with Verification ownership 
   const planned = await Effect.runPromise(
     plan({ objectivePath: fixture.objectivePath }).pipe(
       Effect.provideService(ApplicationFiles, fixture.files),
-      Effect.provideService(PlanningIdentity, fixture.identity),
       Effect.provideService(MediaInspector, byteMediaInspector),
       Effect.provideService(PlanningIdentity, fixture.identity),
     ),
@@ -1387,7 +1377,6 @@ test("blocks ambiguous, malformed, count-mismatched, and false pre-submit result
     const fixture = makeFixture("seedance-video")
     const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
       Effect.provideService(ApplicationFiles, fixture.files),
-      Effect.provideService(PlanningIdentity, fixture.identity),
       Effect.provideService(MediaInspector, byteMediaInspector),
       Effect.provideService(PlanningIdentity, fixture.identity),
     ))
@@ -1486,7 +1475,6 @@ test("a synchronous adapter factory throw is unreconciled because adapter code r
   const fixture = makeFixture("seedance-video")
   const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
-    Effect.provideService(PlanningIdentity, fixture.identity),
     Effect.provideService(MediaInspector, byteMediaInspector),
     Effect.provideService(PlanningIdentity, fixture.identity),
   ))
@@ -1527,7 +1515,6 @@ test("a missing Seedance submission method is unreconciled because shape inspect
   const fixture = makeFixture("seedance-video")
   const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
-    Effect.provideService(PlanningIdentity, fixture.identity),
     Effect.provideService(MediaInspector, byteMediaInspector),
     Effect.provideService(PlanningIdentity, fixture.identity),
   ))
@@ -1557,7 +1544,6 @@ test("an adapter method accessor cannot manufacture an unspent Seedance outcome"
   const fixture = makeFixture("seedance-video")
   const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
-    Effect.provideService(PlanningIdentity, fixture.identity),
     Effect.provideService(MediaInspector, byteMediaInspector),
     Effect.provideService(PlanningIdentity, fixture.identity),
   ))
