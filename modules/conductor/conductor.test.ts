@@ -782,7 +782,7 @@ test("persists a real Seedance verification failure with Verification ownership 
   assert.equal(pollCalls, 1)
 })
 
-test("classifies ambiguous, malformed, and count-mismatched provider results without resubmission", async () => {
+test("blocks ambiguous, malformed, and count-mismatched results as one evidence-derived unreconciled submission", async () => {
   for (const variant of ["ambiguous", "malformed", "count"] as const) {
     const fixture = makeFixture("seedance-video")
     const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
@@ -859,15 +859,10 @@ test("classifies ambiguous, malformed, and count-mismatched provider results wit
       assert.equal(pending._tag, "ProviderPending")
     }
     const terminal = await executeAdvance()
-    const expectedTag = variant === "ambiguous" ? "Blocked" : "Failed"
-    const expectedClass = variant === "ambiguous"
-      ? "ambiguous_provider_timeout"
-      : variant === "count"
-        ? "output_count_mismatch"
-        : "malformed_provider_response"
+    const expectedTag = "Blocked"
     assert.equal(terminal._tag, expectedTag)
-    if (terminal._tag !== "Blocked" && terminal._tag !== "Failed") continue
-    assert.equal(terminal.finding.code, expectedClass)
+    if (terminal._tag !== "Blocked") continue
+    assert.equal(terminal.finding.code, "submission_unreconciled")
     assert.equal(terminal.finding.correctionOwner, "Generation")
     assert.equal(terminal.diagnostics.view.spendState, "possibly_spent")
     assert.equal(terminal.diagnostics.view.retryState, "reconcile-only")

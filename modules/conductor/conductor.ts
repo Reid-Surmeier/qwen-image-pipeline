@@ -15,7 +15,6 @@ import {
   record,
   reserve,
   type ClassifiedFailureInput,
-  type ClassifiedFailureClass,
   type RunRecordDiagnostics,
   type SubmissionPermit,
 } from "../run-record/index.js"
@@ -451,25 +450,29 @@ const classifyGenerationFailure = (
       return replayedTerminalDecision(diagnostics, objective)
     })
   }
-  const failureClass = code === "PROVIDER_AMBIGUOUS"
-    ? "ambiguous_provider_timeout" as const
-    : code === "OUTPUT_COUNT_MISMATCH"
-      ? "output_count_mismatch" as const
-      : code === "ADAPTER_RESULT_INVALID" || code === "PROVIDER_SUBSTITUTION"
-        ? "malformed_provider_response" as const
-        : undefined
-  if (failureClass === undefined) {
+  const isUnreconciled = code === "PROVIDER_AMBIGUOUS" || code === "OUTPUT_COUNT_MISMATCH" ||
+    code === "ADAPTER_RESULT_INVALID" || code === "PROVIDER_SUBSTITUTION"
+  if (!isUnreconciled) {
     return Effect.fail(asConductorError(
       "GENERATION_FAILURE",
       "Generation failed without a safe terminal classification.",
     )(error))
   }
-  const message = failureClass === "ambiguous_provider_timeout"
-    ? "The provider result is ambiguous and this Run cannot submit again."
-    : failureClass === "output_count_mismatch"
-      ? "The provider returned a completed output count that contradicts the immutable request."
-      : "The provider response or normalized adapter evidence is malformed."
-  return classifyRunFailure(runId, objective, { class: failureClass, message })
+  return Effect.gen(function*() {
+    const result = yield* record({
+      _tag: "SubmissionUnreconciled",
+      runId,
+      operationId: "conductor-submission-unreconciled",
+    }).pipe(Effect.mapError(asConductorError(
+      "RUN_RECORD_FAILURE",
+      "The unreconciled submission state could not be persisted.",
+    )))
+    const diagnostics = yield* readDiagnostics(result.view.runId).pipe(Effect.mapError(asConductorError(
+      "RUN_RECORD_FAILURE",
+      "The unreconciled submission state could not be replayed.",
+    )))
+    return replayedTerminalDecision(diagnostics, objective)
+  })
 }
 
 const persistWithReconciliation = <Success, Error, Requirements>(

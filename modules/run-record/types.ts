@@ -16,17 +16,11 @@ export type CorrectionOwner =
   | "application decision owner"
 
 export type ClassifiedFailureClass =
-  | "ambiguous_provider_timeout"
-  | "malformed_provider_response"
-  | "output_count_mismatch"
+  | "submission_unreconciled"
   | "assembly_failure"
   | "verification_failure"
 
 export type ClassifiedFailureInput =
-  | Readonly<{
-      class: "ambiguous_provider_timeout" | "malformed_provider_response" | "output_count_mismatch"
-      message: string
-    }>
   | Readonly<{
       class: "assembly_failure"
       message: string
@@ -202,6 +196,11 @@ export type RecordOperation =
       runId: string
       operationId: string
       failure: ClassifiedFailureInput
+    }>
+  | Readonly<{
+      _tag: "SubmissionUnreconciled"
+      runId: string
+      operationId: string
     }>
 
 export type RunRecordPhase =

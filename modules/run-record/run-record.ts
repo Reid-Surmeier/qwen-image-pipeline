@@ -123,20 +123,8 @@ type ClassifiedFailurePolicy = Readonly<{
 }>
 
 const classifiedFailurePolicies = {
-  ambiguous_provider_timeout: {
+  submission_unreconciled: {
     outcome: "blocked",
-    spendState: "possibly_spent",
-    retryState: "reconcile-only",
-    correctionOwner: "Generation",
-  },
-  malformed_provider_response: {
-    outcome: "failed",
-    spendState: "possibly_spent",
-    retryState: "reconcile-only",
-    correctionOwner: "Generation",
-  },
-  output_count_mismatch: {
-    outcome: "failed",
     spendState: "possibly_spent",
     retryState: "reconcile-only",
     correctionOwner: "Generation",
@@ -1862,7 +1850,8 @@ const snapshotClassifiedFailure = (
   const failureClass = classDescriptor.value
   if (!isClassifiedFailureClass(failureClass)) return undefined
   const requiresCause = failureClass === "assembly_failure" || failureClass === "verification_failure"
-  const keys = requiresCause ? ["class", "message", "cause"] : ["class", "message"]
+  if (!requiresCause) return undefined
+  const keys = ["class", "message", "cause"]
   if (
     Reflect.ownKeys(failure).length !== keys.length ||
     keys.some((key) => {
@@ -1876,7 +1865,6 @@ const snapshotClassifiedFailure = (
     message.trim().length === 0 || message.length > 500 ||
     hasProviderCredentialMaterial(failure)
   ) return undefined
-  if (!requiresCause) return { class: failureClass, message }
   const causeDescriptor = Object.getOwnPropertyDescriptor(failureRecord, "cause")
   if (causeDescriptor === undefined || !Object.hasOwn(causeDescriptor, "value")) return undefined
   const cause = causeDescriptor.value
@@ -2086,6 +2074,15 @@ export const recordOperation = (
         "The classified failure must match its closed safe schema.",
       ))
     }
+  } else if (operation._tag === "SubmissionUnreconciled") {
+    stableClassifiedFailure = {
+      class: "submission_unreconciled",
+      message: "Provider submission may have started, but no trustworthy result has been reconciled.",
+      proof: {
+        module: "Run Record",
+        observation: "submission result remains unreconciled",
+      },
+    }
   }
   const expectedKind = operation._tag === "SubmissionMayHaveStarted"
     ? "submission_may_have_started"
@@ -2105,7 +2102,7 @@ export const recordOperation = (
                 ? "checks_persisted"
                 : operation._tag === "CommitVideoChecks"
                   ? "video_checks_persisted"
-                  : operation._tag === "ClassifyFailure"
+                  : operation._tag === "ClassifyFailure" || operation._tag === "SubmissionUnreconciled"
                     ? "classified_outcome"
                     : "definitive_pre_submit_failure"
   const replayed = events.find((event) => event.operationId === operation.operationId)
@@ -2212,7 +2209,7 @@ export const recordOperation = (
       return yield* Effect.fail(new RunRecordError("IDEMPOTENCY_CONFLICT", "The operation identity was replayed with a different failure."))
     }
     if (
-      operation._tag === "ClassifyFailure" &&
+      (operation._tag === "ClassifyFailure" || operation._tag === "SubmissionUnreconciled") &&
       (
         stringPayload(replayed.payload, "class") !== stableClassifiedFailure!.class ||
         stringPayload(replayed.payload, "message") !== stableClassifiedFailure!.message
@@ -2826,7 +2823,7 @@ export const recordOperation = (
     yield* store.writeState(operation.runId, encodeView(next))
     return { _tag: "Recorded" as const, view: next }
   }
-  if (operation._tag === "ClassifyFailure") {
+  if (operation._tag === "ClassifyFailure" || operation._tag === "SubmissionUnreconciled") {
     const failure = stableClassifiedFailure!
     const policy = classifiedFailurePolicy(failure.class)
     const assemblyPlan = runRequest.assemblyPlan
@@ -2886,7 +2883,7 @@ export const recordOperation = (
       correctionOwner: policy.correctionOwner,
       evidence: {
         artifactSha256s: current.evidence.map((item) => item.sha256),
-        failureProof: failure.proof ?? { module: "Generation", errorCode: failure.class },
+        failureProof: failure.proof!,
         requestSha256: current.requestSha256,
         stateEventSha256: existingIntent?.previousEventSha256 ?? current.chainHeadSha256,
       },

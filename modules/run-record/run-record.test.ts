@@ -1984,13 +1984,9 @@ test("possibly-spent blocked Runs can reconcile only and never create a correcti
     operationId: "ambiguous-submission",
   })))
   const blocked = await Effect.runPromise(provide(record({
-    _tag: "ClassifyFailure",
+    _tag: "SubmissionUnreconciled",
     runId: reserved.runId,
     operationId: "ambiguous-outcome",
-    failure: {
-      class: "ambiguous_provider_timeout",
-      message: "Provider identity must be reconciled.",
-    },
   })))
   const linked: RunLink = {
     parentRunId: blocked.view.runId,
@@ -2004,14 +2000,14 @@ test("possibly-spent blocked Runs can reconcile only and never create a correcti
   assert.equal(error.code, "LINK_NOT_ALLOWED")
 })
 
-test("persists a closed failure record with fixed spend, retry, outcome, and correction ownership", async () => {
-  const cases = [
-    ["ambiguous_provider_timeout", "blocked", "possibly_spent", "reconcile-only", "Generation", true],
-    ["malformed_provider_response", "failed", "possibly_spent", "reconcile-only", "Generation", true],
-    ["output_count_mismatch", "failed", "possibly_spent", "reconcile-only", "Generation", true],
+test("derives one honest unreconciled-submission finding and refuses caller-authored Generation causes", async () => {
+  const forgedClasses = [
+    "ambiguous_provider_timeout",
+    "malformed_provider_response",
+    "output_count_mismatch",
   ] as const
 
-  for (const [failureClass, outcome, spend, retry, owner, afterSubmission] of cases) {
+  for (const failureClass of forgedClasses) {
     const planned = await plannedRun()
     const memory = await memoryHarness()
     const provide = <Success, Error>(
@@ -2021,47 +2017,55 @@ test("persists a closed failure record with fixed spend, retry, outcome, and cor
       Effect.provideService(RunRecordClock, clock),
     )
     const reserved = await Effect.runPromise(provide(reserve(reservationFor(planned))))
-    if (afterSubmission) {
-      await Effect.runPromise(provide(record({
-        _tag: "SubmissionMayHaveStarted",
-        runId: reserved.runId,
-        operationId: `${failureClass}-submission`,
-      })))
-    }
-    const beforeClassification = await Effect.runPromise(provide(load(reserved.runId)))
-    const classified = await Effect.runPromise(provide(record({
-      _tag: "ClassifyFailure",
+    await Effect.runPromise(provide(record({
+      _tag: "SubmissionMayHaveStarted",
       runId: reserved.runId,
-      operationId: `${failureClass}-outcome`,
+      operationId: `${failureClass}-submission`,
+    })))
+    const forged = await Effect.runPromise(Effect.flip(provide(record({
+      _tag: "ClassifyFailure" as const,
+      runId: reserved.runId,
+      operationId: `${failureClass}-forged`,
       failure: {
         class: failureClass,
         message: `Safe fixture failure for ${failureClass}.`,
       },
-    } as unknown as RecordOperation)))
-    assert.equal(classified.view.classification, outcome)
-    assert.equal(classified.view.phase, outcome)
-    assert.equal(classified.view.spendState, spend)
-    assert.equal(classified.view.retryState, retry)
-    assert.equal(classified.view.finding?.class, failureClass)
-    assert.equal(classified.view.finding?.correctionOwner, owner)
+    } as unknown as RecordOperation))))
+    assert.equal(forged.code, "ILLEGAL_TRANSITION")
+
+    const beforeClassification = await Effect.runPromise(provide(load(reserved.runId)))
+    const classified = await Effect.runPromise(provide(record({
+      _tag: "SubmissionUnreconciled",
+      runId: reserved.runId,
+      operationId: `${failureClass}-outcome`,
+    } as RecordOperation)))
+    assert.equal(classified.view.classification, "blocked")
+    assert.equal(classified.view.phase, "blocked")
+    assert.equal(classified.view.spendState, "possibly_spent")
+    assert.equal(classified.view.retryState, "reconcile-only")
+    assert.equal(classified.view.finding?.class, "submission_unreconciled")
+    assert.equal(classified.view.finding?.correctionOwner, "Generation")
     assert.equal("approval" in classified.view, false)
 
     const failureBytes = await Effect.runPromise(
       readEvidence(reserved.runId, "failure.json").pipe(Effect.provide(memory.layer)),
     )
     assert.deepEqual(JSON.parse(Buffer.from(failureBytes).toString("utf8")), {
-      class: failureClass,
-      correctionOwner: owner,
+      class: "submission_unreconciled",
+      correctionOwner: "Generation",
       evidence: {
         artifactSha256s: beforeClassification.evidence.map((item) => item.sha256),
-        failureProof: { errorCode: failureClass, module: "Generation" },
+        failureProof: {
+          module: "Run Record",
+          observation: "submission result remains unreconciled",
+        },
         requestSha256: classified.view.requestSha256,
         stateEventSha256: beforeClassification.chainHeadSha256,
       },
-      message: `Safe fixture failure for ${failureClass}.`,
-      outcome,
-      retryState: retry,
-      spendState: spend,
+      message: "Provider submission may have started, but no trustworthy result has been reconciled.",
+      outcome: "blocked",
+      retryState: "reconcile-only",
+      spendState: "possibly_spent",
     })
   }
 })

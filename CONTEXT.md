@@ -132,7 +132,7 @@ _Avoid_: Retry token, persisted credential
 - One Seedance **Submission Permit** may create one persisted provider job identity; every later advance polls only that identity and cannot submit another job.
 - A definitively failed pre-submit **Run Record** remains immutable and may be named by a distinct **Linked Run** whose relationship is fixed in its Run Request before reservation.
 - A **Linked Run** increments its replayed correction depth; a child cannot change the application or raise the inherited correction ceiling.
-- Possibly-spent or unknown work permits **Reconciliation** of its existing provider identity only. Ambiguity, malformed paid evidence, output-count mismatch, and interrupted post-submit persistence never authorize another paid submission. Repetition means verified failures across linked Runs, never multiple unverified artifacts in one Run; the inherited correction ceiling stops it. Budget exhaustion fails before reservation.
+- Possibly-spent or unknown work permits **Reconciliation** of its existing provider identity only. Ambiguity, malformed paid evidence, and output-count symptoms become the evidence-backed `submission_unreconciled` finding unless exact provider evidence proves more; they and interrupted post-submit persistence never authorize another paid submission. Repetition means verified failures across linked Runs, never multiple unverified artifacts in one Run; the inherited correction ceiling stops it. Budget exhaustion fails before reservation.
 - Every terminal result has one **Machine Outcome**. Every failure **Finding** names one **Correction Owner**, while **Approval** remains separate and human-owned.
 
 ## Example dialogue
