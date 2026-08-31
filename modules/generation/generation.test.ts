@@ -184,6 +184,30 @@ test("guards the exact Qwen recovery receipt before and after calling the adapte
   assert.equal(mutationFailure.code, "ADAPTER_RESULT_INVALID")
   assert.deepEqual(originalEvidence.body, originalBody)
   assert.equal(originalEvidence.sha256, sha256(originalBody))
+
+  const hostileRecoveryAdapters: ReadonlyArray<readonly [string, GenerationAdapterService]> = [
+    ["false pre-submit failure", {
+      invoke: () => Effect.die("unused"),
+      recover: () => Effect.fail(new GenerationError(
+        "ADAPTER_NOT_STARTED",
+        "Recovery cannot make a pre-submit claim.",
+      )),
+    }],
+    ["throwing accessor", Object.defineProperty({ invoke: () => Effect.die("unused") }, "recover", {
+      get: () => { throw new Error("recovery accessor may have external effects") },
+    }) as GenerationAdapterService],
+    ["proxy trap", new Proxy({ invoke: () => Effect.die("unused") } as GenerationAdapterService, {
+      get: (target, property, receiver) => property === "recover"
+        ? (() => { throw new Error("recovery proxy may have external effects") })()
+        : Reflect.get(target, property, receiver),
+    })],
+  ]
+  for (const [name, hostileAdapter] of hostileRecoveryAdapters) {
+    const hostileFailure = await Effect.runPromise(Effect.flip(recover(prepared, originalEvidence).pipe(
+      Effect.provideService(GenerationAdapter, hostileAdapter),
+    )))
+    assert.equal(hostileFailure.code, "ADAPTER_RESULT_INVALID", name)
+  }
 })
 
 test("submits exact Seedance video once and polls only the same sanitized job identity", async () => {
@@ -838,6 +862,17 @@ test("treats a synchronous submission-adapter throw as post-call uncertainty", a
     Effect.provideService(GenerationAdapter, adapter),
   )))
   assert.equal(error.code, "ADAPTER_RESULT_INVALID")
+  const falseUnspent = await Effect.runPromise(Effect.flip(record({
+    _tag: "DefinitivePreSubmitFailure",
+    runId: reserved.runId,
+    operationId: "false-unspent-after-adapter-call",
+    permit: marker.permit,
+    failure: {
+      class: "submission_not_started",
+      message: "Adapter code ran, so this must be refused.",
+    },
+  }).pipe(Effect.provide(memory.layer), Effect.provideService(RunRecordClock, clock))))
+  assert.equal(falseUnspent.code, "DUPLICATE_SUBMISSION_BLOCKED")
 })
 
 test("normalizes every failure after adapter code is called as post-call uncertainty", async () => {

@@ -456,14 +456,14 @@ export const invokeGeneration = (
       requestSha256: validatedPrepared.requestSha256,
       payloadSha256: validatedPrepared.payloadSha256,
     })
-    const submission = yield* submissionAdapterProgram<unknown>(
-      () => adapter.invoke(validatedPrepared) as unknown,
-      "The Qwen submission adapter",
-    )
     yield* consumeSubmission(permit, {
       requestSha256: validatedPrepared.requestSha256,
       payloadSha256: validatedPrepared.payloadSha256,
     })
+    const submission = yield* submissionAdapterProgram<unknown>(
+      () => adapter.invoke(validatedPrepared) as unknown,
+      "The Qwen submission adapter",
+    )
     const untrustedResult: unknown = yield* submission.effect
     return yield* validateGenerationResult(validatedPrepared, untrustedResult)
   })
@@ -484,12 +484,6 @@ export const recoverGeneration = (
     ))
   }
   const adapter = yield* GenerationAdapter
-  if (typeof adapter.recover !== "function") {
-    return yield* Effect.fail(new GenerationError(
-      "ADAPTER_RESULT_INVALID",
-      "The adapter cannot recover outputs from persisted provider evidence.",
-    ))
-  }
   const adapterProviderEvidence = snapshotProviderEvidence(stableProviderEvidence)!
   const adapterEffect: unknown = yield* Effect.try({
     try: () => adapter.recover!(validatedPrepared, adapterProviderEvidence) as unknown,
@@ -499,7 +493,7 @@ export const recoverGeneration = (
     return yield* Effect.fail(new GenerationError("ADAPTER_RESULT_INVALID", "The recovery adapter did not return an Effect."))
   }
   const untrustedResult: unknown = yield* adapterEffect.pipe(
-    Effect.mapError((error) => error instanceof GenerationError
+    Effect.mapError((error) => error instanceof GenerationError && error.code !== "ADAPTER_NOT_STARTED"
       ? error
       : new GenerationError("ADAPTER_RESULT_INVALID", "The recovery adapter failed with an unnamed error.")),
     Effect.catchDefect(() => Effect.fail(new GenerationError(
@@ -534,14 +528,14 @@ export const submitSeedanceGeneration = (
       requestSha256: validatedPrepared.requestSha256,
       payloadSha256: validatedPrepared.payloadSha256,
     })
-    const submission = yield* submissionAdapterProgram<unknown>(
-      () => adapter.submitSeedance!(validatedPrepared),
-      "The Seedance submission adapter",
-    )
     yield* consumeSubmission(permit, {
       requestSha256: validatedPrepared.requestSha256,
       payloadSha256: validatedPrepared.payloadSha256,
     })
+    const submission = yield* submissionAdapterProgram<unknown>(
+      () => adapter.submitSeedance!(validatedPrepared),
+      "The Seedance submission adapter",
+    )
     const untrusted = yield* submission.effect
     const result = yield* Effect.try({
       try: () => snapshotSeedanceSubmission(untrusted),

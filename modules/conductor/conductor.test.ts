@@ -413,7 +413,7 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
     mediaType: locked.mediaType,
     bytes: baseline,
   }]))
-  for (const persistOutput of [false, true]) {
+  const setupRecovery = async (persistOutput: boolean) => {
     const recoveryMemory = await Effect.runPromise(makeMemoryRunRecordHarness())
     const reserved = await Effect.runPromise(reserve({ plannedRun, payloadSha256: prepared.payloadSha256 }).pipe(
       Effect.provide(recoveryMemory.layer),
@@ -425,7 +425,7 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
       operationId: "recovery-submit",
     }).pipe(Effect.provide(recoveryMemory.layer), Effect.provideService(RunRecordClock, clock)))
     assert.equal(marked._tag, "SubmissionPermitIssued")
-    if (marked._tag !== "SubmissionPermitIssued") continue
+    if (marked._tag !== "SubmissionPermitIssued") throw new Error("Recovery fixture permit missing.")
     const generated = await Effect.runPromise(invoke(prepared, marked.permit).pipe(
       Effect.provideService(GenerationAdapter, adapter),
     ))
@@ -446,6 +446,10 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
         },
       }).pipe(Effect.provide(recoveryMemory.layer), Effect.provideService(RunRecordClock, clock)))
     }
+    return { generated, recoveryMemory }
+  }
+  for (const persistOutput of [false, true]) {
+    const { generated, recoveryMemory } = await setupRecovery(persistOutput)
     let recoveryCalls = 0
     const recoveryAdapter: GenerationAdapterService = {
       invoke: () => Effect.die("recovery must not resubmit"),
@@ -464,6 +468,36 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
     assert.equal(resumed._tag, "HumanDecisionRequired")
     assert.equal(recoveryCalls, 1)
   }
+
+  const { recoveryMemory: failedRecoveryMemory } = await setupRecovery(false)
+  let failedRecoveryCalls = 0
+  const failedRecoveryAdapter: GenerationAdapterService = {
+    invoke: () => Effect.die("recovery must not resubmit"),
+    recover: () => {
+      failedRecoveryCalls += 1
+      return Effect.fail(new GenerationError(
+        "ADAPTER_NOT_STARTED",
+        "Recovery cannot claim that the original submission did not start.",
+      ))
+    },
+  }
+  const executeFailedRecovery = () => Effect.runPromise(advance({ run: plannedRun }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(GenerationAdapter, failedRecoveryAdapter),
+    Effect.provide(failedRecoveryMemory.layer),
+    Effect.provideService(RunRecordClock, clock),
+  ))
+  const failedRecovery = await executeFailedRecovery()
+  assert.equal(failedRecovery._tag, "Blocked")
+  if (failedRecovery._tag !== "Blocked") return
+  assert.equal(failedRecovery.finding.code, "submission_unreconciled")
+  assert.equal(failedRecovery.finding.correctionOwner, "Generation")
+  assert.equal(failedRecovery.diagnostics.view.spendState, "possibly_spent")
+  assert.equal(failedRecovery.diagnostics.view.retryState, "reconcile-only")
+  assert.equal(failedRecoveryCalls, 1)
+  const replayedRecovery = await executeFailedRecovery()
+  assert.equal(replayedRecovery._tag, "Blocked")
+  assert.equal(failedRecoveryCalls, 1)
 })
 
 test("advances one Seedance Run by submitting once and polling the same job to verified video", async () => {

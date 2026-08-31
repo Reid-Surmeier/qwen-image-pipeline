@@ -833,14 +833,18 @@ export const advanceRun = (
             "The persisted provider response could not be verified and read for recovery.",
           )),
         )
-        generated = yield* recover(prepared, {
+        const recoveryAttempt = yield* recover(prepared, {
           mediaType: "application/json",
           body: providerBody,
           sha256: providerReceipt.sha256,
-        }).pipe(Effect.mapError(asConductorError(
-          "GENERATION_FAILURE",
-          "Persisted provider evidence could not recover the normalized outputs without resubmission.",
-        )))
+        }).pipe(Effect.match({
+          onFailure: (error) => ({ _tag: "Failure" as const, error }),
+          onSuccess: (value) => ({ _tag: "Success" as const, value }),
+        }))
+        if (recoveryAttempt._tag === "Failure") {
+          return yield* classifyGenerationFailure(current.runId, request.objective, recoveryAttempt.error)
+        }
+        generated = recoveryAttempt.value
       }
       for (const [index, output] of generated.outputs.entries()) {
         const persisted = yield* record({
