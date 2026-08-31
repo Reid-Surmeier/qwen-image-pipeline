@@ -312,6 +312,50 @@ test("a self-consistent forged post-plan Procedure model is refused before spend
   assert.equal(adapterCalls, 0)
 })
 
+test("post-plan drift adding any unsafe Project Contract reference root is refused before spending", async () => {
+  let applicationFiles: Map<string, Uint8Array> | undefined
+  const fixture = makeFixture("seedance-video", {
+    files: (files) => {
+      applicationFiles = files
+    },
+  })
+  const planned = await Effect.runPromise(
+    plan({ objectivePath: fixture.objectivePath }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(MediaInspector, byteMediaInspector),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+    ),
+  )
+  assert.equal(planned._tag, "Planned")
+  if (planned._tag !== "Planned") return
+  const changedContract = JSON.parse(Buffer.from(applicationFiles!.get(PROJECT_CONTRACT_PATH)!).toString("utf8")) as Record<string, unknown>
+  changedContract.referenceRoots = ["references", "../escape"]
+  applicationFiles!.set(PROJECT_CONTRACT_PATH, Buffer.from(JSON.stringify(changedContract)))
+
+  let adapterCalls = 0
+  const adapter: GenerationAdapterService = {
+    invoke: () => Effect.die("unsafe Seedance contract must not use image invocation"),
+    submitSeedance: () => Effect.sync(() => {
+      adapterCalls += 1
+      throw new Error("paid adapter tripwire")
+    }),
+    recover: () => Effect.die("unsafe Project Contract must not recover"),
+  }
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const decision = await Effect.runPromise(advance({ run: planned.run }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+    Effect.provideService(GenerationAdapter, adapter),
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T20:03:00.000Z") }),
+  ))
+  assert.equal(decision._tag, "AdvanceRefused")
+  if (decision._tag !== "AdvanceRefused") return
+  assert.equal(decision.finding.code, "PROCEDURE_NOT_LOCKED")
+  assert.match(decision.normalView.spendRisk, /no provider request.*no attempt.*\$0/i)
+  assert.equal(adapterCalls, 0)
+})
+
 test("post-plan installed artifact byte drift is refused before spending", async (context) => {
   const source = join(process.cwd(), "tests/fixtures/tool-artifacts/v0.3.0")
   const temporaryRoot = await mkdtemp(join(tmpdir(), "qwen-advance-tool-artifact-"))
@@ -417,7 +461,6 @@ test("advances one Qwen Assembly Run through a genuine donor choice to verified 
   const plannedDecision = await Effect.runPromise(
     plan({ objectivePath: fixture.objectivePath }).pipe(
       Effect.provideService(ApplicationFiles, fixture.files),
-      Effect.provideService(PlanningIdentity, fixture.identity),
       Effect.provideService(MediaInspector, normalizedRgbaInspector),
       Effect.provideService(PlanningIdentity, fixture.identity),
     ),

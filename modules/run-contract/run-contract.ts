@@ -434,7 +434,8 @@ export const verifyPlannedRunIdentity = (
       const referenceKeys = request.references.map((reference) =>
         `${reference.slot}\0${reference.kind}\0${reference.payloadDestination}`).sort()
       const referenceRoots = stringsField(contract, "referenceRoots")
-      const referencesMatch = JSON.stringify(requirementKeys) === JSON.stringify(referenceKeys) &&
+      const referencesMatch = referenceRoots.every(isSafePath) &&
+        JSON.stringify(requirementKeys) === JSON.stringify(referenceKeys) &&
         request.references.every((reference) => isSafePath(reference.applicationPath) && referenceRoots.some((root) =>
           isSafePath(root) && (reference.applicationPath === root || reference.applicationPath.startsWith(`${root}/`))))
       if (
