@@ -209,7 +209,7 @@ const adapterEffect = <Success>(
     return yield* Effect.fail(new GenerationError("ADAPTER_RESULT_INVALID", `${missingMessage} did not return an Effect.`))
   }
   return yield* (untrusted as Effect.Effect<Success, unknown>).pipe(
-    Effect.mapError((error) => error instanceof GenerationError
+    Effect.mapError((error) => error instanceof GenerationError && error.code !== "ADAPTER_NOT_STARTED"
       ? error
       : new GenerationError("ADAPTER_RESULT_INVALID", `${missingMessage} failed with an unnamed error.`)),
     Effect.catchDefect(() => Effect.fail(new GenerationError(
@@ -225,14 +225,14 @@ const submissionAdapterProgram = <Success>(
 ): Effect.Effect<Readonly<{ effect: Effect.Effect<Success, GenerationError> }>, GenerationError> => Effect.gen(function*() {
   const untrusted = yield* Effect.try({
     try: make,
-    catch: () => new GenerationError("ADAPTER_NOT_STARTED", `${name} refused before returning its Effect.`),
+    catch: () => new GenerationError("ADAPTER_RESULT_INVALID", `${name} threw after adapter code was called.`),
   })
   if (!Effect.isEffect(untrusted)) {
-    return yield* Effect.fail(new GenerationError("ADAPTER_NOT_STARTED", `${name} did not return an Effect.`))
+    return yield* Effect.fail(new GenerationError("ADAPTER_RESULT_INVALID", `${name} returned after adapter code was called without producing an Effect.`))
   }
   return Object.freeze({
     effect: (untrusted as Effect.Effect<Success, unknown>).pipe(
-      Effect.mapError((error) => error instanceof GenerationError
+      Effect.mapError((error) => error instanceof GenerationError && error.code !== "ADAPTER_NOT_STARTED"
         ? error
         : new GenerationError("ADAPTER_RESULT_INVALID", `${name} failed with an unnamed error.`)),
       Effect.catchDefect(() => Effect.fail(new GenerationError(
@@ -452,6 +452,9 @@ export const invokeGeneration = (
   Effect.gen(function*() {
     const validatedPrepared = yield* validatePreparedGeneration(prepared)
     const adapter = yield* GenerationAdapter
+    if (typeof adapter.invoke !== "function") {
+      return yield* Effect.fail(new GenerationError("ADAPTER_NOT_STARTED", "The adapter cannot submit Qwen."))
+    }
     yield* validateSubmission(permit, {
       requestSha256: validatedPrepared.requestSha256,
       payloadSha256: validatedPrepared.payloadSha256,

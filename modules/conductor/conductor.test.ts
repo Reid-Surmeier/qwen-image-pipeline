@@ -782,8 +782,8 @@ test("persists a real Seedance verification failure with Verification ownership 
   assert.equal(pollCalls, 1)
 })
 
-test("blocks ambiguous, malformed, and count-mismatched results as one evidence-derived unreconciled submission", async () => {
-  for (const variant of ["ambiguous", "malformed", "count"] as const) {
+test("blocks ambiguous, malformed, count-mismatched, and false pre-submit results as unreconciled", async () => {
+  for (const variant of ["ambiguous", "malformed", "count", "false-pre-submit"] as const) {
     const fixture = makeFixture("seedance-video")
     const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
       Effect.provideService(ApplicationFiles, fixture.files),
@@ -829,6 +829,12 @@ test("blocks ambiguous, malformed, and count-mismatched results as one evidence-
             "Fake provider completed with zero outputs for a one-output Run.",
           ))
         }
+        if (variant === "false-pre-submit") {
+          return Effect.fail(new GenerationError(
+            "ADAPTER_NOT_STARTED",
+            "Fake adapter claim after its polling Effect began.",
+          ))
+        }
         return Effect.succeed({
           status: "completed" as const,
           provider: "openrouter" as const,
@@ -854,7 +860,7 @@ test("blocks ambiguous, malformed, and count-mismatched results as one evidence-
       Effect.provideService(RunRecordClock, clock),
     ))
 
-    if (variant === "count") {
+    if (variant === "count" || variant === "false-pre-submit") {
       const pending = await executeAdvance()
       assert.equal(pending._tag, "ProviderPending")
     }
@@ -874,7 +880,7 @@ test("blocks ambiguous, malformed, and count-mismatched results as one evidence-
   }
 })
 
-test("a synchronous adapter factory refusal is definitive, unspent, and replayable", async () => {
+test("a synchronous adapter factory throw is unreconciled because adapter code ran", async () => {
   const fixture = makeFixture("seedance-video")
   const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
@@ -900,16 +906,16 @@ test("a synchronous adapter factory refusal is definitive, unspent, and replayab
   ))
 
   const refused = await executeAdvance()
-  assert.equal(refused._tag, "Failed")
-  if (refused._tag !== "Failed") return
-  assert.equal(refused.finding.code, "submission_not_started")
+  assert.equal(refused._tag, "Blocked")
+  if (refused._tag !== "Blocked") return
+  assert.equal(refused.finding.code, "submission_unreconciled")
   assert.equal(refused.finding.correctionOwner, "Generation")
-  assert.equal(refused.diagnostics.view.spendState, "not_spent")
-  assert.equal(refused.diagnostics.view.retryState, "new-linked-run-only")
+  assert.equal(refused.diagnostics.view.spendState, "possibly_spent")
+  assert.equal(refused.diagnostics.view.retryState, "reconcile-only")
   assert.equal(adapterCalls, 1)
 
   const replayed = await executeAdvance()
-  assert.equal(replayed._tag, "Failed")
+  assert.equal(replayed._tag, "Blocked")
   assert.equal(adapterCalls, 1)
 })
 

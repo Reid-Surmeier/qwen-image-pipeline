@@ -18,6 +18,7 @@ import { makeFixture } from "../../tests/control-plane-fixture.js"
 import { EMBEDDED_PROVIDER_SECRET_CASES } from "../../tests/provider-evidence-attacks.js"
 import {
   GenerationAdapter,
+  GenerationError,
   invoke,
   pollSeedance,
   prepare,
@@ -796,7 +797,7 @@ test("rejects unknown, null, malformed, and sparse adapter results as typed fail
   }
 })
 
-test("classifies a synchronous submission-adapter refusal before its Effect as ADAPTER_NOT_STARTED", async () => {
+test("treats a synchronous submission-adapter throw as post-call uncertainty", async () => {
   const fixture = makeFixture("qwen-image")
   const decision = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
@@ -836,10 +837,10 @@ test("classifies a synchronous submission-adapter refusal before its Effect as A
   const error = await Effect.runPromise(Effect.flip(invoke(prepared, marker.permit).pipe(
     Effect.provideService(GenerationAdapter, adapter),
   )))
-  assert.equal(error.code, "ADAPTER_NOT_STARTED")
+  assert.equal(error.code, "ADAPTER_RESULT_INVALID")
 })
 
-test("separates a non-starting adapter from failures after its Effect begins", async () => {
+test("normalizes every failure after adapter code is called as post-call uncertainty", async () => {
   const fixture = makeFixture("qwen-image")
   const decision = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
     Effect.provideService(ApplicationFiles, fixture.files),
@@ -863,6 +864,10 @@ test("separates a non-starting adapter from failures after its Effect begins", a
     ["non-effect", { invoke: () => undefined } as unknown as GenerationAdapterService],
     ["defect", { invoke: () => Effect.die("adapter defect") } as unknown as GenerationAdapterService],
     ["untyped failure", { invoke: () => Effect.fail("adapter string failure") } as unknown as GenerationAdapterService],
+    ["false pre-submit failure", { invoke: () => Effect.fail(new GenerationError(
+      "ADAPTER_NOT_STARTED",
+      "An adapter cannot make this claim after its Effect begins.",
+    )) } as unknown as GenerationAdapterService],
   ]
   for (const [index, [name, adapter]] of invalidAdapters.entries()) {
     const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
@@ -881,6 +886,6 @@ test("separates a non-starting adapter from failures after its Effect begins", a
     const error = await Effect.runPromise(Effect.flip(invoke(prepared, marker.permit).pipe(
       Effect.provideService(GenerationAdapter, adapter),
     )))
-    assert.equal(error.code, name === "non-effect" ? "ADAPTER_NOT_STARTED" : "ADAPTER_RESULT_INVALID", name)
+    assert.equal(error.code, "ADAPTER_RESULT_INVALID", name)
   }
 })
