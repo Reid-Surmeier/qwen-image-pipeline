@@ -14,7 +14,7 @@ import {
   type VideoPlan,
 } from "./types.js"
 import { RunContractError } from "./errors.js"
-import { isVerifiedPlanningIdentity } from "./file-planning-identity.js"
+import { isVerifiedPlanningIdentity, refreshVerifiedPlanningIdentity } from "./file-planning-identity.js"
 import {
   planReferences,
   type ApplicationFilesService,
@@ -374,12 +374,13 @@ const decodeVideoPlan = (
 
 export const verifyPlannedRunIdentity = (
   plannedRun: PlannedRun,
+  rawProjectContract: string,
   rawToolLock: string,
 ): Effect.Effect<void, RunContractError, PlanningIdentityService> => Effect.gen(function*() {
-  if (hasSecretMaterial(rawToolLock)) {
+  if (hasSecretMaterial(rawProjectContract) || hasSecretMaterial(rawToolLock)) {
     return yield* Effect.fail(new RunContractError(
       "SECRET_MATERIAL_DETECTED",
-      "The application Tool Lock contains credential material.",
+      "The application Project Contract or Tool Lock contains credential material.",
     ))
   }
   const identity = yield* PlanningIdentity
@@ -389,21 +390,80 @@ export const verifyPlannedRunIdentity = (
       "Advancement requires identity derived from a verified installed tool artifact.",
     ))
   }
-  const lock = yield* Effect.try({
-    try: () => decodeToolIdentity(parseDocument(rawToolLock, "Tool Lock")),
+  const installedTool = yield* refreshVerifiedPlanningIdentity(identity)
+  const decoded = yield* Effect.try({
+    try: () => ({
+      contract: parseDocument(rawProjectContract, "Project Contract"),
+      lock: decodeToolIdentity(parseDocument(rawToolLock, "Tool Lock")),
+    }),
     catch: (error) => error instanceof RunContractError
       ? error
-      : new RunContractError("DOCUMENT_INVALID", "Tool Lock is invalid."),
+      : new RunContractError("DOCUMENT_INVALID", "Project Contract or Tool Lock is invalid."),
   })
   if (
-    !sameTool(lock, identity.installedTool) ||
-    !sameTool(plannedRun.request.tool, identity.installedTool)
+    !sameTool(decoded.lock, installedTool) ||
+    !sameTool(plannedRun.request.tool, installedTool)
   ) {
     return yield* Effect.fail(new RunContractError(
       "TOOL_LOCK_MISMATCH",
       "The Planned Run, application Tool Lock, and installed tool identity do not match exactly.",
     ))
   }
+  yield* Effect.try({
+    try: () => {
+      const request = plannedRun.request
+      const canonicalRequest = canonicalize(request)
+      if (
+        canonicalRequest !== plannedRun.canonicalRequest ||
+        createHash("sha256").update(canonicalRequest).digest("hex") !== plannedRun.requestSha256
+      ) {
+        throw new RunContractError("PROCEDURE_NOT_LOCKED", "The Planned Run is not internally canonical.")
+      }
+      const contract = decoded.contract
+      const procedure = recordsField(contract, "procedures").find((candidate) => candidate.id === request.procedureId)
+      if (procedure === undefined) {
+        throw new RunContractError("PROCEDURE_NOT_LOCKED", "The Planned Run Procedure is not allowed by the current Project Contract.")
+      }
+      const maximumCount = Math.min(numberField(contract, "maximumCount"), numberField(procedure, "maximumCount"))
+      const estimatedCost = request.requestedCount * moneyCents(stringField(procedure, "unitCostUsd"), "unitCostUsd")
+      const requestBudget = moneyCents(request.budgetCeilingUsd, "budgetCeilingUsd")
+      const projectBudget = moneyCents(stringField(contract, "maximumBudgetUsd"), "maximumBudgetUsd")
+      const requirements = decodeRequirements(procedure)
+      const requirementKeys = requirements.map((requirement) =>
+        `${requirement.slot}\0${requirement.kind}\0${requirement.payloadDestination}`).sort()
+      const referenceKeys = request.references.map((reference) =>
+        `${reference.slot}\0${reference.kind}\0${reference.payloadDestination}`).sort()
+      const referenceRoots = stringsField(contract, "referenceRoots")
+      const referencesMatch = JSON.stringify(requirementKeys) === JSON.stringify(referenceKeys) &&
+        request.references.every((reference) => isSafePath(reference.applicationPath) && referenceRoots.some((root) =>
+          isSafePath(root) && (reference.applicationPath === root || reference.applicationPath.startsWith(`${root}/`))))
+      if (
+        stringField(contract, "applicationId") !== request.applicationId ||
+        stringField(contract, "artifactRoot") !== request.artifactRoot ||
+        stringField(contract, "outputRoot") !== request.outputRoot ||
+        !isSafePath(request.artifactRoot) || !isSafePath(request.outputRoot) ||
+        numberField(contract, "maximumCorrectionRuns") !== request.maximumCorrectionRuns ||
+        stringField(procedure, "version") !== decoded.lock.procedureVersion ||
+        stringField(procedure, "mode") !== request.mode ||
+        stringField(procedure, "provider") !== request.provider ||
+        stringField(procedure, "model") !== request.model ||
+        request.schemaVersion !== decoded.lock.runSchemaVersion ||
+        request.adapterProtocolVersion !== decoded.lock.adapterProtocolVersion ||
+        request.requestedCount < 1 || request.requestedCount > maximumCount ||
+        formatCents(estimatedCost) !== request.estimatedMaximumCostUsd ||
+        estimatedCost > requestBudget || estimatedCost > projectBudget ||
+        !referencesMatch
+      ) {
+        throw new RunContractError(
+          "PROCEDURE_NOT_LOCKED",
+          "The Planned Run no longer matches the current Project Contract and selected Procedure exactly.",
+        )
+      }
+    },
+    catch: (error) => error instanceof RunContractError
+      ? error
+      : new RunContractError("DOCUMENT_INVALID", "Project Contract advancement authority is invalid."),
+  })
 })
 
 export const compileDocuments = (

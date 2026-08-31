@@ -28,6 +28,7 @@ export const compilePlannedRun: (
 
 export const verifyPlannedRunIdentity: (
   plannedRun: PlannedRun,
+  rawProjectContract: string,
   rawToolLock: string,
 ) => Effect.Effect<void, RunContractError, PlanningIdentityService> = verifyIdentity
 

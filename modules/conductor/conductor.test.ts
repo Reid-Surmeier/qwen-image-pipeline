@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { access, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
+import { access, cp, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import test from "node:test"
@@ -15,6 +15,7 @@ import {
   PlanningIdentity,
   TOOL_LOCK_PATH,
   byteMediaInspector,
+  filePlanningIdentity,
   plan,
   type PlanDecision,
 } from "./index.js"
@@ -255,6 +256,100 @@ test("post-plan Tool Lock drift refuses before any adapter call or reservation",
   if (decision._tag !== "AdvanceRefused") return
   assert.equal(decision.finding.code, "TOOL_LOCK_MISMATCH")
   assert.equal(decision.finding.correctionOwner, "application decision owner")
+  assert.match(decision.normalView.spendRisk, /no provider request.*no attempt.*\$0/i)
+  assert.equal(adapterCalls, 0)
+})
+
+const canonicalJson = (value: unknown): string => {
+  if (value === null || typeof value !== "object") return JSON.stringify(value)
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`
+  const record = value as Record<string, unknown>
+  return `{${Object.keys(record).sort().map((key) =>
+    `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(",")}}`
+}
+
+test("a self-consistent forged post-plan Procedure model is refused before spending", async () => {
+  const fixture = makeFixture("seedance-video")
+  const planned = await Effect.runPromise(
+    plan({ objectivePath: fixture.objectivePath }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(MediaInspector, byteMediaInspector),
+      Effect.provideService(PlanningIdentity, fixture.identity),
+    ),
+  )
+  assert.equal(planned._tag, "Planned")
+  if (planned._tag !== "Planned") return
+
+  const forgedRequest = { ...planned.run.request, model: "attacker/unapproved-image-model" }
+  const canonicalRequest = canonicalJson(forgedRequest)
+  const forgedRun = {
+    state: "planned" as const,
+    request: forgedRequest,
+    canonicalRequest,
+    requestSha256: createHash("sha256").update(canonicalRequest).digest("hex"),
+  }
+  let adapterCalls = 0
+  const adapter: GenerationAdapterService = {
+    invoke: () => Effect.die("forged Seedance plan must not use image invocation"),
+    submitSeedance: () => Effect.sync(() => {
+      adapterCalls += 1
+      throw new Error("paid adapter tripwire")
+    }),
+    recover: () => Effect.die("forged Procedure must not recover"),
+  }
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const decision = await Effect.runPromise(advance({ run: forgedRun }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+    Effect.provideService(GenerationAdapter, adapter),
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T20:00:00.000Z") }),
+  ))
+  assert.equal(decision._tag, "AdvanceRefused")
+  if (decision._tag !== "AdvanceRefused") return
+  assert.equal(decision.finding.code, "PROCEDURE_NOT_LOCKED")
+  assert.match(decision.normalView.spendRisk, /no provider request.*no attempt.*\$0/i)
+  assert.equal(adapterCalls, 0)
+})
+
+test("post-plan installed artifact byte drift is refused before spending", async (context) => {
+  const source = join(process.cwd(), "tests/fixtures/tool-artifacts/v0.3.0")
+  const temporaryRoot = await mkdtemp(join(tmpdir(), "qwen-advance-tool-artifact-"))
+  context.after(async () => rm(temporaryRoot, { recursive: true, force: true }))
+  await cp(source, temporaryRoot, { recursive: true })
+  const identity = await Effect.runPromise(filePlanningIdentity(temporaryRoot))
+  const fixture = makeFixture("seedance-video")
+  const planned = await Effect.runPromise(
+    plan({ objectivePath: fixture.objectivePath }).pipe(
+      Effect.provideService(ApplicationFiles, fixture.files),
+      Effect.provideService(MediaInspector, byteMediaInspector),
+      Effect.provideService(PlanningIdentity, identity),
+    ),
+  )
+  assert.equal(planned._tag, "Planned")
+  if (planned._tag !== "Planned") return
+  await writeFile(join(temporaryRoot, "artifact.txt"), "changed after planning\n", "utf8")
+
+  let adapterCalls = 0
+  const adapter: GenerationAdapterService = {
+    invoke: () => Effect.die("drifted Seedance artifact must not use image invocation"),
+    submitSeedance: () => Effect.sync(() => {
+      adapterCalls += 1
+      throw new Error("paid adapter tripwire")
+    }),
+    recover: () => Effect.die("drifted tool artifact must not recover"),
+  }
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const decision = await Effect.runPromise(advance({ run: planned.run }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(PlanningIdentity, identity),
+    Effect.provideService(GenerationAdapter, adapter),
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T20:05:00.000Z") }),
+  ))
+  assert.equal(decision._tag, "AdvanceRefused")
+  if (decision._tag !== "AdvanceRefused") return
+  assert.equal(decision.finding.code, "TOOL_ARTIFACT_INVALID")
   assert.match(decision.normalView.spendRisk, /no provider request.*no attempt.*\$0/i)
   assert.equal(adapterCalls, 0)
 })

@@ -77,13 +77,13 @@ const advanceIdentityRefused = (
   outcome: "blocked",
   finding: {
     code: namedCause(error) ?? "TOOL_LOCK_MISMATCH",
-    message: "The Planned Run no longer matches the application Tool Lock and verified installed tool identity.",
+    message: "The Planned Run no longer matches the current Project Contract, Tool Lock, and verified installed tool identity.",
     correctionOwner: "application decision owner",
   },
   normalView: {
     objective,
-    evidence: "The current application Tool Lock and installed tool identity did not authenticate this exact Planned Run.",
-    nextAction: "Restore the exact locked tool build or complete a no-cost compatibility check and plan a new Run.",
+    evidence: "The current Project Contract, selected Procedure, Tool Lock, and installed artifact bytes did not authenticate this exact Planned Run.",
+    nextAction: "Restore the exact contract and locked tool build or complete a no-cost compatibility check and plan a new Run.",
     spendRisk: "No provider request was made, no attempt was reserved, and spend is $0.",
     humanDecision: "No subjective visual approval is being requested.",
   },
@@ -799,9 +799,13 @@ export const advanceRun = (
   Effect.gen(function*() {
     const request = command.run.request
     const files = yield* ApplicationFiles
-    const identityAttempt = yield* files.read(TOOL_LOCK_PATH).pipe(
-      Effect.flatMap((lock) => verifyPlannedRunIdentity(
+    const identityAttempt = yield* Effect.all([
+      files.read(PROJECT_CONTRACT_PATH),
+      files.read(TOOL_LOCK_PATH),
+    ]).pipe(
+      Effect.flatMap(([contract, lock]) => verifyPlannedRunIdentity(
         command.run,
+        Buffer.from(contract.bytes).toString("utf8"),
         Buffer.from(lock.bytes).toString("utf8"),
       )),
       Effect.match({

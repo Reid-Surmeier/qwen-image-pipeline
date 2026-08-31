@@ -8,7 +8,7 @@ import { RunContractError } from "./errors.js"
 import type { PlanningIdentityService, ToolIdentity } from "./types.js"
 
 const MANIFEST_PATH = "tool-artifact.json"
-const verifiedIdentities = new WeakSet<object>()
+const verifiedIdentities = new WeakMap<object, () => ToolIdentity>()
 
 const invalidArtifact = (message: string): RunContractError =>
   new RunContractError("TOOL_ARTIFACT_INVALID", message)
@@ -90,7 +90,7 @@ const collectInventory = (directoryFd: number, prefix = ""): ReadonlyArray<strin
   return paths.sort()
 }
 
-const buildIdentity = (toolRoot: string): PlanningIdentityService => {
+const readIdentity = (toolRoot: string): ToolIdentity => {
   if (!isAbsolute(toolRoot)) throw invalidArtifact("The installed tool artifact root must be absolute.")
   const rootFd = openSync(toolRoot, fsConstants.O_RDONLY | fsConstants.O_DIRECTORY | fsConstants.O_NOFOLLOW)
   try {
@@ -163,7 +163,7 @@ const buildIdentity = (toolRoot: string): PlanningIdentityService => {
       typeof versions.runSchemaVersion !== "string" || !/^\d+$/.test(versions.runSchemaVersion) ||
       typeof versions.adapterProtocolVersion !== "string" || !/^\d+$/.test(versions.adapterProtocolVersion)
     ) throw invalidArtifact("The installed tool identity files are invalid.")
-    const installedTool: ToolIdentity = Object.freeze({
+    return Object.freeze({
       release,
       commit,
       artifactSha256,
@@ -171,12 +171,15 @@ const buildIdentity = (toolRoot: string): PlanningIdentityService => {
       runSchemaVersion: versions.runSchemaVersion,
       adapterProtocolVersion: versions.adapterProtocolVersion,
     })
-    const service: PlanningIdentityService = Object.freeze({ installedTool })
-    verifiedIdentities.add(service)
-    return service
   } finally {
     closeSync(rootFd)
   }
+}
+
+const buildIdentity = (toolRoot: string): PlanningIdentityService => {
+  const service: PlanningIdentityService = Object.freeze({ installedTool: readIdentity(toolRoot) })
+  verifiedIdentities.set(service, () => readIdentity(toolRoot))
+  return service
 }
 
 export const filePlanningIdentity = (
@@ -190,3 +193,18 @@ export const filePlanningIdentity = (
 
 export const isVerifiedPlanningIdentity = (service: PlanningIdentityService): boolean =>
   verifiedIdentities.has(service)
+
+export const refreshVerifiedPlanningIdentity = (
+  service: PlanningIdentityService,
+): Effect.Effect<ToolIdentity, RunContractError> => Effect.try({
+  try: () => {
+    const refresh = verifiedIdentities.get(service)
+    if (refresh === undefined) {
+      throw invalidArtifact("The installed tool identity was not derived from verified artifact bytes.")
+    }
+    return refresh()
+  },
+  catch: (error) => error instanceof RunContractError
+    ? error
+    : invalidArtifact("The installed tool artifact could not be reverified."),
+})
