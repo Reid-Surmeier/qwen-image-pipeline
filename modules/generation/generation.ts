@@ -531,7 +531,7 @@ export const submitSeedanceGeneration = (
     }
     const adapter = yield* GenerationAdapter
     if (typeof adapter.submitSeedance !== "function") {
-      return yield* Effect.fail(new GenerationError("ADAPTER_RESULT_INVALID", "The adapter cannot submit Seedance."))
+      return yield* Effect.fail(new GenerationError("ADAPTER_NOT_STARTED", "The adapter cannot submit Seedance."))
     }
     yield* validateSubmission(permit, {
       requestSha256: validatedPrepared.requestSha256,

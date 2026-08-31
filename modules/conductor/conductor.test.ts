@@ -912,3 +912,31 @@ test("a synchronous adapter factory refusal is definitive, unspent, and replayab
   assert.equal(replayed._tag, "Failed")
   assert.equal(adapterCalls, 1)
 })
+
+test("a missing Seedance submission method is definitive and unspent", async () => {
+  const fixture = makeFixture("seedance-video")
+  const planned = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(MediaInspector, byteMediaInspector),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+  ))
+  assert.equal(planned._tag, "Planned")
+  if (planned._tag !== "Planned") return
+  const adapter: GenerationAdapterService = {
+    invoke: () => Effect.die("Qwen must not run"),
+  }
+  const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+  const refused = await Effect.runPromise(advance({ run: planned.run }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(GenerationAdapter, adapter),
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-08-31T12:45:00.000Z") }),
+  ))
+
+  assert.equal(refused._tag, "Failed")
+  if (refused._tag !== "Failed") return
+  assert.equal(refused.finding.code, "submission_not_started")
+  assert.equal(refused.finding.correctionOwner, "Generation")
+  assert.equal(refused.diagnostics.view.spendState, "not_spent")
+  assert.equal(refused.diagnostics.view.retryState, "new-linked-run-only")
+})
