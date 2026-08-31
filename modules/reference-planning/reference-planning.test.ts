@@ -12,6 +12,19 @@ import {
 } from "./index.js"
 import { makeFixture, sha256 } from "../../tests/control-plane-fixture.js"
 
+test("refuses a PNG-like prefix without the complete signature and IHDR structure", async () => {
+  const forged = Buffer.alloc(24)
+  forged.set([0x89, 0x50, 0x4e, 0x47], 0)
+  forged.writeUInt32BE(16, 16)
+  forged.writeUInt32BE(16, 20)
+  const result = await Effect.runPromiseExit(byteMediaInspector.inspect({
+    applicationPath: "references/forged.png",
+    bytes: forged,
+    sha256: sha256(forged),
+  }))
+  assert.equal(result._tag, "Failure")
+})
+
 test("locks real video bytes and refuses falsified declared properties", async () => {
   const fixture = makeFixture("seedance-video")
   const snapshot = await Effect.runPromise(fixture.files.read("references/neutral.mp4"))

@@ -533,12 +533,18 @@ const replay = (
         throw new RunRecordError("ILLEGAL_TRANSITION", "A donor choice was opened before generated outputs were persisted.")
       }
       const candidates = stringArrayPayload(event.payload, "candidateSha256s")
+      const generatedOutputSha256s = evidence
+        .filter((item) => item.applicationPath.startsWith("outputs/"))
+        .map((item) => item.sha256)
       if (
+        candidates.length !== base.maximumCount ||
+        generatedOutputSha256s.length !== base.maximumCount ||
         new Set(candidates).size !== candidates.length ||
+        generatedOutputSha256s.some((sha256) => !candidates.includes(sha256)) ||
         candidates.some((candidate) => !evidence.some((item) =>
           item.applicationPath.startsWith("outputs/") && item.sha256 === candidate))
       ) {
-        throw new RunRecordError("DONOR_NOT_PERSISTED", "The donor checkpoint names output evidence that is not persisted on this Run.", "repair-evidence")
+        throw new RunRecordError("RESERVATION_OUTSIDE_PLAN", "The donor checkpoint does not name the complete reserved output set.", "repair-evidence")
       }
       donorCandidateSha256s = [...candidates]
       phase = "awaiting_donor_choice"

@@ -66,8 +66,10 @@ export const verifyRaster = (input: VerificationInput): Effect.Effect<Verificati
       const exactCopyByPosition = new Map<string, typeof input.exactCopy[number]>()
       for (const copy of input.exactCopy) {
         if (
+          !Number.isSafeInteger(copy.x) || !Number.isSafeInteger(copy.y) ||
           copy.x < region.x || copy.y < region.y ||
           copy.x >= region.x + region.width || copy.y >= region.y + region.height ||
+          !Array.isArray(copy.rgba) || copy.rgba.length !== 4 ||
           copy.rgba.some((channel) => !Number.isInteger(channel) || channel < 0 || channel > 255)
         ) {
           throw new VerificationError("MEDIA_CHECK_FAILED", "Exact Copy evidence must remain inside the owned region.", completed)

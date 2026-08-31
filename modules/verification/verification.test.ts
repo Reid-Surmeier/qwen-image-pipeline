@@ -128,3 +128,22 @@ test("rejects non-finite and non-safe-integer owned regions before fidelity chec
     assert.equal(error.code, "MEDIA_CHECK_FAILED", name)
   }
 })
+
+test("rejects malformed Exact Copy coordinates and channel counts", async () => {
+  const malformedCores: ReadonlyArray<Readonly<{ x: number; y: number; rgba: ReadonlyArray<number> }>> = [
+    { x: 1.5, y: 0, rgba: [5, 6, 7, 255] },
+    { x: 1, y: Number.MAX_SAFE_INTEGER + 1, rgba: [5, 6, 7, 255] },
+    { x: 1, y: 0, rgba: [5, 6, 7] },
+    { x: 1, y: 0, rgba: [5, 6, 7, 255, 0] },
+  ]
+  for (const core of malformedCores) {
+    const error = await Effect.runPromise(Effect.flip(verify({
+      baseline,
+      donor,
+      candidate: assembled,
+      ownedRegion,
+      exactCopy: [{ ...core, sha256: sha256(JSON.stringify(core)) }] as never,
+    })))
+    assert.equal(error.code, "MEDIA_CHECK_FAILED")
+  }
+})

@@ -1089,6 +1089,64 @@ test("records a donor-choice checkpoint and selects only a persisted output on t
   assert.equal(selected.view.runId, reserved.runId)
 })
 
+test("replay rejects a donor checkpoint that omits part of the reserved output set", async () => {
+  const planned = await plannedRun(undefined, 2)
+  const memory = await memoryHarness()
+  const execute = <Success, Error>(
+    effect: Effect.Effect<Success, Error, RunRecordStoreService | RunRecordClockService>,
+  ): Promise<Success> => Effect.runPromise(effect.pipe(
+    Effect.provide(memory.layer),
+    Effect.provideService(RunRecordClock, clock),
+  ))
+  const reserved = await execute(reserve(reservationFor(planned)))
+  await execute(record({ _tag: "SubmissionMayHaveStarted", runId: reserved.runId, operationId: "replay-submit" }))
+  const providerBody = Buffer.from('{"request_id":"replay-donor","status":"succeeded"}', "utf8")
+  await execute(record({
+    _tag: "CommitProviderEvidence",
+    runId: reserved.runId,
+    operationId: "replay-provider",
+    evidence: { mediaType: "application/json", body: providerBody, sha256: createHash("sha256").update(providerBody).digest("hex") },
+  }))
+  const outputBodies = [Buffer.from("replay-output-one"), Buffer.from("replay-output-two")]
+  const outputSha256s: string[] = []
+  for (const [index, body] of outputBodies.entries()) {
+    const outputSha256 = createHash("sha256").update(body).digest("hex")
+    outputSha256s.push(outputSha256)
+    await execute(record({
+      _tag: "CommitGeneratedOutput",
+      runId: reserved.runId,
+      operationId: `replay-output-${index + 1}`,
+      output: {
+        applicationPath: `outputs/replay-${index + 1}.png`,
+        mediaType: "image/png",
+        body,
+        sha256: outputSha256,
+      },
+    }))
+  }
+  await execute(record({
+    _tag: "OpenDonorChoice",
+    runId: reserved.runId,
+    operationId: "replay-donor-choice",
+    candidateSha256s: outputSha256s,
+  }))
+  await Effect.runPromise(memory.mutate(reserved.runId, (stored) => {
+    const events = Buffer.from(stored.events).toString("utf8").trimEnd().split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+    const checkpoint = events.at(-1)!
+    checkpoint.payload = {
+      ...(checkpoint.payload as Record<string, unknown>),
+      candidateSha256s: [outputSha256s[0]],
+    }
+    const { eventSha256: _discarded, ...withoutDigest } = checkpoint
+    checkpoint.eventSha256 = createHash("sha256").update(canonicalJson(withoutDigest)).digest("hex")
+    stored.events = Buffer.from(`${events.map(canonicalJson).join("\n")}\n`, "utf8")
+    delete stored.state
+  }))
+  const error = await Effect.runPromise(Effect.flip(load(reserved.runId).pipe(Effect.provide(memory.layer))))
+  assert.equal(error.code, "RESERVATION_OUTSIDE_PLAN")
+})
+
 test("persists separately hashed assembled output and canonical Assembly report", async () => {
   const baseline = raster([
     10, 10, 10, 255,
