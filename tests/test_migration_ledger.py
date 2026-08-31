@@ -91,7 +91,9 @@ class MigrationLedgerTests(unittest.TestCase):
                 "def assigned_alias(brief):\n    return forward(brief)\n"
                 "class MovedClient:\n"
                 "    def review(self, request):\n"
-                "        return self._opener(request)\n",
+                "        return self._opener(request)\n"
+                "def verifier(client, request):\n"
+                "    return client.review(request)\n",
                 encoding="utf-8",
             )
             self.assertEqual(
@@ -102,6 +104,7 @@ class MigrationLedgerTests(unittest.TestCase):
                     "qwen_ui_pipeline/providers/router.py:imported_alias->dispatch",
                     "qwen_ui_pipeline/providers/router.py:assigned_alias->forward",
                     "qwen_ui_pipeline/providers/router.py:MovedClient.review->self._opener",
+                    "qwen_ui_pipeline/providers/router.py:verifier->client.review",
                 },
             )
 
@@ -111,7 +114,8 @@ class MigrationLedgerTests(unittest.TestCase):
         from qwen_ui_pipeline.providers.openrouter import OpenRouterImageClient
         from qwen_ui_pipeline.providers.router import ProviderResult, generate_with_provider
         from qwen_ui_pipeline.providers.vision import OpenRouterVisionClient
-        from qwen_ui_pipeline.verifier import RegionReview
+        from qwen_ui_pipeline.fidelity import FidelityContract, FidelityResult, MutableRegion, RegionChange
+        from qwen_ui_pipeline.verifier import RegionReview, VisionClient, run_verification
 
         document = json.loads((ROOT / "migration/entrypoints.json").read_text(encoding="utf-8"))
         expected = {entry["path"] for entry in document["directProviderBypasses"]}
@@ -262,6 +266,30 @@ class MigrationLedgerTests(unittest.TestCase):
 
         OpenRouterVisionClient(api_key="probe-key", _opener=vision_transport).review(
             RegionReview(region="probe", baseline_crop=Solid(), candidate_crop=Solid())
+        )
+
+        class RuntimeVisionClient(VisionClient):
+            def review(self, review):
+                observed.add(
+                    "qwen_ui_pipeline/verifier.py:run_verification->client.review"
+                )
+                return {"verdict": "match"}
+
+        run_verification(
+            FidelityContract(
+                width=1,
+                height=1,
+                approved_baseline="probe",
+                mutable_regions=(MutableRegion("probe", 0, 0, 1, 1),),
+            ),
+            FidelityResult(
+                passed=True,
+                region_changes=(RegionChange("probe", 1, 1),),
+                invariant_violations=(),
+            ),
+            Solid(),
+            Solid(),
+            client=RuntimeVisionClient(),
         )
         self.assertEqual(observed, expected)
 

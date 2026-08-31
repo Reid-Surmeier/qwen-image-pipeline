@@ -168,6 +168,11 @@
       "path": "qwen_ui_pipeline/providers/vision.py:OpenRouterVisionClient.review->self._opener",
       "replacement": "Review semantic gate through Conductor-authorized evidence",
       "retirementCondition": "Issue #30 removes direct public reachability after the reviewed Run path owns invocation."
+    },
+    {
+      "path": "qwen_ui_pipeline/verifier.py:run_verification->client.review",
+      "replacement": "Review semantic gate through Conductor-authorized evidence",
+      "retirementCondition": "Issue #30 makes the reviewed Run path the only caller of semantic review."
     }
   ]
 }

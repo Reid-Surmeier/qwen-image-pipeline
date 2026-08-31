@@ -119,7 +119,7 @@ def _submission_aliases(tree: ast.Module) -> set[str]:
                 isinstance(value, ast.Name) and value.id in aliases
             ) or (
                 isinstance(value, ast.Attribute)
-                and value.attr in {"generate", "generate_with_provider"}
+                and value.attr in {"generate", "generate_with_provider", "review"}
             )
             if source_is_submission and target not in aliases:
                 aliases.add(target)
@@ -151,7 +151,10 @@ class _BypassVisitor(ast.NodeVisitor):
 
     def visit_Call(self, node: ast.Call) -> None:
         call_name = _call_name(node)
-        is_provider_generate = isinstance(node.func, ast.Attribute) and node.func.attr == "generate"
+        is_provider_method = (
+            isinstance(node.func, ast.Attribute)
+            and node.func.attr in {"generate", "review"}
+        )
         is_provider_transport = (
             isinstance(node.func, ast.Attribute)
             and node.func.attr in {"_opener", "urlopen"}
@@ -163,7 +166,7 @@ class _BypassVisitor(ast.NodeVisitor):
             isinstance(node.func, ast.Name)
             and node.func.id in self.submission_aliases
         )
-        if is_provider_generate or is_provider_dispatch or is_provider_transport:
+        if is_provider_method or is_provider_dispatch or is_provider_transport:
             owner = ".".join(self.context) or "<module>"
             display_name = call_name or ast.unparse(node.func)
             self.bypasses.add(f"{self.relative_path}:{owner}->{display_name}")

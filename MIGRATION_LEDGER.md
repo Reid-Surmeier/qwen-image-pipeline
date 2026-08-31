@@ -48,3 +48,4 @@ These new version-1 surfaces delegate to Conductor now. The inherited callers ab
 | qwen_ui_pipeline/providers/router.py:generate_with_provider->alibaba_client.generate | Generation.invoke through OpenRouter | Issue #28 removes the direct Alibaba route. |
 | qwen_ui_pipeline/providers/router.py:generate_with_provider->openrouter_client.generate | Generation.invoke | Issue #28 makes Generation the only provider adapter caller. |
 | qwen_ui_pipeline/providers/vision.py:OpenRouterVisionClient.review->self._opener | Review semantic gate through Conductor-authorized evidence | Issue #30 removes direct public reachability after the reviewed Run path owns invocation. |
+| qwen_ui_pipeline/verifier.py:run_verification->client.review | Review semantic gate through Conductor-authorized evidence | Issue #30 makes the reviewed Run path the only caller of semantic review. |
