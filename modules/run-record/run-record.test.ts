@@ -346,6 +346,11 @@ test("sanitized token counts pass while credential query strings are refused", a
     ["generic-token", '{"token":"opaque-private-value"}'],
     ["api-token", '{"api_token":"opaque-private-value"}'],
     ["cookie", '{"request_headers":{"cookie":"session=opaque-private-value"}}'],
+    ["credentials", '{"credentials":"opaque-private-value"}'],
+    ["auth", '{"auth":"opaque-private-value"}'],
+    ["authentication", '{"authentication":{"value":"opaque-private-value"}}'],
+    ["authentication-data", '{"authentication_data":"opaque-private-value"}'],
+    ["auth-header", '{"auth_header":"Bearer opaque-private-value"}'],
   ] as const) {
     const memory = await memoryHarness()
     const run = await prepare(memory, suffix)

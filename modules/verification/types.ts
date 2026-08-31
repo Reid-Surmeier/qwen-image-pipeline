@@ -1,4 +1,4 @@
-import type { ExactCopyPixel, OwnedRegion, RasterEvidence } from "../assembly/index.js"
+import type { AssemblyResult, ExactCopyPixel, OwnedRegion, RasterEvidence } from "../assembly/index.js"
 
 export type VerificationInput = Readonly<{
   baseline: RasterEvidence
@@ -13,6 +13,7 @@ export type VerificationInput = Readonly<{
 export type VerificationResult = Readonly<{
   classification: "verified-candidate"
   candidateSha256: string
+  assemblyReport: AssemblyResult["report"]
   checks: ReadonlyArray<Readonly<{
     name: "integrity" | "media" | "outside-region-preservation" | "donor-equality-inside-region"
     passed: true

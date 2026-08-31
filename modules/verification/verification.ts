@@ -48,8 +48,12 @@ export const verifyRaster = (input: VerificationInput): Effect.Effect<Verificati
         throw new VerificationError("MEDIA_CHECK_FAILED", "Raster media is invalid or dimensionally inconsistent.", completed)
       }
       completed.push("media")
-      if (input.assemblyRequired && input.candidateKind !== "assembled") {
-        throw new VerificationError("ASSEMBLY_REQUIRED", "A raw Generation donor cannot bypass required Assembly.", completed)
+      if (input.assemblyRequired && input.candidate.sha256 === input.donor.sha256) {
+        throw new VerificationError(
+          "ASSEMBLY_REQUIRED",
+          "A raw Generation donor cannot bypass required Assembly by changing its caller-provided label.",
+          completed,
+        )
       }
       const region = input.ownedRegion
       if (
@@ -93,6 +97,15 @@ export const verifyRaster = (input: VerificationInput): Effect.Effect<Verificati
       return {
         classification: "verified-candidate" as const,
         candidateSha256: input.candidate.sha256,
+        assemblyReport: {
+          baselineSha256: input.baseline.sha256,
+          donorSha256: input.donor.sha256,
+          regionSha256: createHash("sha256").update(JSON.stringify(input.ownedRegion)).digest("hex"),
+          exactCopySha256: createHash("sha256")
+            .update(JSON.stringify(input.exactCopy.map((copy) => copy.sha256)))
+            .digest("hex"),
+          outputSha256: input.candidate.sha256,
+        },
         checks: [
           { name: "integrity" as const, passed: true as const, measured: 0 },
           { name: "media" as const, passed: true as const, measured: 0 },

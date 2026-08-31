@@ -4,6 +4,7 @@ import test from "node:test"
 
 import { Effect } from "effect"
 
+import { assemble } from "../assembly/index.js"
 import { verify } from "./index.js"
 
 const sha256 = (value: Uint8Array | string): string =>
@@ -44,6 +45,20 @@ test("rejects a raw generated donor when Assembly is required", async () => {
   assert.deepEqual(error.checks, ["integrity", "media"])
 })
 
+test("rejects a raw donor even when the caller labels it assembled", async () => {
+  const error = await Effect.runPromise(Effect.flip(verify({
+    baseline,
+    donor,
+    candidate: donor,
+    ownedRegion,
+    exactCopy,
+    assemblyRequired: true,
+    candidateKind: "assembled",
+  })))
+  assert.equal(error.code, "ASSEMBLY_REQUIRED")
+  assert.deepEqual(error.checks, ["integrity", "media"])
+})
+
 test("proves independent zero-drift and donor-equality truths in mandatory order", async () => {
   const result = await Effect.runPromise(verify({
     baseline,
@@ -61,6 +76,21 @@ test("proves independent zero-drift and donor-equality truths in mandatory order
     ["outside-region-preservation", 0],
     ["donor-equality-inside-region", 0],
   ])
+})
+
+test("binds a verified candidate to the canonical Assembly report instead of its caller label", async () => {
+  const assembly = await Effect.runPromise(assemble({ baseline, donor, ownedRegion, exactCopy }))
+  const result = await Effect.runPromise(verify({
+    baseline,
+    donor,
+    candidate: assembly.output,
+    ownedRegion,
+    exactCopy,
+    assemblyRequired: true,
+    candidateKind: "raw-generation",
+  }))
+  assert.equal(result.candidateSha256, assembly.output.sha256)
+  assert.deepEqual(result.assemblyReport, assembly.report)
 })
 
 test("rejects a candidate that restores donor pixels over Exact Copy", async () => {

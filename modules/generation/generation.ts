@@ -23,6 +23,56 @@ const canonicalize = (value: unknown): string => {
   return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalize(record[key])}`).join(",")}}`
 }
 
+const objectRecord = (value: unknown): Record<string, unknown> | undefined =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined
+
+const normalizeAdapterResult = (value: unknown): GenerationResult | undefined => {
+  const result = objectRecord(value)
+  if (
+    result === undefined ||
+    typeof result.provider !== "string" ||
+    typeof result.model !== "string" || result.model.length === 0
+  ) return undefined
+  const providerEvidence = objectRecord(result.providerEvidence)
+  if (
+    providerEvidence === undefined ||
+    providerEvidence.mediaType !== "application/json" ||
+    !(providerEvidence.body instanceof Uint8Array) ||
+    typeof providerEvidence.sha256 !== "string"
+  ) return undefined
+  if (!Array.isArray(result.outputs)) return undefined
+  const outputs: GenerationResult["outputs"][number][] = []
+  for (let index = 0; index < result.outputs.length; index += 1) {
+    if (!Object.hasOwn(result.outputs, index)) return undefined
+    const output = objectRecord(result.outputs[index])
+    if (
+      output === undefined ||
+      typeof output.applicationPath !== "string" ||
+      output.mediaType !== "application/vnd.qwen.rgba+json" ||
+      !(output.body instanceof Uint8Array) ||
+      typeof output.sha256 !== "string"
+    ) return undefined
+    outputs.push({
+      applicationPath: output.applicationPath,
+      mediaType: output.mediaType,
+      body: output.body,
+      sha256: output.sha256,
+    })
+  }
+  return {
+    provider: result.provider as GenerationResult["provider"],
+    model: result.model,
+    providerEvidence: {
+      mediaType: providerEvidence.mediaType,
+      body: providerEvidence.body,
+      sha256: providerEvidence.sha256,
+    },
+    outputs,
+  }
+}
+
 export const prepareGeneration = (
   request: CanonicalRunRequest,
   references: ReadonlyArray<GenerationReference>,
@@ -87,7 +137,14 @@ export const invokeGeneration = (
 ): Effect.Effect<GenerationResult, GenerationError | import("../run-record/index.js").RunRecordError, GenerationAdapterService> =>
   Effect.gen(function*() {
     const adapter = yield* GenerationAdapter
-    const result = yield* permit.use(Effect.suspend(() => adapter.invoke(prepared)))
+    const untrustedResult: unknown = yield* permit.use(Effect.suspend(() => adapter.invoke(prepared)))
+    const result = yield* Effect.try({
+      try: () => normalizeAdapterResult(untrustedResult),
+      catch: () => new GenerationError("ADAPTER_RESULT_INVALID", "The adapter returned a malformed result."),
+    })
+    if (result === undefined) {
+      return yield* Effect.fail(new GenerationError("ADAPTER_RESULT_INVALID", "The adapter returned a malformed result."))
+    }
     if (result.provider !== prepared.request.provider || result.model !== prepared.request.model) {
       return yield* Effect.fail(new GenerationError("PROVIDER_SUBSTITUTION", "The adapter substituted provider or model."))
     }

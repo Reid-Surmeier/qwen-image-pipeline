@@ -5,7 +5,14 @@ import test from "node:test"
 import { Effect } from "effect"
 
 import { ApplicationFiles, MediaInspector, PlanningIdentity, byteMediaInspector, plan } from "../conductor/index.js"
-import { makeMemoryRunRecordHarness, record, reserve, RunRecordClock } from "../run-record/index.js"
+import {
+  makeMemoryRunRecordHarness,
+  record,
+  reserve,
+  RunRecordClock,
+  type RecordResult,
+  type RunRecordView,
+} from "../run-record/index.js"
 import { makeFixture } from "../../tests/control-plane-fixture.js"
 import { GenerationAdapter, invoke, prepare, type GenerationResult } from "./index.js"
 
@@ -100,4 +107,55 @@ test("rejects a sparse provider-reference destination before reservation", async
     bytes: snapshot.bytes,
   }])))
   assert.equal(error.code, "PAYLOAD_DESTINATION_INVALID")
+})
+
+test("rejects unknown, null, malformed, and sparse adapter results as typed failures", async () => {
+  const fixture = makeFixture("qwen-image")
+  const decision = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(MediaInspector, byteMediaInspector),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+  ))
+  assert.equal(decision._tag, "Planned")
+  if (decision._tag !== "Planned") return
+  const locked = decision.run.request.references[0]!
+  const snapshot = await Effect.runPromise(fixture.files.read(locked.applicationPath))
+  const prepared = await Effect.runPromise(prepare(decision.run.request, [{
+    slot: locked.slot,
+    applicationPath: locked.applicationPath,
+    sha256: locked.sha256,
+    payloadDestination: locked.payloadDestination,
+    mediaType: "image/png",
+    bytes: snapshot.bytes,
+  }]))
+  const malformedResults: ReadonlyArray<readonly [string, unknown]> = [
+    ["null", null],
+    ["primitive", 42],
+    ["missing fields", {}],
+    ["null outputs", { provider: "openrouter", model: decision.run.request.model, providerEvidence: {}, outputs: null }],
+    ["missing provider evidence", { provider: "openrouter", model: decision.run.request.model, outputs: [{}] }],
+    ["null output", { provider: "openrouter", model: decision.run.request.model, providerEvidence: {}, outputs: [null] }],
+    ["sparse outputs", { provider: "openrouter", model: decision.run.request.model, providerEvidence: {}, outputs: Array(1) }],
+  ]
+
+  for (const [index, [name, malformed]] of malformedResults.entries()) {
+    const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
+    const clock = { now: () => Effect.succeed("2026-08-30T12:00:00.000Z") }
+    const reserved: RunRecordView = await Effect.runPromise(reserve({
+      plannedRun: decision.run,
+      payloadSha256: prepared.payloadSha256,
+    }).pipe(Effect.provide(memory.layer), Effect.provideService(RunRecordClock, clock)))
+    const marker: RecordResult = await Effect.runPromise(record({
+      _tag: "SubmissionMayHaveStarted",
+      runId: reserved.runId,
+      operationId: `malformed-adapter-${index}`,
+    }).pipe(Effect.provide(memory.layer), Effect.provideService(RunRecordClock, clock)))
+    assert.equal(marker._tag, "SubmissionPermitIssued")
+    if (marker._tag !== "SubmissionPermitIssued") continue
+    const adapter = { invoke: () => Effect.succeed(malformed as GenerationResult) }
+    const error = await Effect.runPromise(Effect.flip(invoke(prepared, marker.permit).pipe(
+      Effect.provideService(GenerationAdapter, adapter),
+    )))
+    assert.equal(error.code, "ADAPTER_RESULT_INVALID", name)
+  }
 })
