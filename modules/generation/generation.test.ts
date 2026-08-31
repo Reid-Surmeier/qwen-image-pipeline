@@ -75,3 +75,29 @@ test("puts exact reference bytes and hash at the locked destination and invokes 
   assert.equal(duplicate.code, "DUPLICATE_SUBMISSION_BLOCKED")
   assert.equal(calls, 1)
 })
+
+test("rejects a sparse provider-reference destination before reservation", async () => {
+  const fixture = makeFixture("qwen-image")
+  const decision = await Effect.runPromise(plan({ objectivePath: fixture.objectivePath }).pipe(
+    Effect.provideService(ApplicationFiles, fixture.files),
+    Effect.provideService(MediaInspector, byteMediaInspector),
+    Effect.provideService(PlanningIdentity, fixture.identity),
+  ))
+  assert.equal(decision._tag, "Planned")
+  if (decision._tag !== "Planned") return
+  const locked = decision.run.request.references[0]!
+  const snapshot = await Effect.runPromise(fixture.files.read(locked.applicationPath))
+  const sparseDestination = "/input_references/1/image_url/url"
+  const error = await Effect.runPromise(Effect.flip(prepare({
+    ...decision.run.request,
+    references: [{ ...locked, payloadDestination: sparseDestination }],
+  }, [{
+    slot: locked.slot,
+    applicationPath: locked.applicationPath,
+    sha256: locked.sha256,
+    payloadDestination: sparseDestination,
+    mediaType: "image/png",
+    bytes: snapshot.bytes,
+  }])))
+  assert.equal(error.code, "PAYLOAD_DESTINATION_INVALID")
+})

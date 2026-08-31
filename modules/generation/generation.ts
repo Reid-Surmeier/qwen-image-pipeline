@@ -60,7 +60,11 @@ export const prepareGeneration = (
         },
       }
     }
-    if (inputReferences.some((entry) => entry === undefined)) {
+    if (
+      inputReferences.length !== references.length ||
+      Array.from({ length: inputReferences.length }, (_, index) => inputReferences[index])
+        .some((entry) => entry === undefined)
+    ) {
       throw new GenerationError("PAYLOAD_DESTINATION_INVALID", "Reference payload positions must be contiguous.")
     }
     const payload = {
