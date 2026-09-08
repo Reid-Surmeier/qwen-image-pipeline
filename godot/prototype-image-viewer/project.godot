@@ -11,7 +11,7 @@ window/stretch/mode="disabled"
 
 [rendering]
 renderer/rendering_method="gl_compatibility"
-environment/defaults/default_clear_color=Color(0.16, 0.18, 0.22, 1)
+environment/defaults/default_clear_color=Color(1, 1, 1, 1)
 
 [input_devices]
 pointing/emulate_mouse_from_touch=true

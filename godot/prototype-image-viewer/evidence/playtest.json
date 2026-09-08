@@ -3,109 +3,109 @@
   "initial": {
     "action": "",
     "content_size": [
-      906,
-      780
+      1125,
+      601
     ],
     "position": [
       16,
       16
     ],
-    "scale": 0.2,
+    "scale": 0.25,
     "scroll": 0,
-    "scroll_max": 262.599975585938,
+    "scroll_max": 110,
     "size": [
-      953.799987792969,
-      650
+      1155,
+      580
     ]
   },
   "bottom": {
     "action": "",
     "content_size": [
-      906,
-      780
+      1125,
+      601
     ],
     "position": [
       16,
       16
     ],
-    "scale": 0.2,
-    "scroll": 262,
-    "scroll_max": 262.599975585938,
+    "scale": 0.25,
+    "scroll": 110,
+    "scroll_max": 110,
     "size": [
-      953.799987792969,
-      650
+      1155,
+      580
     ]
   },
   "small": {
     "action": "",
     "content_size": [
-      906,
-      780
+      1125,
+      601
     ],
     "position": [
       16,
       16
     ],
-    "scale": 0.2,
-    "scroll": 262,
-    "scroll_max": 430.600006103516,
+    "scale": 0.25,
+    "scroll": 110,
+    "scroll_max": 278,
     "size": [
-      824.599975585938,
-      490
+      1025,
+      420
     ]
   },
   "moved": {
     "action": "",
     "content_size": [
-      906,
-      780
+      1125,
+      601
     ],
     "position": [
       116,
       81
     ],
-    "scale": 0.2,
-    "scroll": 262,
-    "scroll_max": 430.600006103516,
+    "scale": 0.25,
+    "scroll": 110,
+    "scroll_max": 278,
     "size": [
-      824.599975585938,
-      490
+      1025,
+      420
     ]
   },
   "expanded": {
     "action": "",
     "content_size": [
-      906,
-      780
+      1125,
+      601
     ],
     "position": [
       116,
       81
     ],
-    "scale": 0.2,
-    "scroll": 247,
-    "scroll_max": 247.599975585938,
+    "scale": 0.25,
+    "scroll": 103,
+    "scroll_max": 103,
     "size": [
-      1065.19995117188,
-      665
+      1084,
+      595
     ]
   },
   "narrow": {
     "action": "",
     "content_size": [
-      532.485595703125,
-      458.431274414062
+      538,
+      287.411560058594
     ],
     "position": [
       16,
       16
     ],
-    "scale": 0.117546484291515,
+    "scale": 0.119555555555556,
     "scroll": 0,
     "scroll_max": 0,
     "size": [
       568,
-      650
+      580
     ]
   },
   "errors": []

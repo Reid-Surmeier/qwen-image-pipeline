@@ -21,7 +21,7 @@ try {
  const bottom=await state();assert(bottom.scroll>0);assert.equal(bottom.scroll,Math.floor(bottom.scroll_max));await shot('02-scrolled-bottom');
  await page.mouse.wheel(0,-5000);await settle();assert.equal((await state()).scroll,0);
  // Drag the visible native scrollbar thumb to the end of its track.
- const barX=initial.position[0]+initial.size[0]-75*initial.scale-6;
+ const barX=initial.position[0]+initial.size[0]-11;
  await drag(barX,100,0,410);assert((await state()).scroll>0);
  await drag(initial.position[0]+initial.size[0]-10,initial.position[1]+initial.size[1]-10,-130,-160);
  const small=await state();assert(small.size[0]<initial.size[0]);assert(small.size[1]<initial.size[1]);assert.deepEqual(small.content_size,initial.content_size);await shot('03-resized');

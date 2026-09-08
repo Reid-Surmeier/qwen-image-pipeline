@@ -27,10 +27,14 @@ Godot interaction study, not the prototype skill's default HTML variants.
 Frame patching and drag clamping reuse the approach in
 `qwen-pipeline-experiments/benchmarks/atlas-prototype/godot/atlas_window.gd`.
 
-Source reference: Issue #77's latest matching-frame image, found at
-`/tmp/claude-image-viewer-two-artworks-fix-issue77/public/image-viewer-matching-frames.png`.
-`reference.png` is an unchanged copy, 4679 × 4563, SHA-256
-`f98d13adc98d0b17a5dc3f1436cd1faaaea5a4403fe0733fdf1d23c9bc12e7a6`.
+Source reference: the owner's replacement seven-artwork landscape screenshot,
+`/tmp/orca-paste-1788871973810-2fd26ef1-8eee-499c-a00f-ee95924f971b.png`.
+`reference.png` is an unchanged copy, 4591 × 2816, SHA-256
+`c39ac61850b59fe297ffc2a09fcd30adbdb37c78181275248344a5e5016ad501`.
+The earlier three-artwork reference remains in Git history at `b6ae260`.
+The desktop background is white. Godot draws a clean rounded outline and
+samples only the source's interior header, footer and artwork; the noisy,
+magenta outer perimeter is excluded from every sampled region.
 It is retained in ordinary Git as a source reference. No paid generations.
 Godot samples regions directly from this source. Display scaling is not an
 exact native-pixel fidelity claim.
