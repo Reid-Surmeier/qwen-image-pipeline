@@ -31,6 +31,18 @@ Godot interaction study, not the prototype skill's default HTML variants.
 Frame patching and drag clamping reuse the approach in
 `qwen-pipeline-experiments/benchmarks/atlas-prototype/godot/atlas_window.gd`.
 
+The desktop now follows the owner's layout reference: equipment, options,
+Search filters, status, trade and chat on the left; gallery at upper right;
+party below it; bottom bar and 2ND ALBUM label in their shown positions.
+These added panels are visual assets with decorative controls. Their layout
+scales together to fit the desktop while artwork cards keep their fixed size.
+At very narrow browser widths the gallery keeps its minimum card width and
+can cover surrounding panels; the supplied multi-window layout targets desktop.
+The existing gallery alone remains draggable and resizable.
+`assets/SOURCES.md` records source identities and hashes. A shader removes
+magenta only within the outer 32 source pixels (3 for the small filters crop), preserving
+pink colors in the interior. Original PNGs remain unchanged.
+
 Source reference: the owner's replacement seven-artwork landscape screenshot,
 `/tmp/orca-paste-1788871973810-2fd26ef1-8eee-499c-a00f-ee95924f971b.png`.
 `reference.png` is an unchanged copy, 4591 × 2816, SHA-256
@@ -50,6 +62,8 @@ inputs for both wheel stops, hidden scrollbars, disabled horizontal movement,
 shrinking, title dragging, expansion/clamping, unchanged sizes of all seven
 artwork cards, non-overlap and horizontal containment at desktop, 600px and
 400px browser viewports, and reaching the last work through vertical scrolling.
+The updated smoke run also asserts all eight companion panels are present and
+captures the supplied desktop layout at 1944 × 1280 and 1200 × 800.
 No browser or engine errors were captured.
 The script reuses the atlas's installed Playwright; it installs nothing.
 `evidence/` contains comparison screenshots and the machine-readable report;

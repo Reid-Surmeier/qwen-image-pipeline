@@ -6,7 +6,7 @@ const out = new URL('./evidence/', import.meta.url);
 await fs.mkdir(out, {recursive:true});
 const browser = await chromium.launch({headless:true,args:['--no-sandbox','--enable-webgl','--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader']});
 try {
- const page = await browser.newPage({viewport:{width:1200,height:800}});
+ const page = await browser.newPage({viewport:{width:1944,height:1280}});
  const errors=[];
  page.on('pageerror',e=>errors.push(String(e)));
  page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});
@@ -19,6 +19,7 @@ try {
  const initial=await state();await shot('01-initial');
  const sizes=s=>s.cards.map(c=>c.slice(2));
  const check=s=>{
+  assert.deepEqual(s.panels.map(p=>p.name),['equipment','options','filters','status','trade','chat','party','bottom']);
   assert.equal(s.cards.length,7);assert.deepEqual(s.bars_visible,[false,false]);assert.equal(s.horizontal_scroll,0);
   assert.deepEqual(sizes(s),sizes(initial));
   for(const [x,y,w,h] of s.cards){assert(x>=0 && y>=0);assert(x+w<=s.content_size[0]+1);assert(y+h<=s.content_size[1]+1);}
@@ -28,23 +29,24 @@ try {
   }
  };
  check(initial);
- await page.mouse.move(450,350);await page.mouse.wheel(0,5000);await settle();
+ await page.mouse.move(initial.position[0]+150,initial.position[1]+120);await page.mouse.wheel(0,5000);await settle();
  const bottom=await state();assert(bottom.scroll>0);assert.equal(bottom.scroll,Math.floor(bottom.scroll_max));await shot('02-scrolled-bottom');
  await page.mouse.wheel(0,-5000);await settle();assert.equal((await state()).scroll,0);
  await page.mouse.wheel(5000,0);await settle();assert.equal((await state()).horizontal_scroll,0);
  await drag(initial.position[0]+initial.size[0]-10,initial.position[1]+initial.size[1]-10,-530,-160);
  const small=await state();check(small);assert(small.size[0]<initial.size[0]);assert(small.size[1]<initial.size[1]);assert(small.content_size[1]>initial.content_size[1]);await shot('03-resized');
- await page.mouse.move(300,200);await page.mouse.wheel(0,10000);await settle();
+ await page.mouse.move(small.position[0]+150,small.position[1]+120);await page.mouse.wheel(0,10000);await settle();
  const smallBottom=await state();check(smallBottom);assert.equal(smallBottom.scroll,Math.floor(smallBottom.scroll_max));await shot('03-resized-bottom');
  await drag(small.position[0]+160,small.position[1]+22,100,65);
  const moved=await state();assert(moved.position[0]>small.position[0]);assert(moved.position[1]>small.position[1]);await shot('04-dragged');
  await drag(moved.position[0]+moved.size[0]-10,moved.position[1]+moved.size[1]-10,240,175);
  const expanded=await state();check(expanded);assert(expanded.size[1]>small.size[1]);assert(expanded.scroll<=expanded.scroll_max);await shot('05-expanded');
+ await page.setViewportSize({width:1200,height:800});await settle();check(await state());await shot('09-desktop-layout');
  await page.setViewportSize({width:600,height:800});await settle();
  const narrow=await state();check(narrow);assert(narrow.position[0]+narrow.size[0]<=600);await shot('06-narrow');
  await page.setViewportSize({width:400,height:800});await settle();
  const phone=await state();check(phone);await shot('07-single-column');
- await page.mouse.move(200,300);await page.mouse.wheel(0,20000);await settle();
+ await page.mouse.move(phone.position[0]+150,phone.position[1]+120);await page.mouse.wheel(0,20000);await settle();
  const phoneBottom=await state();check(phoneBottom);assert.equal(phoneBottom.scroll,Math.floor(phoneBottom.scroll_max));await shot('08-single-column-bottom');
  assert.deepEqual(errors,[]);
  await fs.writeFile(new URL('playtest.json',out),JSON.stringify({passed:true,initial,bottom,small,smallBottom,moved,expanded,narrow,phone,phoneBottom,errors},null,2));

@@ -14,6 +14,7 @@ const WORKS := [
 	Rect2(3475, 1276, 905, 1075),
 ]
 var frame := Control.new()
+var desktop := preload("res://desktop.gd").new()
 var scroll := ScrollContainer.new()
 var artwork := HFlowContainer.new()
 var chrome := Control.new()
@@ -26,6 +27,7 @@ var start_rect := Rect2()
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(desktop)
 	frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	border.bg_color = Color.WHITE
 	border.border_color = Color("8799a5")
@@ -41,7 +43,7 @@ func _ready() -> void:
 	scroll.add_theme_stylebox_override("panel", background)
 	frame.add_child(scroll)
 	artwork.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	artwork.add_theme_constant_override("h_separation", 16)
+	artwork.add_theme_constant_override("h_separation", 6)
 	artwork.add_theme_constant_override("v_separation", 16)
 	artwork.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	scroll.add_child(artwork)
@@ -70,8 +72,14 @@ func _ready() -> void:
 
 func _fit() -> void:
 	var available := get_viewport_rect().size
-	frame.position = Vector2(16, 16)
-	frame.size = Vector2(minf(CONTENT.size.x * ART_SCALE + 30, available.x-32), minf(580, available.y - 66))
+	desktop.arrange(available)
+	var factor := minf(available.x / 1944.0, available.y / 1280.0)
+	frame.position = Vector2(529, 20) * factor
+	frame.size = Vector2(1085, 658) * factor
+	# The gallery still fits one fixed-size card on narrow displays.
+	frame.size = frame.size.max(Vector2(362, 250))
+	frame.position = frame.position.min((available-frame.size).max(Vector2.ZERO))
+	hint.visible = false
 	_layout()
 
 func _layout() -> void:
@@ -140,5 +148,5 @@ func _publish() -> void:
 	var cards := []
 	for card in artwork.get_children():
 		cards.append([card.position.x, card.position.y, card.size.x, card.size.y])
-	var state := {"position": [frame.position.x, frame.position.y], "size": [frame.size.x, frame.size.y], "scroll": scroll.scroll_vertical, "scroll_max": scroll.get_v_scroll_bar().max_value-scroll.get_v_scroll_bar().page, "horizontal_scroll": scroll.scroll_horizontal, "bars_visible": [scroll.get_h_scroll_bar().visible, scroll.get_v_scroll_bar().visible], "cards": cards, "content_size": [artwork.size.x, artwork.size.y], "scale": pixel_scale, "action": action}
+	var state := {"position": [frame.position.x, frame.position.y], "size": [frame.size.x, frame.size.y], "scroll": scroll.scroll_vertical, "scroll_max": scroll.get_v_scroll_bar().max_value-scroll.get_v_scroll_bar().page, "horizontal_scroll": scroll.scroll_horizontal, "bars_visible": [scroll.get_h_scroll_bar().visible, scroll.get_v_scroll_bar().visible], "cards": cards, "panels": desktop.snapshot(), "content_size": [artwork.size.x, artwork.size.y], "scale": pixel_scale, "action": action}
 	JavaScriptBridge.eval("window.imageViewer="+JSON.stringify(state), true)
