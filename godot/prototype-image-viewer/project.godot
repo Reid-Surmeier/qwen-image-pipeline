@@ -1,0 +1,17 @@
+config_version=5
+
+[application]
+config/name="Image Viewer — throwaway prototype"
+run/main_scene="res://viewer.tscn"
+
+[display]
+window/size/viewport_width=1200
+window/size/viewport_height=800
+window/stretch/mode="disabled"
+
+[rendering]
+renderer/rendering_method="gl_compatibility"
+environment/defaults/default_clear_color=Color(0.16, 0.18, 0.22, 1)
+
+[input_devices]
+pointing/emulate_mouse_from_touch=true

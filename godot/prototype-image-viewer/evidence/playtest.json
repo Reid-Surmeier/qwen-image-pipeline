@@ -1,0 +1,112 @@
+{
+  "passed": true,
+  "initial": {
+    "action": "",
+    "content_size": [
+      906,
+      780
+    ],
+    "position": [
+      16,
+      16
+    ],
+    "scale": 0.2,
+    "scroll": 0,
+    "scroll_max": 262.599975585938,
+    "size": [
+      953.799987792969,
+      650
+    ]
+  },
+  "bottom": {
+    "action": "",
+    "content_size": [
+      906,
+      780
+    ],
+    "position": [
+      16,
+      16
+    ],
+    "scale": 0.2,
+    "scroll": 262,
+    "scroll_max": 262.599975585938,
+    "size": [
+      953.799987792969,
+      650
+    ]
+  },
+  "small": {
+    "action": "",
+    "content_size": [
+      906,
+      780
+    ],
+    "position": [
+      16,
+      16
+    ],
+    "scale": 0.2,
+    "scroll": 262,
+    "scroll_max": 430.600006103516,
+    "size": [
+      824.599975585938,
+      490
+    ]
+  },
+  "moved": {
+    "action": "",
+    "content_size": [
+      906,
+      780
+    ],
+    "position": [
+      116,
+      81
+    ],
+    "scale": 0.2,
+    "scroll": 262,
+    "scroll_max": 430.600006103516,
+    "size": [
+      824.599975585938,
+      490
+    ]
+  },
+  "expanded": {
+    "action": "",
+    "content_size": [
+      906,
+      780
+    ],
+    "position": [
+      116,
+      81
+    ],
+    "scale": 0.2,
+    "scroll": 247,
+    "scroll_max": 247.599975585938,
+    "size": [
+      1065.19995117188,
+      665
+    ]
+  },
+  "narrow": {
+    "action": "",
+    "content_size": [
+      532.485595703125,
+      458.431274414062
+    ],
+    "position": [
+      16,
+      16
+    ],
+    "scale": 0.117546484291515,
+    "scroll": 0,
+    "scroll_max": 0,
+    "size": [
+      568,
+      650
+    ]
+  },
+  "errors": []
+}
