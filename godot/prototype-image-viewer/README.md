@@ -15,11 +15,15 @@ Pass `web` to build `web/index.html`. The runner reuses the installed Godot
 4.7.2 binary and export templates; override `GODOT_BIN` on another machine.
 Use the existing share skill to serve the exported folder.
 
-Wheel/trackpad and the native scrollbar move the artwork. Drag the title bar
-to move the window; drag its bottom-right grip to resize. The header/footer
-stay fixed, and the artwork keeps its scale while the window changes size.
-Narrow windows gain a horizontal scrollbar. Browser viewport changes refit
-the whole window for the available display. All state lives in memory.
+Wheel/trackpad scroll vertically; both scrollbars are hidden and horizontal
+scrolling is disabled. Drag the title bar to move the window; drag its
+bottom-right grip to resize. Seven fixed-size artwork cards wrap into fewer
+columns in Godot's native HFlowContainer. The first print keeps its original
+three icon groups. Card sizes remain fixed at one quarter of source pixels
+through window resizing and browser viewport changes. The window's minimum
+resize width fits the widest card, about 362 display pixels including padding.
+The header/footer stay attached; their chrome fits narrow displays.
+All state lives in memory.
 `window.imageViewer` exposes the interaction state for inspection.
 
 The other screenshot controls remain decorative. This is one requested
@@ -42,9 +46,11 @@ exact native-pixel fidelity claim.
 Verification on 2026-09-08: headless Godot import and Web export passed with
 no engine errors after correcting the initial script/preset errors.
 `node godot/prototype-image-viewer/playtest.mjs [URL]` passed real browser
-inputs for both wheel stops, scrollbar dragging, shrinking, title dragging,
-expansion/clamping, unchanged artwork size during window resizing, and a
-600px browser viewport. No browser or engine errors were captured.
+inputs for both wheel stops, hidden scrollbars, disabled horizontal movement,
+shrinking, title dragging, expansion/clamping, unchanged sizes of all seven
+artwork cards, non-overlap and horizontal containment at desktop, 600px and
+400px browser viewports, and reaching the last work through vertical scrolling.
+No browser or engine errors were captured.
 The script reuses the atlas's installed Playwright; it installs nothing.
 `evidence/` contains comparison screenshots and the machine-readable report;
 initial, scrolled, resized and narrow views were visually inspected.
