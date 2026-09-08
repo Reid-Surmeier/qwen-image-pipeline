@@ -17,6 +17,8 @@ try {
  const shot=name=>page.screenshot({path:new URL(name+'.png',out).pathname});
  const drag=async(x,y,dx,dy)=>{await page.mouse.move(x,y);await page.mouse.down();await page.mouse.move(x+dx,y+dy,{steps:12});await page.mouse.up();await settle();};
  const initial=await state();await shot('01-initial');
+ assert(initial.cards[0][2]>=455 && initial.cards[3][2]>=506,'artwork is enlarged by 50%');
+ assert.equal(initial.size[0],1393,'gallery uses the available right-side space');
  const sizes=s=>s.cards.map(c=>c.slice(2));
  const check=s=>{
   assert.deepEqual(s.panels.map(p=>p.name),['equipment','options','filters','status','trade','chat','party','bottom']);
@@ -44,7 +46,7 @@ try {
  await page.setViewportSize({width:1200,height:800});await settle();check(await state());await shot('09-desktop-layout');
  await page.setViewportSize({width:600,height:800});await settle();
  const narrow=await state();check(narrow);assert(narrow.position[0]+narrow.size[0]<=600);await shot('06-narrow');
- await page.setViewportSize({width:400,height:800});await settle();
+ await page.setViewportSize({width:560,height:800});await settle();
  const phone=await state();check(phone);await shot('07-single-column');
  await page.mouse.move(phone.position[0]+150,phone.position[1]+120);await page.mouse.wheel(0,20000);await settle();
  const phoneBottom=await state();check(phoneBottom);assert.equal(phoneBottom.scroll,Math.floor(phoneBottom.scroll_max));await shot('08-single-column-bottom');

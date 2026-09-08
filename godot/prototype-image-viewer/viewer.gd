@@ -3,7 +3,8 @@ extends Control
 # Frame patching and drag clamping follow the existing atlas prototype.
 const SOURCE := preload("res://reference.png")
 const CONTENT := Rect2(44, 156, 4500, 2404)
-const ART_SCALE := 0.25
+const ART_SCALE := 0.375
+const MINIMUM_SIZE := Vector2(531, 250)
 const WORKS := [
 	Rect2(125, 200, 1215, 1240), # First print and its three original icon groups.
 	Rect2(1374, 200, 763, 1118),
@@ -75,9 +76,9 @@ func _fit() -> void:
 	desktop.arrange(available)
 	var factor := minf(available.x / 1944.0, available.y / 1280.0)
 	frame.position = Vector2(529, 20) * factor
-	frame.size = Vector2(1085, 658) * factor
+	frame.size = Vector2(1393, 658) * factor
 	# The gallery still fits one fixed-size card on narrow displays.
-	frame.size = frame.size.max(Vector2(362, 250))
+	frame.size = frame.size.max(MINIMUM_SIZE)
 	frame.position = frame.position.min((available-frame.size).max(Vector2.ZERO))
 	hint.visible = false
 	_layout()
@@ -135,8 +136,7 @@ func _input(event: InputEvent) -> void:
 		if action == "drag":
 			frame.position = (start_rect.position+delta).clamp(Vector2.ZERO, (available-frame.size).max(Vector2.ZERO))
 		else:
-			var minimum := Vector2(1350*ART_SCALE+24, 250)
-			frame.size = (start_rect.size+delta).clamp(minimum, available-frame.position)
+			frame.size = (start_rect.size+delta).clamp(MINIMUM_SIZE, available-frame.position)
 		_layout()
 		get_viewport().set_input_as_handled()
 

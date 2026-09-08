@@ -11,7 +11,6 @@ const PANELS := [
 	["bottom", Rect2(519, 1221, 1403, 54)],
 ]
 var panels: Array[TextureRect] = []
-var album_label := Label.new()
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -33,10 +32,6 @@ func _ready() -> void:
 		panel.material = material
 		add_child(panel)
 		panels.append(panel)
-	album_label.text = "2ND ALBUM"
-	album_label.add_theme_color_override("font_color", Color.BLACK)
-	album_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(album_label)
 
 func arrange(available: Vector2) -> void:
 	var factor := minf(available.x / 1944.0, available.y / 1280.0)
@@ -44,8 +39,6 @@ func arrange(available: Vector2) -> void:
 		var rect: Rect2 = PANELS[index][1]
 		panels[index].position = rect.position * factor
 		panels[index].size = rect.size * factor
-	album_label.position = Vector2(1628, 608) * factor
-	album_label.add_theme_font_size_override("font_size", maxi(10, roundi(42 * factor)))
 
 func snapshot() -> Array:
 	var result := []

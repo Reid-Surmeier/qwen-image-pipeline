@@ -19,9 +19,9 @@ Wheel/trackpad scroll vertically; both scrollbars are hidden and horizontal
 scrolling is disabled. Drag the title bar to move the window; drag its
 bottom-right grip to resize. Seven fixed-size artwork cards wrap into fewer
 columns in Godot's native HFlowContainer. The first print keeps its original
-three icon groups. Card sizes remain fixed at one quarter of source pixels
+three icon groups. Card sizes remain fixed at 37.5% of source pixels
 through window resizing and browser viewport changes. The window's minimum
-resize width fits the widest card, about 362 display pixels including padding.
+resize width fits the widest card, 531 display pixels including padding.
 The header/footer stay attached; their chrome fits narrow displays.
 All state lives in memory.
 `window.imageViewer` exposes the interaction state for inspection.
@@ -33,7 +33,9 @@ Frame patching and drag clamping reuse the approach in
 
 The desktop now follows the owner's layout reference: equipment, options,
 Search filters, status, trade and chat on the left; gallery at upper right;
-party below it; bottom bar and 2ND ALBUM label in their shown positions.
+party below it; bottom bar in its shown position. The owner removed the
+2ND ALBUM label and expanded the gallery to the bottom bar's right edge.
+Artwork dimensions are 50% larger than the earlier prototype.
 These added panels are visual assets with decorative controls. Their layout
 scales together to fit the desktop while artwork cards keep their fixed size.
 At very narrow browser widths the gallery keeps its minimum card width and
@@ -61,7 +63,7 @@ no engine errors after correcting the initial script/preset errors.
 inputs for both wheel stops, hidden scrollbars, disabled horizontal movement,
 shrinking, title dragging, expansion/clamping, unchanged sizes of all seven
 artwork cards, non-overlap and horizontal containment at desktop, 600px and
-400px browser viewports, and reaching the last work through vertical scrolling.
+560px browser viewports, and reaching the last work through vertical scrolling.
 The updated smoke run also asserts all eight companion panels are present and
 captures the supplied desktop layout at 1944 × 1280 and 1200 × 800.
 No browser or engine errors were captured.
