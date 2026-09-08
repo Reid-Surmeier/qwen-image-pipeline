@@ -36,11 +36,15 @@ Search filters, status, trade and chat on the left; gallery at upper right;
 party below it; bottom bar in its shown position. The owner removed the
 2ND ALBUM label and expanded the gallery to the bottom bar's right edge.
 Artwork dimensions are 50% larger than the earlier prototype.
-These added panels are visual assets with decorative controls. Their layout
+All eight companion windows can now be moved by dragging their title bars;
+the bottom strip can be dragged anywhere on its surface. Clicking a window
+brings it forward, only the topmost overlapping window receives the drag,
+and movement clamps to the viewport. Internal controls remain decorative.
+Their initial layout
 scales together to fit the desktop while artwork cards keep their fixed size.
 At very narrow browser widths the gallery keeps its minimum card width and
 can cover surrounding panels; the supplied multi-window layout targets desktop.
-The existing gallery alone remains draggable and resizable.
+The gallery also remains resizable; companion windows keep their sizes.
 `assets/SOURCES.md` records source identities and hashes. A shader removes
 magenta only within the outer 32 source pixels (3 for the small filters crop), preserving
 pink colors in the interior. Original PNGs remain unchanged.
@@ -66,6 +70,9 @@ artwork cards, non-overlap and horizontal containment at desktop, 600px and
 560px browser viewports, and reaching the last work through vertical scrolling.
 The updated smoke run also asserts all eight companion panels are present and
 captures the supplied desktop layout at 1944 × 1280 and 1200 × 800.
+Real-input checks move all eight panels, verify stable sizes and body-drag
+rejection, then put equipment over the gallery and bring the gallery back
+in front to verify that only the visible window responds at an overlap.
 No browser or engine errors were captured.
 The script reuses the atlas's installed Playwright; it installs nothing.
 `evidence/` contains comparison screenshots and the machine-readable report;

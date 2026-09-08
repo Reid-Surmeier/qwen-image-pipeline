@@ -31,6 +31,20 @@ try {
   }
  };
  check(initial);
+ const panelMoves=[];
+ for(const original of initial.panels){
+  const [x,y,w,h]=original.rect;
+  await drag(x+Math.min(100,w/2),y+12,40,-18);
+  const after=(await state()).panels.find(p=>p.name===original.name);
+  assert(after.rect[0]!==x || after.rect[1]!==y,original.name+' did not move');
+  assert(Math.abs(after.rect[2]-w)<0.01 && Math.abs(after.rect[3]-h)<0.01);
+  panelMoves.push(after);
+  await shot('move-'+original.name);
+  await drag(after.rect[0]+Math.min(100,w/2),after.rect[1]+12,x-after.rect[0],y-after.rect[1]);
+ }
+ // Titled panel bodies remain stationary when dragged.
+ await drag(120,180,30,20);
+ assert.deepEqual((await state()).panels.find(p=>p.name==='equipment').rect,initial.panels[0].rect);
  await page.mouse.move(initial.position[0]+150,initial.position[1]+120);await page.mouse.wheel(0,5000);await settle();
  const bottom=await state();assert(bottom.scroll>0);assert.equal(bottom.scroll,Math.floor(bottom.scroll_max));await shot('02-scrolled-bottom');
  await page.mouse.wheel(0,-5000);await settle();assert.equal((await state()).scroll,0);
@@ -50,7 +64,26 @@ try {
  const phone=await state();check(phone);await shot('07-single-column');
  await page.mouse.move(phone.position[0]+150,phone.position[1]+120);await page.mouse.wheel(0,20000);await settle();
  const phoneBottom=await state();check(phoneBottom);assert.equal(phoneBottom.scroll,Math.floor(phoneBottom.scroll_max));await shot('08-single-column-bottom');
+ // Overlap: a panel dragged over the gallery receives the next title drag.
+ await page.setViewportSize({width:1944,height:1280});await settle();
+ const overlapStart=await state();
+ await drag(112,32,560,5);
+ const over=(await state()).panels.find(p=>p.name==='equipment');
+ await drag(over.rect[0]+100,over.rect[1]+12,30,15);
+ const front=await state();
+ assert.equal(front.panels[0].rect[0],over.rect[0]+30);
+ assert.deepEqual(front.position,overlapStart.position);
+ await shot('10-panel-over-gallery');
+ // Clicking an uncovered gallery title brings the gallery back above the panel.
+ await page.mouse.click(front.position[0]+front.size[0]-130,front.position[1]+12);await settle();
+ const equipmentRect=front.panels[0].rect;
+ await drag(equipmentRect[0]+100,equipmentRect[1]+8,10,10);
+ const galleryFront=await state();
+ // The gallery is now on top, so only its title responds at the overlapping point.
+ assert.deepEqual(galleryFront.panels[0].rect,equipmentRect);
+ assert.notDeepEqual(galleryFront.position,front.position);
+ await shot('11-gallery-over-panel');
  assert.deepEqual(errors,[]);
- await fs.writeFile(new URL('playtest.json',out),JSON.stringify({passed:true,initial,bottom,small,smallBottom,moved,expanded,narrow,phone,phoneBottom,errors},null,2));
+ await fs.writeFile(new URL('playtest.json',out),JSON.stringify({passed:true,initial,panelMoves,bottom,small,smallBottom,moved,expanded,narrow,phone,phoneBottom,front,galleryFront,errors},null,2));
  console.log('PASS: seven fixed-size cards wrap without overlap/clipping; hidden bars; vertical scrolling only; drag, resize, desktop and single-column phone; no browser/engine errors.');
 } finally {await browser.close();}

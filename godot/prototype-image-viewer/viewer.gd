@@ -23,13 +23,16 @@ var border := StyleBoxFlat.new()
 var hint := Label.new()
 var pixel_scale := 0.2
 var action := ""
+var active_window: Control
 var start_pointer := Vector2.ZERO
 var start_rect := Rect2()
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(desktop)
-	frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	for panel in desktop.panels:
+		panel.reparent(self)
+	frame.mouse_filter = Control.MOUSE_FILTER_STOP
 	border.bg_color = Color.WHITE
 	border.border_color = Color("8799a5")
 	border.set_border_width_all(1)
@@ -118,23 +121,30 @@ func _input(event: InputEvent) -> void:
 		if not event.pressed:
 			if action.is_empty(): return
 			action = ""
+			active_window = null
 			_publish()
 		else:
-			var local: Vector2 = event.position - frame.position
-			if not frame.get_rect().has_point(event.position): return
-			if local.x > frame.size.x-26 and local.y > frame.size.y-26:
+			active_window = null
+			for window in desktop.panels + [frame]:
+				if window.get_rect().has_point(event.position) and (active_window == null or window.get_index() > active_window.get_index()):
+					active_window = window
+			if active_window == null: return
+			move_child(active_window, get_child_count()-1)
+			var local: Vector2 = event.position - active_window.position
+			var title_height: float = 8+102*pixel_scale if active_window == frame else active_window.get_meta("drag_height")
+			if active_window == frame and local.x > frame.size.x-26 and local.y > frame.size.y-26:
 				action = "resize"
-			elif local.y < 8+102*pixel_scale:
+			elif local.y < title_height:
 				action = "drag"
 			else: return
 			start_pointer = event.position
-			start_rect = frame.get_rect()
+			start_rect = active_window.get_rect()
 		get_viewport().set_input_as_handled()
 	elif event is InputEventMouseMotion and not action.is_empty():
 		var delta: Vector2 = event.position-start_pointer
-		var available := get_viewport_rect().size-Vector2(0, 42)
+		var available := get_viewport_rect().size
 		if action == "drag":
-			frame.position = (start_rect.position+delta).clamp(Vector2.ZERO, (available-frame.size).max(Vector2.ZERO))
+			active_window.position = (start_rect.position+delta).clamp(Vector2.ZERO, (available-active_window.size).max(Vector2.ZERO))
 		else:
 			frame.size = (start_rect.size+delta).clamp(MINIMUM_SIZE, available-frame.position)
 		_layout()
