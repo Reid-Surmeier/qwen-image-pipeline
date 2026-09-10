@@ -105,10 +105,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Install the FFmpeg 6 prerequisite
+      - name: Install deterministic image and video prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends ffmpeg
+          sudo apt-get install --yes --no-install-recommends ffmpeg python3-pil python3-numpy python3-opencv
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -216,10 +216,10 @@ def validate_repository(root: Path) -> list[str]:
         if verify_lines.count("    runs-on: ubuntu-24.04") != 1:
             problems.append("Verify workflow does not pin the FFmpeg 6 runner image")
         expected_ffmpeg_step = [
-            "      - name: Install the FFmpeg 6 prerequisite",
+            "      - name: Install deterministic image and video prerequisites",
             "        run: |",
             "          sudo apt-get update",
-            "          sudo apt-get install --yes --no-install-recommends ffmpeg",
+            "          sudo apt-get install --yes --no-install-recommends ffmpeg python3-pil python3-numpy python3-opencv",
         ]
         ffmpeg_step_valid = False
         for index, line in enumerate(verify_lines):

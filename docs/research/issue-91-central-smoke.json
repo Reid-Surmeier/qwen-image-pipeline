@@ -1,8 +1,8 @@
 {
-  "application": "/home/reidsurmeier/orca/workspaces/vibe-dis-composites/issue-41-30-ad-gallery/.muse-central-smoke-smbbqxhu",
+  "application": "/home/reidsurmeier/orca/workspaces/vibe-dis-composites/issue-41-30-ad-gallery/.muse-central-smoke-n28t1zos",
   "paidCalls": 0,
   "injectedRecordedResponse": true,
-  "runId": "run-6d17f448a608d7f02407dd9f",
+  "runId": "run-f504d62092d1e2eb015692e3",
   "pipeline": [
     "product",
     "prepare",
@@ -22,7 +22,7 @@
     "source": [],
     "result": [
       {
-        "path": "/home/reidsurmeier/orca/workspaces/vibe-dis-composites/issue-41-30-ad-gallery/.muse-central-smoke-smbbqxhu/artifacts/image-generation/runs/run-6d17f448a608d7f02407dd9f/materialized/image-01.png",
+        "path": "/home/reidsurmeier/orca/workspaces/vibe-dis-composites/issue-41-30-ad-gallery/.muse-central-smoke-n28t1zos/artifacts/image-generation/runs/run-f504d62092d1e2eb015692e3/materialized/image-01.png",
         "mediaType": "image/png",
         "sha256": "6e1b099caa3fbd7c2470265122259e78e6e46d8ee7d648d2ee340cd9d19284fb"
       }
@@ -35,7 +35,7 @@
     },
     "cost": "0.010000",
     "nextAction": "Inspect the saved image beside its source. Record visual review in the application.",
-    "fullRecord": "/home/reidsurmeier/orca/workspaces/vibe-dis-composites/issue-41-30-ad-gallery/.muse-central-smoke-smbbqxhu/artifacts/image-generation/runs/run-6d17f448a608d7f02407dd9f"
+    "fullRecord": "/home/reidsurmeier/orca/workspaces/vibe-dis-composites/issue-41-30-ad-gallery/.muse-central-smoke-n28t1zos/artifacts/image-generation/runs/run-f504d62092d1e2eb015692e3"
   },
-  "savedAssemblyRecipe": "/home/reidsurmeier/orca/workspaces/vibe-dis-composites/issue-41-30-ad-gallery/.muse-central-smoke-smbbqxhu/assembly-recipe.json"
+  "savedAssemblyRecipe": "/home/reidsurmeier/orca/workspaces/vibe-dis-composites/issue-41-30-ad-gallery/.muse-central-smoke-n28t1zos/assembly-recipe.json"
 }
