@@ -1,6 +1,6 @@
 # Agent operating contract
 
-This repository is `qwen-image-pipeline`: a reusable tool for planning, running, validating, and recording image and video generation procedures. Read the active Issue, this file, [`CONTEXT.md`](CONTEXT.md), applicable ADRs, and the nearest module documentation before changing files.
+This repository is `Image-generation-pipline`: a reusable tool for planning, running, validating, and recording image and video generation procedures. Read the active Issue, this file, [`CONTEXT.md`](CONTEXT.md), applicable ADRs, and the nearest module documentation before changing files.
 
 ## Repository responsibility
 
@@ -35,7 +35,7 @@ Write a failing acceptance test through the public interface before changing beh
 - OpenRouter is the only paid provider route.
 - Use the smallest useful batch, lock the explicit provider, model, and spend ceiling, and record the pre-submission decision before spending. The standing Issue/PR ceiling remains 10 cumulative output images unless an owner-approved governing Issue states a lower limit.
 - Durably reserve the Run Record immediately before the single provider attempt so interruption cannot erase the possibility that money was spent.
-- Persist request identity, provider/model, inputs and hashes, seed, counts, timestamps, cost when exposed, output paths and hashes, raw provider errors, and retry safety.
+- Persist request identity, provider/model, inputs and hashes, supported model parameters, counts, timestamps, actual or unknown cost, output paths and hashes, sanitized provider errors, and retry safety.
 - An ambiguous possibly billed request is counted as spent and is never retried blindly.
 - A required reference must exist, match its recorded hash, and reach the exact provider request; otherwise refuse before submission.
 - Generation is probabilistic. Assembly is deterministic. Existing authoritative pixels are assembled, not regenerated.

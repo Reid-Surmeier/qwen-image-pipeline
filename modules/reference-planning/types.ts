@@ -5,7 +5,7 @@ import type { ApplicationReadError, MediaInspectionError } from "./errors.js"
 export type MediaKind = "image" | "video"
 
 export type ReferenceMediaType =
-  | "image/png"
+  | "image/png" | "image/jpeg" | "image/webp"
   | "video/mp4"
   | "application/vnd.qwen.rgba+json"
 
@@ -62,7 +62,7 @@ export type ReferenceCandidate = Readonly<{
 }>
 
 export type ReferencePlanningInput = Readonly<{
-  mode: "qwen-image" | "seedance-video"
+  mode: "qwen-image" | "muse-image" | "seedance-video"
   referenceRoots: ReadonlyArray<string>
   requirements: ReadonlyArray<ReferenceRequirement>
   candidates: ReadonlyArray<ReferenceCandidate>

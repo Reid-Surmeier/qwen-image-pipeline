@@ -97,59 +97,7 @@ class AlibabaImageClient:
         self._timeout = float(timeout) if timeout else resolve_timeout_seconds()
 
     def generate(self, request_body: Mapping[str, Any]) -> dict[str, Any]:
-        request = urllib.request.Request(
-            self._endpoint,
-            data=json.dumps(dict(request_body)).encode("utf-8"),
-            method="POST",
-            headers={
-                "Authorization": f"Bearer {self._api_key}",
-                "Content-Type": "application/json",
-                "User-Agent": "qwen-ui-pipeline/0.1",
-            },
-        )
-        try:
-            with self._opener(request, timeout=self._timeout) as response:
-                payload = json.loads(response.read())
-        except urllib.error.HTTPError as error:
-            detail = ""
-            try:
-                error_payload = json.loads(error.read(8192))
-                detail = str(error_payload.get("message", "")).strip()
-            except (AttributeError, UnicodeDecodeError, json.JSONDecodeError):
-                pass
-            suffix = f": {detail}" if detail else ""
-            raise RuntimeError(
-                f"Alibaba Model Studio returned HTTP {error.code}{suffix}"
-            ) from error
-        if not isinstance(payload, dict):
-            raise RuntimeError("Alibaba Model Studio returned a non-object response")
-
-        result_urls = []
-        output = payload.get("output", {})
-        for choice in output.get("choices", []) if isinstance(output, dict) else []:
-            message = choice.get("message", {}) if isinstance(choice, dict) else {}
-            for item in message.get("content", []) if isinstance(message, dict) else []:
-                if isinstance(item, dict) and isinstance(item.get("image"), str):
-                    result_urls.append(item["image"])
-        if not result_urls:
-            raise RuntimeError("Alibaba Model Studio response did not contain an image URL")
-
-        images = []
-        for url in result_urls:
-            with self._opener(url, timeout=60) as response:
-                image_bytes = response.read()
-                media_type = response.headers.get("Content-Type", "image/png").split(";", 1)[0]
-            images.append(
-                {
-                    "b64_json": base64.b64encode(image_bytes).decode("ascii"),
-                    "media_type": media_type,
-                }
-            )
-        return {
-            "data": images,
-            "usage": payload.get("usage", {}),
-            "request_id": payload.get("request_id"),
-        }
+        raise RuntimeError("Direct Alibaba/Qwen generation is retired; use image-pipeline with Muse through OpenRouter")
 
 
 def build_alibaba_request(

@@ -1,0 +1,296 @@
+{
+  "schemaVersion": 1,
+  "issue": 91,
+  "sources": [
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "60d9827719bc3254ba83fd2edd5b50ad1f8aa2a7",
+      "sourcePath": "tools/ad_composite.py",
+      "sourceFileSha256": "8a60f623fda4ffd1edf9125088cf4f140ef82f3b1fb96e810a9806aac9f76d80",
+      "symbol": "FORBID",
+      "preservedTextSha256": "ad848d54f1ebeaff959da4782962cab84a3b8d9d7a2035043304f2801c8268ec",
+      "destination": "qwen_ui_pipeline/muse_composite.py",
+      "adaptation": "exact source slice; imports and application locations supplied by host"
+    },
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "60d9827719bc3254ba83fd2edd5b50ad1f8aa2a7",
+      "sourcePath": "tools/ad_composite.py",
+      "sourceFileSha256": "8a60f623fda4ffd1edf9125088cf4f140ef82f3b1fb96e810a9806aac9f76d80",
+      "symbol": "sniff",
+      "preservedTextSha256": "cf6a739d66835cd4ad1221077de89e1073822d8bb71626981dd5b35395b3889b",
+      "destination": "qwen_ui_pipeline/muse_composite.py",
+      "adaptation": "exact source slice; imports and application locations supplied by host"
+    },
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "60d9827719bc3254ba83fd2edd5b50ad1f8aa2a7",
+      "sourcePath": "tools/ad_composite.py",
+      "sourceFileSha256": "8a60f623fda4ffd1edf9125088cf4f140ef82f3b1fb96e810a9806aac9f76d80",
+      "symbol": "REFINE",
+      "preservedTextSha256": "c92c399514e7578e2b7716d2580bffa92d9be9ddd7459cb9186c5cd036e60979",
+      "destination": "qwen_ui_pipeline/muse_composite.py",
+      "adaptation": "exact source slice; imports and application locations supplied by host"
+    },
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "6c1ac2cad9213823183d23823fe30d50b882678d",
+      "sourcePath": "tools/prototypes/ad_typeset_transfer/render.py",
+      "sourceFileSha256": "649aaf9bd9147001e15c14f1aa48821b9d4e87420d3b47c96e4570bc7ab601a1",
+      "symbol": "sha256",
+      "preservedTextSha256": "6ed53cc6b497491174cd01a8c82a6144fc9133b4147e30bb0181b19886fb6c4e",
+      "destination": "qwen_ui_pipeline/muse_typeset.py",
+      "adaptation": "exact source slice; imports and application locations supplied by host"
+    },
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "6c1ac2cad9213823183d23823fe30d50b882678d",
+      "sourcePath": "tools/prototypes/ad_typeset_transfer/render.py",
+      "sourceFileSha256": "649aaf9bd9147001e15c14f1aa48821b9d4e87420d3b47c96e4570bc7ab601a1",
+      "symbol": "normalize",
+      "preservedTextSha256": "b31b34083ab4e745dd0820941959c961045eeb8f6b08c65b8d48db91465f6bdc",
+      "destination": "qwen_ui_pipeline/muse_typeset.py",
+      "adaptation": "exact source slice; imports and application locations supplied by host"
+    },
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "6c1ac2cad9213823183d23823fe30d50b882678d",
+      "sourcePath": "tools/prototypes/ad_typeset_transfer/render.py",
+      "sourceFileSha256": "649aaf9bd9147001e15c14f1aa48821b9d4e87420d3b47c96e4570bc7ab601a1",
+      "symbol": "font",
+      "preservedTextSha256": "7cec72c14df25a14557235cae063bb11e89c68bcb4b4cf52a658d6fa3b12a90b",
+      "destination": "qwen_ui_pipeline/muse_typeset.py",
+      "adaptation": "exact source slice; imports and application locations supplied by host"
+    },
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "6c1ac2cad9213823183d23823fe30d50b882678d",
+      "sourcePath": "tools/prototypes/ad_typeset_transfer/render.py",
+      "sourceFileSha256": "649aaf9bd9147001e15c14f1aa48821b9d4e87420d3b47c96e4570bc7ab601a1",
+      "symbol": "line_width",
+      "preservedTextSha256": "500665bc44e3a53b0e52f81733ab9c6071952dad9e1bc3d684cb53514c7d70dd",
+      "destination": "qwen_ui_pipeline/muse_typeset.py",
+      "adaptation": "exact source slice; imports and application locations supplied by host"
+    },
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "6c1ac2cad9213823183d23823fe30d50b882678d",
+      "sourcePath": "tools/prototypes/ad_typeset_transfer/render.py",
+      "sourceFileSha256": "649aaf9bd9147001e15c14f1aa48821b9d4e87420d3b47c96e4570bc7ab601a1",
+      "symbol": "wrap",
+      "preservedTextSha256": "62b9acf1c6b09d4a72549328f0288a9201b8c7d92247d7fb56821070e4a02b4d",
+      "destination": "qwen_ui_pipeline/muse_typeset.py",
+      "adaptation": "exact source slice; imports and application locations supplied by host"
+    },
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "6c1ac2cad9213823183d23823fe30d50b882678d",
+      "sourcePath": "tools/prototypes/ad_typeset_transfer/render.py",
+      "sourceFileSha256": "649aaf9bd9147001e15c14f1aa48821b9d4e87420d3b47c96e4570bc7ab601a1",
+      "symbol": "make_erase_mask",
+      "preservedTextSha256": "27f3c06e9352c9f70ff997275f6bd27427e6f63dcca22853a7391abaae9aa013",
+      "destination": "qwen_ui_pipeline/muse_typeset.py",
+      "adaptation": "exact source slice; imports and application locations supplied by host"
+    },
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "6c1ac2cad9213823183d23823fe30d50b882678d",
+      "sourcePath": "tools/prototypes/ad_typeset_transfer/render.py",
+      "sourceFileSha256": "649aaf9bd9147001e15c14f1aa48821b9d4e87420d3b47c96e4570bc7ab601a1",
+      "symbol": "make_region_mask",
+      "preservedTextSha256": "4eb7306eeccadc2a13e7a1adceabc03cf3e0da3990e94b02ad84ca46998e62b8",
+      "destination": "qwen_ui_pipeline/muse_typeset.py",
+      "adaptation": "exact source slice; imports and application locations supplied by host"
+    },
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "6c1ac2cad9213823183d23823fe30d50b882678d",
+      "sourcePath": "tools/prototypes/ad_typeset_transfer/render.py",
+      "sourceFileSha256": "649aaf9bd9147001e15c14f1aa48821b9d4e87420d3b47c96e4570bc7ab601a1",
+      "symbol": "synthesize_scan_background",
+      "preservedTextSha256": "d5cf5ef054bc8a114b22ba01fb8cfadfdb5cb8bb8a70feab6c5a98bdafbae83c",
+      "destination": "qwen_ui_pipeline/muse_typeset.py",
+      "adaptation": "exact source slice; imports and application locations supplied by host"
+    },
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "6c1ac2cad9213823183d23823fe30d50b882678d",
+      "sourcePath": "tools/prototypes/ad_typeset_transfer/render.py",
+      "sourceFileSha256": "649aaf9bd9147001e15c14f1aa48821b9d4e87420d3b47c96e4570bc7ab601a1",
+      "symbol": "draw_block",
+      "preservedTextSha256": "ec9c9c55aec38d4e4224405044e3677de3bbe387d2db321d0067c4acd1531bfd",
+      "destination": "qwen_ui_pipeline/muse_typeset.py",
+      "adaptation": "exact source slice; imports and application locations supplied by host"
+    },
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "6c1ac2cad9213823183d23823fe30d50b882678d",
+      "sourcePath": "tools/prototypes/invented-product-gallery/assemble.py",
+      "sourceFileSha256": "e4cc8fe65a41b16d3cdbd1c086beec3a563a3d7475f38d439f4453f8696be5c2",
+      "symbol": "slug",
+      "preservedTextSha256": "575f8fa4fb590dc880f8fadc071f5e566c7b81a6b037e2380d032aeb13ff89d7",
+      "destination": "qwen_ui_pipeline/muse_product_assembly.py",
+      "adaptation": "exact source slice; imports and application locations supplied by host"
+    },
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "6c1ac2cad9213823183d23823fe30d50b882678d",
+      "sourcePath": "tools/prototypes/invented-product-gallery/assemble.py",
+      "sourceFileSha256": "e4cc8fe65a41b16d3cdbd1c086beec3a563a3d7475f38d439f4453f8696be5c2",
+      "symbol": "words",
+      "preservedTextSha256": "64c9712b149e065fb74c3e0fd1b1cf37ce967aa8cc0cf84d507eb3d2d5f03aa0",
+      "destination": "qwen_ui_pipeline/muse_product_assembly.py",
+      "adaptation": "exact source slice; imports and application locations supplied by host"
+    },
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "6c1ac2cad9213823183d23823fe30d50b882678d",
+      "sourcePath": "tools/prototypes/invented-product-gallery/assemble.py",
+      "sourceFileSha256": "e4cc8fe65a41b16d3cdbd1c086beec3a563a3d7475f38d439f4453f8696be5c2",
+      "symbol": "phrase",
+      "preservedTextSha256": "17c99116ce7f575db388de84623bacd8502611fda171e9986df149b232a3b6b4",
+      "destination": "qwen_ui_pipeline/muse_product_assembly.py",
+      "adaptation": "exact source slice; imports and application locations supplied by host"
+    },
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "6c1ac2cad9213823183d23823fe30d50b882678d",
+      "sourcePath": "tools/prototypes/invented-product-gallery/assemble.py",
+      "sourceFileSha256": "e4cc8fe65a41b16d3cdbd1c086beec3a563a3d7475f38d439f4453f8696be5c2",
+      "symbol": "line_regions",
+      "preservedTextSha256": "94e779ecef06651a6f4a7947167be320f816942a6c3d2b4bd350dac2b926d429",
+      "destination": "qwen_ui_pipeline/muse_product_assembly.py",
+      "adaptation": "exact source slice; imports and application locations supplied by host"
+    },
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "6c1ac2cad9213823183d23823fe30d50b882678d",
+      "sourcePath": "tools/prototypes/invented-product-gallery/assemble.py",
+      "sourceFileSha256": "e4cc8fe65a41b16d3cdbd1c086beec3a563a3d7475f38d439f4453f8696be5c2",
+      "symbol": "padded_regions",
+      "preservedTextSha256": "cadaa85d6e8babb47379e7e5687634e4c63dfae936d4afaed4f579a7c3083046",
+      "destination": "qwen_ui_pipeline/muse_product_assembly.py",
+      "adaptation": "exact source slice; imports and application locations supplied by host"
+    },
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "6c1ac2cad9213823183d23823fe30d50b882678d",
+      "sourcePath": "tools/prototypes/invented-product-gallery/assemble.py",
+      "sourceFileSha256": "e4cc8fe65a41b16d3cdbd1c086beec3a563a3d7475f38d439f4453f8696be5c2",
+      "symbol": "load_source",
+      "preservedTextSha256": "92714b5659345cb5b64cdfa88f53ff1155dc0d052f1e013539dd696a675dea81",
+      "destination": "qwen_ui_pipeline/muse_product_assembly.py",
+      "adaptation": "exact source slice; imports and application locations supplied by host"
+    },
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "6c1ac2cad9213823183d23823fe30d50b882678d",
+      "sourcePath": "tools/prototypes/invented-product-gallery/assemble.py",
+      "sourceFileSha256": "e4cc8fe65a41b16d3cdbd1c086beec3a563a3d7475f38d439f4453f8696be5c2",
+      "symbol": "row_paper",
+      "preservedTextSha256": "1fe3386e979fa056409e5e0ebd7e34ac33c010750dce9cd220c6bf40821b026b",
+      "destination": "qwen_ui_pipeline/muse_product_assembly.py",
+      "adaptation": "exact source slice; imports and application locations supplied by host"
+    },
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "6c1ac2cad9213823183d23823fe30d50b882678d",
+      "sourcePath": "tools/prototypes/invented-product-gallery/assemble.py",
+      "sourceFileSha256": "e4cc8fe65a41b16d3cdbd1c086beec3a563a3d7475f38d439f4453f8696be5c2",
+      "symbol": "clean_template",
+      "preservedTextSha256": "fb3228b6c41e498906b0bcac39cade32907e8c00dcc34c4f27c5c0bc12064165",
+      "destination": "qwen_ui_pipeline/muse_product_assembly.py",
+      "adaptation": "exact source slice; imports and application locations supplied by host"
+    },
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "6c1ac2cad9213823183d23823fe30d50b882678d",
+      "sourcePath": "tools/prototypes/invented-product-gallery/assemble.py",
+      "sourceFileSha256": "e4cc8fe65a41b16d3cdbd1c086beec3a563a3d7475f38d439f4453f8696be5c2",
+      "symbol": "alpha_crop",
+      "preservedTextSha256": "342b48a49cf035ad251d24e62901b18e4f65be5e818dacbeae9bb4b8a1c2e0f2",
+      "destination": "qwen_ui_pipeline/muse_product_assembly.py",
+      "adaptation": "exact source slice; imports and application locations supplied by host"
+    },
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "6c1ac2cad9213823183d23823fe30d50b882678d",
+      "sourcePath": "tools/prototypes/invented-product-gallery/assemble.py",
+      "sourceFileSha256": "e4cc8fe65a41b16d3cdbd1c086beec3a563a3d7475f38d439f4453f8696be5c2",
+      "symbol": "place_donor",
+      "preservedTextSha256": "0d09ffe8fa6b990f3d099ab743aaefad420a57e411783e04dd912aba5b2a7e42",
+      "destination": "qwen_ui_pipeline/muse_product_assembly.py",
+      "adaptation": "exact source slice; imports and application locations supplied by host"
+    },
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "6c1ac2cad9213823183d23823fe30d50b882678d",
+      "sourcePath": "tools/prototypes/invented-product-gallery/assemble.py",
+      "sourceFileSha256": "e4cc8fe65a41b16d3cdbd1c086beec3a563a3d7475f38d439f4453f8696be5c2",
+      "symbol": "dynamic_blocks",
+      "preservedTextSha256": "c5d5efcb5242d02460e18f40a35a001c56bfdbf8d943b04e29e34b7bcffa6f1e",
+      "destination": "qwen_ui_pipeline/muse_product_assembly.py",
+      "adaptation": "exact source slice; imports and application locations supplied by host"
+    },
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "6c1ac2cad9213823183d23823fe30d50b882678d",
+      "sourcePath": "tools/prototypes/invented-product-gallery/assemble.py",
+      "sourceFileSha256": "e4cc8fe65a41b16d3cdbd1c086beec3a563a3d7475f38d439f4453f8696be5c2",
+      "symbol": "new_leaders",
+      "preservedTextSha256": "cdd24c34e923931e23f53ad0e4301ccae0dcadd2cd4fa5ab237d112457911c88",
+      "destination": "qwen_ui_pipeline/muse_product_assembly.py",
+      "adaptation": "exact source slice; imports and application locations supplied by host"
+    },
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "6c1ac2cad9213823183d23823fe30d50b882678d",
+      "sourcePath": "tools/prototypes/invented-product-gallery/assemble.py",
+      "sourceFileSha256": "e4cc8fe65a41b16d3cdbd1c086beec3a563a3d7475f38d439f4453f8696be5c2",
+      "symbol": "page_ocr",
+      "preservedTextSha256": "f825e6986c80d79ed283288b05b7f51e54005c3e6e141dd98399330187e91a7f",
+      "destination": "qwen_ui_pipeline/muse_product_assembly.py",
+      "adaptation": "exact source slice; imports and application locations supplied by host"
+    },
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "6c1ac2cad9213823183d23823fe30d50b882678d",
+      "sourcePath": "tools/prototypes/invented-product-gallery/assemble.py",
+      "sourceFileSha256": "e4cc8fe65a41b16d3cdbd1c086beec3a563a3d7475f38d439f4453f8696be5c2",
+      "symbol": "assemble_one",
+      "preservedTextSha256": "b7f1f06c02ebd2f5e542da4a078313137fba300292f1458bb5be5545942074a6",
+      "destination": "qwen_ui_pipeline/muse_product_assembly.py",
+      "adaptation": "exact source slice; imports and application locations supplied by host"
+    },
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "6c1ac2cad9213823183d23823fe30d50b882678d",
+      "sourcePath": "tools/prototypes/invented-product-packet/index.html",
+      "sourceFileSha256": "a6d34adf1b4763a52df740324b0425e021d6964dc8a8693826334513a9ed95c3",
+      "symbol": "InventedProductEngine",
+      "preservedTextSha256": "e150e50163297c4528a9768d2ea40a5ad5dbcd31ba157b3fe6db4bda55a2e596",
+      "destination": "procedures/muse/product-engine.mjs",
+      "adaptation": "exact portable marker slice; ESM default export appended"
+    },
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "6c1ac2cad9213823183d23823fe30d50b882678d",
+      "sourcePath": "tools/prototypes/invented-product-gallery/prepare.mjs",
+      "sourceFileSha256": "33c2c76bf344121230a60113a844113a147eb16155fda749df91c6967f8f8fb2",
+      "symbol": "strategyDirections",
+      "preservedTextSha256": "20088279f1830618559c60d6dc03a30ac5ed273e5c402cf1377adc9777e51249",
+      "destination": "procedures/muse/product-prompt.mjs",
+      "adaptation": "exact prompt and strategy text; application selects packet and strategy"
+    },
+    {
+      "sourceRepo": "Reid-Surmeier/vibe-dis-composites",
+      "sourceCommit": "6c1ac2cad9213823183d23823fe30d50b882678d",
+      "sourcePath": "tools/prototypes/invented-product-gallery/prepare.mjs",
+      "sourceFileSha256": "33c2c76bf344121230a60113a844113a147eb16155fda749df91c6967f8f8fb2",
+      "symbol": "donor prompt",
+      "preservedTextSha256": "7ad83e84944bc1b040f47cf9f34b914b31e51b26ee757105eb9b64f748c4857f",
+      "destination": "procedures/muse/product-prompt.mjs",
+      "adaptation": "exact prompt and strategy text; application selects packet and strategy"
+    }
+  ]
+}

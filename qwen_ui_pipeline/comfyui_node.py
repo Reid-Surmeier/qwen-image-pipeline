@@ -400,14 +400,8 @@ class ReferenceRegionComposite:
 
 
 NODE_CLASS_MAPPINGS = {
-    "QwenImage3TextToImage": QwenImage3TextToImage,
-    "QwenImage3Edit": QwenImage3Edit,
-    "QwenImage3Render": QwenImage3Render,
     "ReferenceRegionComposite": ReferenceRegionComposite,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "QwenImage3TextToImage": "Qwen Image 3 Text to Image (Local)",
-    "QwenImage3Edit": "Qwen Image 3 Edit (Local)",
-    "QwenImage3Render": "Qwen Image 3 Render",
     "ReferenceRegionComposite": "Reference Region Composite",
 }

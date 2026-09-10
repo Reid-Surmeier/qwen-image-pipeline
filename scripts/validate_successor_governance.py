@@ -7,7 +7,7 @@ from pathlib import Path
 
 REQUIRED_TEXT = {
     "AGENTS.md": (
-        "qwen-image-pipeline",
+        "Image-generation-pipline",
         "build/<version>",
         "needs-human-review",
         "Application repositories own",
@@ -16,7 +16,7 @@ REQUIRED_TEXT = {
         "21881100",
     ),
     "README.md": (
-        "qwen-image-pipeline",
+        "Image-generation-pipline",
         "reusable tool",
         "application repositories",
         "build/v0.3.0",

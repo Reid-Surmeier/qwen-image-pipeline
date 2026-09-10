@@ -29,7 +29,7 @@ Text that must appear verbatim in the approved interface.
 _Avoid_: Suggested wording, sample text
 
 **Render Pass**:
-One image-model invocation with a fixed Edit Brief, inputs, and seed.
+One image-model invocation with a fixed Edit Brief, inputs, and supported model parameters. Muse has no deterministic seed.
 _Avoid_: Attempt, random generation
 
 **Asset Pass**:
@@ -142,7 +142,7 @@ _Avoid_: Retry token, persisted credential
 - One **Planned Run** may create one **Attempt Reservation** in one **Run Record**.
 - One application **Project Contract** owns one artifact root. The production reader and writer accept only that application root; the tool repository owns no application references, outputs, Assembly evidence, Run Records, approvals, retention, or cleanup.
 - A **Tool Lock** is exact per application. Updating one application's checked release does not update another, and replay interprets old Run Records through their own recorded Procedure, Run schema, and adapter protocol versions.
-- A **Tool Lock** must exactly match one verified **Installed Tool Artifact** before planning. Before every advancement, the artifact bytes are reverified and the current **Project Contract**, selected **Procedure**, Tool Lock, and immutable Planned Run must still agree on application ownership, model, mode, provider, versions, count, cost, budget, paths, and reference requirements; the current Run Request schema is `1/2/1`, while historical `1/1/1` records retain their original shape.
+- A **Tool Lock** must exactly match one verified **Installed Tool Artifact** before planning. Before every advancement, the artifact bytes are reverified and the current **Project Contract**, selected **Procedure**, Tool Lock, and immutable Planned Run must still agree on application ownership, model, mode, provider, versions, count, cost, budget, paths, and reference requirements; Muse uses `1/3/1` while the retained Seedance procedure uses its existing profile; historical `1/2/1` and `1/1/1` records keep their recorded shapes.
 - One durable submission-may-have-started event may issue one in-process **Submission Permit**; replay issues none.
 - One Seedance **Submission Permit** may create one persisted provider job identity; every later advance polls only that identity and cannot submit another job.
 - A definitively failed pre-submit **Run Record** remains immutable and may be named by a distinct **Linked Run** whose relationship is fixed in its Run Request before reservation.
@@ -152,8 +152,8 @@ _Avoid_: Retry token, persisted credential
 
 ## Example dialogue
 
-> **Designer:** “Keep the Reference Screen's spacing and visual hierarchy, but replace the flower with a golf club.”
-> **Developer:** “I’ll encode those as Preservation Invariants, run a focused Asset Pass for the club, assemble the approved asset and Exact Copy, then validate the Interactive Replica.”
+> **Designer:** “Keep the Reference Screen's spacing and visual hierarchy, but replace the selected object with a new illustration.”
+> **Developer:** “I’ll encode those as Preservation Invariants, run a focused Asset Pass for the illustration, assemble the approved asset and Exact Copy, then validate the Interactive Replica.”
 
 ## Flagged ambiguities
 

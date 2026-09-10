@@ -76,7 +76,7 @@ export type AdvanceDecision =
       finding: OutcomeFinding
       runId: string
       decision: Readonly<{
-        kind: "donor-choice"
+        kind: "donor-choice" | "image-review"
         candidateSha256s: ReadonlyArray<string>
       }>
       normalView: NormalView

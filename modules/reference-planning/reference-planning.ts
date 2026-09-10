@@ -446,7 +446,7 @@ const isValidInspection = (value: unknown): value is MediaInspection => {
   return (
     (kind === "image" || kind === "video") &&
     ((kind === "image" &&
-        (mediaType === "image/png" || mediaType === "application/vnd.qwen.rgba+json")) ||
+        (["image/png", "image/jpeg", "image/webp"].includes(String(mediaType)) || mediaType === "application/vnd.qwen.rgba+json")) ||
       (kind === "video" && mediaType === "video/mp4")) &&
     typeof width === "number" && Number.isSafeInteger(width) && width > 0 &&
     typeof height === "number" && Number.isSafeInteger(height) && height > 0 &&
@@ -463,7 +463,7 @@ const isProviderPayloadDestination = (
 ): boolean => {
   const match = /^\/input_references\/(0|[1-9]\d*)\/(image_url|video_url)\/url$/.exec(destination)
   if (match === null) return false
-  if (mode === "qwen-image") return kind === "image" && match[2] === "image_url"
+  if (mode !== "seedance-video") return kind === "image" && match[2] === "image_url"
   return kind === "video" && match[2] === "video_url"
 }
 

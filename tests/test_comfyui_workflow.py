@@ -93,7 +93,7 @@ class ComfyUiWorkflowTests(unittest.TestCase):
             )
 
     def test_saved_canvas_exposes_three_named_load_preview_lanes(self):
-        path = Path("workflows/partner-three-reference.workflow.json")
+        path = Path("tests/fixtures/historical/workflows/partner-three-reference.workflow.json")
         canvas = json.loads(path.read_text(encoding="utf-8"))
         nodes = {node["id"]: node for node in canvas["nodes"]}
 
@@ -111,8 +111,8 @@ class ComfyUiWorkflowTests(unittest.TestCase):
 
     def test_saved_canvases_survive_a_json_reopen_round_trip(self):
         for path in (
-            Path("workflows/partner-text-to-image.workflow.json"),
-            Path("workflows/partner-three-reference.workflow.json"),
+            Path("tests/fixtures/historical/workflows/partner-text-to-image.workflow.json"),
+            Path("tests/fixtures/historical/workflows/partner-three-reference.workflow.json"),
         ):
             with self.subTest(path=path):
                 original = json.loads(path.read_text(encoding="utf-8"))

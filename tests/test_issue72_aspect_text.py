@@ -1,4 +1,5 @@
 import importlib.util
+import sys
 import json
 import shutil
 import struct
@@ -8,11 +9,15 @@ from pathlib import Path
 from unittest import mock
 
 
-SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "issue72_aspect_text.py"
+SCRIPT = Path(__file__).resolve().parent / "fixtures" / "historical" / "scripts" / "issue72_aspect_text.py"
 SPEC = importlib.util.spec_from_file_location("issue72_aspect_text", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None
-SPEC.loader.exec_module(MODULE)
+dependency_spec = importlib.util.spec_from_file_location("scripts.issue53_seed_variance", SCRIPT.with_name("issue53_seed_variance.py"))
+dependency = importlib.util.module_from_spec(dependency_spec)
+dependency_spec.loader.exec_module(dependency)
+with mock.patch.dict(sys.modules, {"scripts.issue53_seed_variance": dependency}):
+    SPEC.loader.exec_module(MODULE)
 
 
 class Issue72AspectTextTest(unittest.TestCase):

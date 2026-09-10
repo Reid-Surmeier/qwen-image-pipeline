@@ -72,9 +72,11 @@ export type CanonicalRunRequest = Readonly<{
   objectiveId: string
   objective: string
   procedureId: string
-  mode: "qwen-image" | "seedance-video"
+  mode: "qwen-image" | "muse-image" | "seedance-video"
   provider: "openrouter"
   model: string
+  museParameters?: Readonly<{ size: string }>
+  sourceInputs?: ReadonlyArray<Readonly<{ applicationPath: string; sha256: string }>>
   imageParameters?: QwenImageParameters
   adapterProtocolVersion: string
   requestedCount: number
@@ -92,12 +94,12 @@ export type CanonicalRunRequest = Readonly<{
     sha256: string
     byteLength: number
     kind: "image" | "video"
-    mediaType: "image/png" | "video/mp4" | "application/vnd.qwen.rgba+json"
+    mediaType: "image/png" | "image/jpeg" | "image/webp" | "video/mp4" | "application/vnd.qwen.rgba+json"
     authorityReason: string
     payloadDestination: string
     inspectedMedia: Readonly<{
       kind: "image" | "video"
-      mediaType: "image/png" | "video/mp4" | "application/vnd.qwen.rgba+json"
+      mediaType: "image/png" | "image/jpeg" | "image/webp" | "video/mp4" | "application/vnd.qwen.rgba+json"
       width: number
       height: number
       durationSeconds?: number

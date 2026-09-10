@@ -17,9 +17,9 @@ const allowedErrorCodes = new Set<GenerationErrorCode>([
   "PROVIDER_AMBIGUOUS",
 ])
 
-const cleanEnvironment = (): NodeJS.ProcessEnv => {
+const cleanEnvironment = (recoveryOnly = false): NodeJS.ProcessEnv => {
   const apiKey = process.env.OPENROUTER_API_KEY
-  if (apiKey === undefined || apiKey.length === 0) {
+  if (!recoveryOnly && (apiKey === undefined || apiKey.length === 0)) {
     throw new GenerationError("ADAPTER_NOT_STARTED", "The logical OpenRouter credential is unavailable.")
   }
   return {
@@ -27,6 +27,7 @@ const cleanEnvironment = (): NodeJS.ProcessEnv => {
     LC_ALL: process.env.LC_ALL ?? "C.UTF-8",
     PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
     OPENROUTER_API_KEY: apiKey,
+    PYTHONDONTWRITEBYTECODE: "1",
     ...(process.env.QWEN_OPENROUTER_TIMEOUT_SECONDS === undefined
       ? {}
       : { QWEN_OPENROUTER_TIMEOUT_SECONDS: process.env.QWEN_OPENROUTER_TIMEOUT_SECONDS }),
@@ -106,5 +107,5 @@ export const pythonQwenKernelTransport = (): Effect.Effect<QwenKernelTransport, 
       : new GenerationError("ADAPTER_NOT_STARTED", "The Python Qwen transport could not be initialized."),
   })
 
-export const inheritedQwenPythonAdapter = (): Effect.Effect<GenerationAdapterService, GenerationError> =>
-  pythonQwenKernelTransport().pipe(Effect.map(inheritedQwenAdapter))
+export const inheritedQwenPythonAdapter = (allowUnpaidRecovery = false): Effect.Effect<GenerationAdapterService, GenerationError> =>
+  Effect.try({ try: () => inheritedQwenAdapter(makePythonQwenKernelTransport(cleanEnvironment(allowUnpaidRecovery))), catch: () => new GenerationError("ADAPTER_NOT_STARTED", "The logical OpenRouter credential is unavailable.") })

@@ -20,24 +20,6 @@
   ],
   "entries": [
     {
-      "surface": "comfyui.QwenImage3Edit",
-      "disposition": "retained implementation",
-      "replacement": "Conductor.plan and Conductor.advance",
-      "retirementCondition": "Issue #29 migrates the node and proves saved-workflow compatibility."
-    },
-    {
-      "surface": "comfyui.QwenImage3Render",
-      "disposition": "retained implementation",
-      "replacement": "Conductor.plan and Conductor.advance",
-      "retirementCondition": "Issue #29 migrates the node and proves saved-workflow compatibility."
-    },
-    {
-      "surface": "comfyui.QwenImage3TextToImage",
-      "disposition": "retained implementation",
-      "replacement": "Conductor.plan and Conductor.advance",
-      "retirementCondition": "Issue #29 migrates the node and proves saved-workflow compatibility."
-    },
-    {
       "surface": "comfyui.ReferenceRegionComposite",
       "disposition": "retained implementation",
       "replacement": "Assembly.assemble",
@@ -155,9 +137,9 @@
     },
     {
       "material": "historical-application-generations",
-      "path": "artifacts/runs and artifacts/references",
+      "path": "migration/muse-retirement.json and tests/fixtures/historical",
       "disposition": "application-owned",
-      "evidence": "Issue #30 must name and hash a destination before any tracked application artifact can be removed."
+      "evidence": "Issue #93 records per-file SHA-256 and exact history commit before retiring active demos; required fixture bytes are preserved."
     },
     {
       "material": "pre-conductor-python-direct-generate-body",
@@ -176,11 +158,6 @@
       "path": "qwen_ui_pipeline/comfyui_node.py:_partner_render->generate_with_provider",
       "replacement": "Conductor.advance",
       "retirementCondition": "Issue #29 migrates both Partner-compatible nodes."
-    },
-    {
-      "path": "qwen_ui_pipeline/providers/alibaba.py:AlibabaImageClient.generate->self._opener",
-      "replacement": "Generation.invoke through OpenRouter",
-      "retirementCondition": "Issue #29 migrates remaining ComfyUI callers; Issue #30 may then remove direct Alibaba reachability after captured compatibility evidence is preserved."
     },
     {
       "path": "qwen_ui_pipeline/providers/openrouter.py:OpenRouterImageClient.generate->self._opener",
@@ -211,6 +188,11 @@
       "path": "qwen_ui_pipeline/verifier.py:run_verification->client.review",
       "replacement": "Review semantic gate through Conductor-authorized evidence",
       "retirementCondition": "Issue #30 makes the reviewed Run path the only caller of semantic review."
+    },
+    {
+      "path": "qwen_ui_pipeline/muse_adapter.py:invoke_muse_kernel->client.generate",
+      "replacement": "Generation through Conductor.advance",
+      "retirementCondition": "Issue #90 retains this private provider kernel behind the central one-use reservation; normal callers use bin/image-pipeline."
     }
   ]
 }

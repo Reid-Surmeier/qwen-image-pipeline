@@ -8,13 +8,16 @@ import sys
 from typing import Any
 
 from .providers.openrouter import OpenRouterImageClient, resolve_timeout_seconds
+from .muse_adapter import invoke_muse_kernel, recover_muse_kernel
 from .qwen_adapter import QwenKernelError, invoke_qwen_kernel
 
 
 def execute(document: Any, *, client: Any) -> dict[str, Any]:
     """Execute one decoded adapter document with an injected client."""
 
-    return invoke_qwen_kernel(document, client=client)
+    if isinstance(document, dict) and document.get("operation") == "recover":
+        return recover_muse_kernel(document)
+    return (invoke_muse_kernel if isinstance(document, dict) and document.get("model") == "meta/muse-image" else invoke_qwen_kernel)(document, client=client)
 
 
 def _safe_error(error: QwenKernelError) -> dict[str, Any]:
@@ -29,11 +32,12 @@ def main() -> int:
         return 2
 
     api_key = os.environ.get("OPENROUTER_API_KEY", "")
-    if not api_key:
+    recovery = isinstance(document, dict) and document.get("operation") == "recover"
+    if not api_key and not recovery:
         print(json.dumps(_safe_error(QwenKernelError("ADAPTER_NOT_STARTED", "The logical OpenRouter credential is unavailable."))))
         return 2
     try:
-        client = OpenRouterImageClient(api_key, timeout=resolve_timeout_seconds())
+        client = None if recovery else OpenRouterImageClient(api_key, timeout=600 if isinstance(document, dict) and document.get("model") == "meta/muse-image" else resolve_timeout_seconds())
     except Exception:
         print(json.dumps(_safe_error(QwenKernelError("ADAPTER_NOT_STARTED", "The OpenRouter client could not be initialized."))))
         return 2

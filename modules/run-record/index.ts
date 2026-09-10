@@ -65,3 +65,5 @@ export type {
   SeedancePollOperation,
   VideoVerificationReportInput,
 } from "./types.js"
+
+export { materializeMuseImage } from "./run-record.js"

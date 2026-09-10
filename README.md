@@ -1,23 +1,13 @@
-# qwen-image-pipeline
+# Image-generation-pipline
 
-`qwen-image-pipeline` is a reusable tool for dependable image and video generation procedures. An autonomous agent working in an application repository should be able to plan the required evidence, invoke the right generation or deterministic Assembly operation, validate the result, and receive either a trustworthy classified result or a clear failure.
+A reusable tool for the saved Muse image workflows and Seedance icon animation. It is the renamed original `qwen-image-pipeline` repository: GitHub issues, pull requests and commit history remain intact.
 
-Application repositories own their references, assets, generations, Assembly outputs, run records, and builds. This repository owns the procedure contracts, provider adapters, validation, provenance rules, and agent guidance. One tool repository serves many application repositories without collecting their project artifacts.
+Muse is the default for ordinary image creation and editing. DIS photo composites and invented-product ads retain their own saved procedures and gates. Seedance keeps its existing animation workflow. References, assets, generated files and run records belong in application repositories.
 
-## Current build
+Read [the Muse procedures](procedures/muse/README.md) for callable commands and application recipes, or [the Seedance workflow](seedance/README.md) for animation. Build the inventoried tool with `npm ci` and `node scripts/package-tool.mjs`; invoke `bin/image-pipeline` from the application. Planning is unpaid. Execution requires the application's explicit provider, count and budget authorization.
 
-Development of the successor procedure happens on `build/v0.3.0` and is reviewed through one draft build pull request. The current inherited commands remain available while callers migrate; the governed planner/enforcer procedure described below is being completed ticket by ticket on that release line.
+The port preserves the original creative functions and uses the existing reservation, ambiguity, provenance and exact-preservation gates. Ordinary generated images remain pending visual review. [Source inventory](procedures/muse/source-manifest.json), [source recovery](docs/research/issue-91-port-dependencies.md), and [the unpaid Assembly replay](docs/research/issue-91-assembly-replay.json) make that claim inspectable.
 
-## Target normal path
+The current version is developed on `build/v0.3.0` in the [existing draft build PR](https://github.com/Reid-Surmeier/Image-generation-pipline/pull/33). It has not been released. Run `scripts/verify.sh` for the deterministic repository baseline.
 
-1. An application supplies a machine-readable Project Contract and Run Request.
-2. The planner identifies required evidence, references, hashes, and whether the task needs Generation, Assembly, or both.
-3. The enforcer refuses unsafe or incomplete work before paid submission.
-4. The runner reserves an attempt, calls the explicit provider adapter, and records events and raw responses.
-5. Validators and deterministic Assembly produce a classified final result with provenance and a safe next action.
-
-Subjective final visual approval remains human. Missing references, mismatched hashes, provider rejection, failed checks, ambiguous billing, and exhausted correction budgets become explicit outcomes rather than hidden agent judgment.
-
-The machine returns exactly four terminal outcomes: Verified Candidate, Human Decision Required, Blocked, or Failed. A finding always names Reference Planning, Generation, Assembly, Verification, or the application decision owner as the correction owner. Possibly-spent or unknown work can only reconcile its existing provider identity and can never submit again. A distinct linked correction Run is available only after a definitive unspent pre-submit refusal, only for a material change, only as that parent's single reserved successor, and only inside the application-owned correction ceiling. Machine verification never records owner Approval.
-
-See [`CONTEXT.md`](CONTEXT.md), the generated [`MODULES.md`](MODULES.md), and [`docs/adr/`](docs/adr/) for current vocabulary and accepted decisions. The map names only modules with frozen interfaces now; later #17 tickets add the remaining Conductor-led modules as they are implemented.
+Qwen submission and direct Alibaba image execution are retired. [The disposition inventory](migration/muse-retirement.json) records recovery commits and retained historical fixtures for removed application demos. Compatibility names inside old Run Records remain readable; they are not image defaults.

@@ -1,9 +1,9 @@
 {
-  "name": "qwen-image-pipeline",
+  "name": "image-generation-pipline",
   "version": "0.3.0",
   "private": true,
   "type": "module",
-  "description": "Effect control plane for the reusable Qwen Image and Seedance procedure.",
+  "description": "Saved Muse image procedures and retained Seedance icon animation.",
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "lint:seams": "depcruise --config .dependency-cruiser.cjs modules",

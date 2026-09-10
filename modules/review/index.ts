@@ -77,7 +77,7 @@ const expectedCandidate = (
   assemblyOutputSha256: string | undefined,
   candidate: ReviewEvidenceIdentity,
 ): ReviewEvidenceIdentity | undefined => {
-  if (request.mode === "qwen-image" && assemblyOutputSha256 !== undefined) {
+  if ((request.mode === "qwen-image" || request.mode === "muse-image") && assemblyOutputSha256 !== undefined) {
     return evidence.find((entry) =>
       entry.applicationPath === "outputs/assembled.rgba.json" && entry.sha256 === assemblyOutputSha256)
   }

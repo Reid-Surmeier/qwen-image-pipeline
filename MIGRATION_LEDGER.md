@@ -6,9 +6,6 @@ This ledger records the inherited execution surfaces retained during the Conduct
 
 | Surface | Disposition | Replacement interface | Retirement condition |
 | --- | --- | --- | --- |
-| comfyui.QwenImage3Edit | retained implementation | Conductor.plan and Conductor.advance | Issue #29 migrates the node and proves saved-workflow compatibility. |
-| comfyui.QwenImage3Render | retained implementation | Conductor.plan and Conductor.advance | Issue #29 migrates the node and proves saved-workflow compatibility. |
-| comfyui.QwenImage3TextToImage | retained implementation | Conductor.plan and Conductor.advance | Issue #29 migrates the node and proves saved-workflow compatibility. |
 | comfyui.ReferenceRegionComposite | retained implementation | Assembly.assemble | Issue #29 proves saved-workflow compatibility before direct node access is retired. |
 | python-api.qwen_ui_pipeline.comfyui_workflow.build_comfyui_api_workflow | retained implementation | Generation.prepare | Issue #29 places the builder behind the versioned adapter before direct access is retired. |
 | python-api.qwen_ui_pipeline.comfyui_workflow.build_comfyui_assembly_workflow | retained implementation | Assembly.assemble | Issue #29 proves equivalent deterministic Assembly before direct access is retired. |
@@ -43,7 +40,7 @@ These records keep implementation, compatibility, fixture, application evidence,
 
 | Material | Path or history pointer | Disposition | Evidence and retention rule |
 | --- | --- | --- | --- |
-| historical-application-generations | artifacts/runs and artifacts/references | application-owned | Issue #30 must name and hash a destination before any tracked application artifact can be removed. |
+| historical-application-generations | migration/muse-retirement.json and tests/fixtures/historical | application-owned | Issue #93 records per-file SHA-256 and exact history commit before retiring active demos; required fixture bytes are preserved. |
 | inherited-qwen-openrouter-kernel | qwen_ui_pipeline/qwen_adapter.py, qwen_ui_pipeline/qwen_adapter_host.py, and modules/generation/python-qwen-kernel-transport.ts | retained implementation | Tests prove a repository-owned stdio route, missing-key preflight, closed protocol input, exact model/count/resolution/aspect/seed/references, success, rejection, secret-context removal, and count mismatch. |
 | legacy-python-generate-command | qwen_ui_pipeline/cli.py | compatibility adapter | tests/test_cli.py proves saved input remains readable and the command performs no provider submission. |
 | neutral-qwen-adapter-fixtures | tests/test_qwen_adapter.py and modules/generation/inherited-qwen-adapter.test.ts | neutral fixture | A SHA-256-locked sanitized historical response plus hand-authored one-pixel RGBA truth and local dummy transports prove read compatibility, success, rejection, count, protocol, and credential mutations without provider calls. |
@@ -55,7 +52,7 @@ These records keep implementation, compatibility, fixture, application evidence,
 | --- | --- | --- |
 | qwen_ui_pipeline/comfyui_node.py:QwenImage3Render.render->generate_with_provider | Conductor.advance | Issue #29 migrates the saved-workflow-compatible node. |
 | qwen_ui_pipeline/comfyui_node.py:_partner_render->generate_with_provider | Conductor.advance | Issue #29 migrates both Partner-compatible nodes. |
-| qwen_ui_pipeline/providers/alibaba.py:AlibabaImageClient.generate->self._opener | Generation.invoke through OpenRouter | Issue #29 migrates remaining ComfyUI callers; Issue #30 may then remove direct Alibaba reachability after captured compatibility evidence is preserved. |
+| qwen_ui_pipeline/muse_adapter.py:invoke_muse_kernel->client.generate | Generation through Conductor.advance | Issue #90 retains this private provider kernel behind the central one-use reservation; normal callers use bin/image-pipeline. |
 | qwen_ui_pipeline/providers/openrouter.py:OpenRouterImageClient.generate->self._opener | Generation.invoke | Issue #29 migrates remaining ComfyUI callers; Issue #30 makes Generation the sole authorized OpenRouter transport caller. |
 | qwen_ui_pipeline/providers/router.py:generate_with_provider->alibaba_client.generate | Generation.invoke through OpenRouter | Issue #29 migrates remaining ComfyUI callers; Issue #30 removes the direct Alibaba route. |
 | qwen_ui_pipeline/providers/router.py:generate_with_provider->openrouter_client.generate | Generation.invoke | Issue #29 migrates remaining ComfyUI callers; Issue #30 makes Generation the only provider adapter caller. |

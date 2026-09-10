@@ -9,3 +9,7 @@ node_modules/
 artifacts/figma/candidates/
 artifacts/figma/uploaded-node-4-146.png
 artifacts/figma/uploaded-node-4-147.png
+
+.tool-builds/
+.tool-current
+.tool-current-*.tmp

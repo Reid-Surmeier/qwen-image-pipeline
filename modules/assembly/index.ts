@@ -13,3 +13,6 @@ export const inspectAssemblyFailure = (
 export { AssemblyError } from "./errors.js"
 export type { AssemblyErrorCode, AssemblyFailureEvidence } from "./errors.js"
 export type { AssemblyInput, AssemblyResult, ExactCopyPixel, OwnedRegion, RasterEvidence } from "./types.js"
+
+export { assembleProductRecipe } from "./product-recipe.js"
+export type { ProductRecipeInput, ProductRecipeResult } from "./product-recipe.js"

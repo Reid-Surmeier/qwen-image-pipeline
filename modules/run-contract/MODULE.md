@@ -12,3 +12,7 @@ A Qwen Image Objective may declare an Assembly plan. When present, `required` is
 A Seedance Objective must declare a Video Plan. Assembly may be absent only when its exact machine-readable decision says `required: false` and `pixelOwnership: "none-authoritative"`; a vague or missing assertion is refused. The same plan freezes expected width, height, duration, and audio presence for independent output verification. Qwen objectives cannot carry a Video Plan, and Seedance objectives cannot carry a Qwen Assembly plan.
 
 Run Contract owns canonical serialization and the request SHA-256. It does not reserve an attempt or persist a Run Record.
+
+## Muse port (Issues #90–93)
+
+Issue #90 adds Muse profile 1/3/1, exact model `meta/muse-image`, `museParameters.size`, one output, optional Assembly, and hash-locked `sourceInputs`. Historical schema-1/2 requests keep their recorded shapes. Image-only Muse requests may have zero references; no advertising constraints are added.

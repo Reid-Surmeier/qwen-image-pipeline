@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto"
+
 const credentialFieldName = (key: string): boolean => {
   const compatibleKey = key.normalize("NFKC")
   if (/[^\x20-\x7e]/.test(compatibleKey)) return true
@@ -214,6 +216,7 @@ export const hasProviderCredentialMaterial = (
 
 export type SanitizedProviderDocumentKind =
   | "qwen"
+  | "muse"
   | "seedance-submission"
   | "seedance-poll"
 
@@ -282,6 +285,25 @@ const sanitizedQwenDocument = (document: Readonly<Record<string, unknown>>): boo
       (document.status === "accepted" || document.status === "succeeded")
   }
   return hasExactKeys(document, ["usage"]) && sanitizedQwenUsage(document.usage)
+}
+
+const sanitizedMuseDocument = (document: Readonly<Record<string, unknown>>): boolean => {
+  if (!hasExactKeys(document, ["id", "status", "completed_count", "cost", "source_images"]) ||
+      (document.id !== null && !safeIdentifier(document.id)) || document.status !== "completed" ||
+      document.completed_count !== 1 || !sanitizedSeedanceCost(document.cost) ||
+      !Array.isArray(document.source_images) || !denseClosedArray(document.source_images) || document.source_images.length !== 1) return false
+  const source = objectRecord(document.source_images[0])
+  const raw = typeof source?.body_base64 === "string" ? Buffer.from(source.body_base64, "base64") : Buffer.alloc(0)
+  const detected = raw.subarray(0, 8).equals(Buffer.from([137,80,78,71,13,10,26,10])) ? "image/png" :
+    raw.subarray(0, 3).equals(Buffer.from([255,216,255])) ? "image/jpeg" :
+    raw.subarray(0, 4).toString() === "RIFF" && raw.subarray(8, 12).toString() === "WEBP" ? "image/webp" : undefined
+  return source !== undefined && source.media_type === detected && hasExactKeys(source, ["media_type", "sha256", "body_base64", "normalized_sha256"]) &&
+    ["image/png", "image/jpeg", "image/webp"].includes(String(source.media_type)) &&
+    typeof source.sha256 === "string" && /^[a-f0-9]{64}$/.test(source.sha256) &&
+    typeof source.normalized_sha256 === "string" && /^[a-f0-9]{64}$/.test(source.normalized_sha256) &&
+    typeof source.body_base64 === "string" && source.body_base64.length > 0 &&
+    Buffer.from(source.body_base64, "base64").toString("base64") === source.body_base64 &&
+    createHash("sha256").update(Buffer.from(source.body_base64, "base64")).digest("hex") === source.sha256
 }
 
 const sanitizedSeedanceSubmission = (document: Readonly<Record<string, unknown>>): boolean =>
@@ -360,7 +382,7 @@ export const isSanitizedProviderDocument = (
   try {
     const document = objectRecord(value)
     if (document === undefined) return false
-    const schemaMatches = kind === "qwen"
+    const schemaMatches = kind === "muse" ? sanitizedMuseDocument(document) : kind === "qwen"
       ? sanitizedQwenDocument(document)
       : kind === "seedance-submission"
         ? sanitizedSeedanceSubmission(document)

@@ -359,7 +359,7 @@ export const prepareGeneration = (
       const destinationKind = match[2]
       if (
         (destinationKind === "video_url" && supplied.mediaType !== "video/mp4") ||
-        (destinationKind === "image_url" && supplied.mediaType !== "image/png" && supplied.mediaType !== "application/vnd.qwen.rgba+json")
+        (destinationKind === "image_url" && !["image/png", "image/jpeg", "image/webp", "application/vnd.qwen.rgba+json"].includes(supplied.mediaType))
       ) {
         throw new GenerationError(
           "PAYLOAD_DESTINATION_INVALID",
@@ -426,12 +426,18 @@ const validateGenerationResult = (
   if (result.outputs.length !== prepared.request.requestedCount) {
     return yield* Effect.fail(new GenerationError("OUTPUT_COUNT_MISMATCH", "The adapter returned the wrong output count."))
   }
+  if (prepared.request.mode === "muse-image") {
+    const receipt = parseProviderDocument(result.providerEvidence, "muse") as { source_images?: ReadonlyArray<{ normalized_sha256: string }> } | undefined
+    if (receipt?.source_images?.[0]?.normalized_sha256 !== result.outputs[0]?.sha256) {
+      return yield* Effect.fail(new GenerationError("ADAPTER_RESULT_INVALID", "Muse receipt does not bind the normalized output."))
+    }
+  }
   const outputPaths = new Set(result.outputs.map((output) => output.applicationPath))
   const outputSha256s = new Set(result.outputs.map((output) => output.sha256))
   if (
     outputPaths.size !== result.outputs.length || outputSha256s.size !== result.outputs.length ||
     sha256(result.providerEvidence.body) !== result.providerEvidence.sha256 ||
-    parseProviderDocument(result.providerEvidence, "qwen") === undefined ||
+    parseProviderDocument(result.providerEvidence, prepared.request.mode === "muse-image" ? "muse" : "qwen") === undefined ||
     result.outputs.some((output) =>
       sha256(output.body) !== output.sha256 ||
       !isNormalizedRgbaRaster(output.body) ||
@@ -494,7 +500,7 @@ export const recoverGeneration = (
   const stableProviderEvidence = snapshotProviderEvidence(providerEvidence)
   if (
     stableProviderEvidence === undefined ||
-    parseProviderDocument(stableProviderEvidence, "qwen") === undefined
+    parseProviderDocument(stableProviderEvidence, prepared.request.mode === "muse-image" ? "muse" : "qwen") === undefined
   ) {
     return yield* Effect.fail(new GenerationError(
       "ADAPTER_RESULT_INVALID",

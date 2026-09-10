@@ -1,0 +1,45 @@
+{
+  "paidCalls": 0,
+  "procedures": {
+    "edit": {
+      "exactRequest": true,
+      "orderedReferences": 2,
+      "promptSha256": "250db106620e2df973be6cfdaa41f7963b85876b75b006c77162b84c65a7cbb0",
+      "unpaidRecoveryEqual": true
+    },
+    "composite": {
+      "exactRequest": true,
+      "orderedReferences": 4,
+      "promptSha256": "2af5c0ee02f7500173a560eb2d820e4d789e779935ec195a9f7f4a402355effd",
+      "oracle": "original caller; saved initial receipt"
+    },
+    "refinement": {
+      "exactRequest": true,
+      "orderedReferences": 1,
+      "promptSha256": "f9c7f49180505837ed1782e1d03d1cdaf6a32982d6068718b1fde3ee2d0b8cc6",
+      "oracle": "original caller; no saved refinement claimed"
+    },
+    "product": {
+      "packets": 6,
+      "prompts": 10
+    }
+  },
+  "assembly": {
+    "sourceCommit": "6c1ac2cad9213823183d23823fe30d50b882678d",
+    "outputSha256": "29ac88a3439e9635a12752669213c9cf60d328ffd457e477e0cfeb70bf869073",
+    "equalPixels": true,
+    "changedPixelsOutsideDeclaredMasks": 0,
+    "ocrTokenCoverage": 0.975,
+    "sourceOutput": "/home/reidsurmeier/orca/workspaces/vibe-dis-composites/issue-41-30-ad-gallery/.muse-port-replay-utzou0fh/original/final/01-privacyblock-120-plus-kodak-hero.webp",
+    "portedOutput": "/home/reidsurmeier/orca/workspaces/vibe-dis-composites/issue-41-30-ad-gallery/.muse-port-replay-utzou0fh/ported/final/01-privacyblock-120-plus-kodak-hero.webp",
+    "preview": "/home/reidsurmeier/orca/workspaces/vibe-dis-composites/issue-41-30-ad-gallery/.muse-port-replay-utzou0fh/ported/previews/01-privacyblock-120-plus-kodak-hero.jpg",
+    "savedRecipe": "/home/reidsurmeier/orca/workspaces/vibe-dis-composites/issue-41-30-ad-gallery/.muse-port-replay-utzou0fh/assembly-recipe.json",
+    "approval": "unverified",
+    "changedDonorRefused": true
+  },
+  "runtime": {
+    "Pillow": "10.2.0",
+    "numpy": "2.5.2",
+    "opencv": "5.0.0"
+  }
+}

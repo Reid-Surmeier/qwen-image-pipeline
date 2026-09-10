@@ -8,7 +8,7 @@ export type GenerationReference = Readonly<{
   applicationPath: string
   sha256: string
   payloadDestination: string
-  mediaType: "image/png" | "video/mp4" | "application/vnd.qwen.rgba+json"
+  mediaType: "image/png" | "image/jpeg" | "image/webp" | "video/mp4" | "application/vnd.qwen.rgba+json"
   bytes: Uint8Array
 }>
 

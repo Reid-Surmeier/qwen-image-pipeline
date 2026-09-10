@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { Effect } from "effect"
 
 import { assemble } from "../assembly/index.js"
@@ -280,25 +281,25 @@ export const planObjective = (
   )
 }
 
-const humanDecision = (diagnostics: RunRecordDiagnostics, objective: string): AdvanceDecision => ({
+const humanDecision = (diagnostics: RunRecordDiagnostics, objective: string, imageOnly = false): AdvanceDecision => ({
   _tag: "HumanDecisionRequired",
   outcome: "human_decision_required",
   finding: {
-    code: "DONOR_CHOICE_REQUIRED",
-    message: "A persisted donor must be selected before deterministic Assembly can continue.",
+    code: imageOnly ? "IMAGE_REVIEW_REQUIRED" : "DONOR_CHOICE_REQUIRED",
+    message: imageOnly ? "The saved image needs visual review; exact preservation has not been established." : "A persisted donor must be selected before deterministic Assembly can continue.",
     correctionOwner: "application decision owner",
   },
   runId: diagnostics.view.runId,
   decision: {
-    kind: "donor-choice",
+    kind: imageOnly ? "image-review" : "donor-choice",
     candidateSha256s: diagnostics.view.donorCandidateSha256s ?? [],
   },
   normalView: {
     objective,
-    evidence: "Generation evidence is durable, but the raw output is only a donor and cannot be the final candidate.",
-    nextAction: "Inspect the persisted donor candidates and advance this same Run with one selected SHA-256.",
+    evidence: imageOnly ? "The image and provider receipt are saved. Visual fidelity and approval remain unverified." : "Generation evidence is durable, but the raw output is only a donor and cannot be the final candidate.",
+    nextAction: imageOnly ? "Inspect the saved image beside its source. Record visual review in the application." : "Inspect the persisted donor candidates and advance this same Run with one selected SHA-256.",
     spendRisk: "The one planned provider request may already be spent; this Run will never submit it again.",
-    humanDecision: "A human must choose one persisted donor before deterministic Assembly can continue.",
+    humanDecision: imageOnly ? "Visual acceptance remains an application decision; no approval has been recorded." : "A human must choose one persisted donor before deterministic Assembly can continue.",
   },
   diagnostics,
 })
@@ -816,10 +817,16 @@ export const advanceRun = (
     if (identityAttempt._tag === "Failure") {
       return advanceIdentityRefused(request.objective, identityAttempt.error)
     }
+    for (const input of request.sourceInputs ?? []) {
+      const checked = yield* files.read(input.applicationPath).pipe(Effect.match({ onFailure: error => ({ _tag: "Failure" as const, error }), onSuccess: value => ({ _tag: "Success" as const, value }) }))
+      if (checked._tag === "Failure" || createHash("sha256").update(checked.value.bytes).digest("hex") !== input.sha256) {
+        return advanceReferenceRefused(request.objective, new ConductorError("REFERENCE_EVIDENCE_UNAVAILABLE", "A saved Muse prompt, plan or recipe changed after planning."))
+      }
+    }
     if (request.mode === "seedance-video") {
       return yield* advanceSeedanceRun(command)
     }
-    if (request.mode !== "qwen-image" || request.assemblyPlan?.required !== true) {
+    if (request.mode !== "muse-image" && (request.mode !== "qwen-image" || request.assemblyPlan?.required !== true)) {
       return yield* Effect.fail(new ConductorError(
         "ADVANCE_REQUIRES_QWEN_ASSEMBLY",
         "This advance path requires a Qwen Image Planned Run with mandatory Assembly.",
@@ -1036,7 +1043,7 @@ export const advanceRun = (
         "RUN_RECORD_FAILURE",
         "The donor-choice diagnostics could not be replayed.",
       )))
-      return humanDecision(diagnostics, request.objective)
+      return humanDecision(diagnostics, request.objective, request.mode === "muse-image" && request.assemblyPlan === undefined)
     }
 
     if (current.phase === "verified_candidate") {
@@ -1046,12 +1053,12 @@ export const advanceRun = (
       )))
       return verifiedDecision(diagnostics, request.objective)
     }
-    if (current.phase === "awaiting_donor_choice" && command.selectedDonorSha256 === undefined) {
+    if (current.phase === "awaiting_donor_choice" && (command.selectedDonorSha256 === undefined || request.assemblyPlan === undefined)) {
       const diagnostics = yield* readDiagnostics(current.runId).pipe(Effect.mapError(asConductorError(
         "RUN_RECORD_FAILURE",
         "The donor-choice diagnostics could not be replayed.",
       )))
-      return humanDecision(diagnostics, request.objective)
+      return humanDecision(diagnostics, request.objective, request.mode === "muse-image" && request.assemblyPlan === undefined)
     }
     if (current.phase === "awaiting_donor_choice") {
       if (!current.donorCandidateSha256s?.includes(command.selectedDonorSha256!)) {
@@ -1087,6 +1094,9 @@ export const advanceRun = (
       ))
     }
 
+    if (request.assemblyPlan === undefined) {
+      return yield* Effect.fail(new ConductorError("RUN_STATE_UNSUPPORTED", "This image has no exact-preservation Assembly contract."))
+    }
     const baselineReference = request.references.find(
       (reference) => reference.slot === request.assemblyPlan!.baselineReferenceSlot,
     )!

@@ -1,0 +1,324 @@
+{
+  "schema_version": 1,
+  "test": "fresh installed image workflow selection and unpaid planning",
+  "application": "/tmp/muse-installed-routing-3xhefx62",
+  "tool_identity": {
+    "release": "v0.3.0",
+    "commit": "018bddde501bff068d7984999cef852996b96fb4",
+    "artifactSha256": "c0cc215445fdf2d009f286882655612336d0bd2f8118046f5d78bd39a861c0e9",
+    "procedureVersion": "1",
+    "runSchemaVersion": "3",
+    "adapterProtocolVersion": "1"
+  },
+  "read_sources": [
+    "/home/reidsurmeier/.codex/AGENTS.md",
+    "/home/reidsurmeier/.codex/skills/.system/imagegen/SKILL.md",
+    "/home/reidsurmeier/.codex/skills/image-generation-pipeline/SKILL.md",
+    "/home/reidsurmeier/Image-generation-pipline/procedures/muse/README.md",
+    "/home/reidsurmeier/Image-generation-pipline/seedance/README.md",
+    "/home/reidsurmeier/Image-generation-pipline/seedance/skills/to-spec/SKILL.md",
+    "/home/reidsurmeier/Image-generation-pipline/seedance/docs/run-contract.md",
+    "/home/reidsurmeier/Image-generation-pipline/seedance/templates/favicon-loop.json"
+  ],
+  "implementation_or_research_notes_read": false,
+  "results": [
+    {
+      "request": "Make a brass listening-device image for this project.",
+      "selected_procedure": "image",
+      "selected_model": "meta/muse-image",
+      "provider": "openrouter",
+      "status": "unpaid_plan_passed",
+      "command_indexes": [
+        0,
+        1,
+        5
+      ],
+      "paths": [
+        "image-work/prompt.txt",
+        "image-work/recipe.json",
+        ".qwen-pipeline/muse-fdd77faeb2ee3a671f55.json"
+      ],
+      "checks": [
+        "Exact user prompt retained without advertising additions",
+        "No references",
+        "One requested output",
+        "Planned; no attempt or provider request"
+      ]
+    },
+    {
+      "request": "Edit this UI image to soften the background while keeping the controls.",
+      "selected_procedure": "edit",
+      "selected_model": "meta/muse-image",
+      "provider": "openrouter",
+      "status": "unpaid_plan_passed_after_public_documentation_update",
+      "command_indexes": [
+        2
+      ],
+      "paths": [
+        "edit-work/ui-source.png",
+        "edit-work/prompt.txt",
+        "edit-work/generation-preflight.json",
+        "edit-work/recipe.json"
+      ],
+      "finding": "Initial schema discoverability failure preserved in original command log. New complete public README example uses attempts[].id; follow-up in fresh application passes prepare and image planning.",
+      "initial_status": "prepare_failed",
+      "recheck_application": "/tmp/muse-installed-edit-recheck-s5q6zs4j"
+    },
+    {
+      "request": "Make an invented-product advertisement using the saved procedure.",
+      "selected_procedure": "product-ad",
+      "selected_model": "meta/muse-image",
+      "provider": "openrouter",
+      "status": "unpaid_donor_plan_passed",
+      "command_indexes": [
+        3,
+        6,
+        7
+      ],
+      "paths": [
+        "product-work/packet.json",
+        "product-work/prompt.txt",
+        "product-work/recipe.json",
+        ".qwen-pipeline/muse-13d04ad52bee250505a9.json"
+      ],
+      "checks": [
+        "Seed 3; anti-solution; catalog-pair",
+        "Packet signature cd2e99ea",
+        "No source image references or DIS photographs",
+        "Donor request excludes text and advertising page layout"
+      ],
+      "unverified": "Deterministic Assembly was not run: no generated donor, reconciled attempt records, saved layout/settings/font inputs exist in this new application."
+    },
+    {
+      "request": "Animate this icon with a gentle bob.",
+      "selected_procedure": "animation -> Seedance plan",
+      "selected_model": "study alias (README: bytedance/seedance-2.0-mini; canonical runtime model unverified)",
+      "provider": "openrouter (installed policy)",
+      "status": "missing_capabilities_input",
+      "command_indexes": [
+        4
+      ],
+      "paths": [
+        "animation-work/icon.png",
+        "animation-work/brief.json"
+      ],
+      "missing_inputs": [
+        "application-owned live capabilities snapshot; fetching it was excluded by no-provider-requests constraint",
+        "visible motion reference evidence and motion_basis citation",
+        "350-word beat-by-beat compiled brief"
+      ],
+      "finding": "Installed Seedance plan entry point invoked and stopped with FileNotFoundError for animation-work/capabilities-required.json before strategy evaluation. Strategy gate not exercised; no waiver supplied."
+    }
+  ],
+  "commands": [
+    {
+      "index": 0,
+      "command": "/home/reidsurmeier/Image-generation-pipline/bin/image-pipeline identity",
+      "cwd": "/tmp/muse-installed-routing-3xhefx62",
+      "exit_code": 0,
+      "outcome": "success"
+    },
+    {
+      "index": 1,
+      "command": "/home/reidsurmeier/Image-generation-pipline/bin/image-pipeline prepare --application /tmp/muse-installed-routing-3xhefx62 --recipe image-work/recipe.json --unit-cost 0.01 --budget 0.01",
+      "cwd": "/tmp/muse-installed-routing-3xhefx62",
+      "exit_code": 0,
+      "outcome": "image"
+    },
+    {
+      "index": 2,
+      "command": "/home/reidsurmeier/Image-generation-pipline/bin/image-pipeline prepare --application /tmp/muse-installed-routing-3xhefx62 --recipe edit-work/recipe.json --unit-cost 0.01 --budget 0.01",
+      "cwd": "/tmp/muse-installed-routing-3xhefx62",
+      "exit_code": 2,
+      "outcome": "The image procedure stopped. Check the application contract, tool lock and saved run; never blindly resubmit a possibly spent run."
+    },
+    {
+      "index": 3,
+      "command": "/home/reidsurmeier/Image-generation-pipline/bin/image-pipeline product --application /tmp/muse-installed-routing-3xhefx62 --output product-work --seed 3 --mode anti-solution --strategy catalog-pair",
+      "cwd": "/tmp/muse-installed-routing-3xhefx62",
+      "exit_code": 0,
+      "outcome": "success"
+    },
+    {
+      "index": 4,
+      "command": "/home/reidsurmeier/Image-generation-pipline/bin/image-pipeline animation plan animation-work/brief.json --model study --duration 6 --size 720x720 --first-frame animation-work/icon.png --last-frame animation-work/icon.png --slug gentle-bob --runs animation-work/runs --capabilities animation-work/capabilities-required.json",
+      "cwd": "/tmp/muse-installed-routing-3xhefx62",
+      "exit_code": 1,
+      "outcome": "FileNotFoundError: [Errno 2] No such file or directory: 'animation-work/capabilities-required.json'"
+    },
+    {
+      "index": 5,
+      "command": "/home/reidsurmeier/Image-generation-pipline/bin/image-pipeline image --application /tmp/muse-installed-routing-3xhefx62 --objective .qwen-pipeline/muse-fdd77faeb2ee3a671f55.json",
+      "cwd": "/tmp/muse-installed-routing-3xhefx62",
+      "exit_code": 0,
+      "outcome": "Planned"
+    },
+    {
+      "index": 6,
+      "command": "/home/reidsurmeier/Image-generation-pipline/bin/image-pipeline prepare --application /tmp/muse-installed-routing-3xhefx62 --recipe product-work/recipe.json --unit-cost 0.01 --budget 0.01",
+      "cwd": "/tmp/muse-installed-routing-3xhefx62",
+      "exit_code": 0,
+      "outcome": "product-ad"
+    },
+    {
+      "index": 7,
+      "command": "/home/reidsurmeier/Image-generation-pipline/bin/image-pipeline image --application /tmp/muse-installed-routing-3xhefx62 --objective .qwen-pipeline/muse-13d04ad52bee250505a9.json",
+      "cwd": "/tmp/muse-installed-routing-3xhefx62",
+      "exit_code": 0,
+      "outcome": "Planned"
+    }
+  ],
+  "full_command_output": "/tmp/muse-installed-routing-3xhefx62/proof/commands.json",
+  "checks": "Python assertions passed for image prompt preservation, Muse/OpenRouter planning, empty product source references, absent execution/waiver flags, and absent animation run directory.",
+  "cost": {
+    "paid_requests": 0,
+    "provider_requests": 0,
+    "actual_usd": "0",
+    "estimate_note": "0.01 is a local planning declaration, not a fetched live price or authorization to execute."
+  },
+  "assets": [
+    {
+      "path": "/tmp/muse-installed-routing-3xhefx62/.qwen-pipeline/muse-13d04ad52bee250505a9.json",
+      "sha256": "d5e19b63892814124e915144bc8412401cc0709ada7c1024ef1f0ac18779974a"
+    },
+    {
+      "path": "/tmp/muse-installed-routing-3xhefx62/.qwen-pipeline/muse-fdd77faeb2ee3a671f55.json",
+      "sha256": "0e64bb03612789b01fc4a3ba83c24f1fbf02929bdfc630087ba038fc3d2a08d1"
+    },
+    {
+      "path": "/tmp/muse-installed-routing-3xhefx62/.qwen-pipeline/project-contract.json",
+      "sha256": "fcf58c4701ecf4b15ccb457af63ccf0a47e74ebea45aba79afa934240195eceb"
+    },
+    {
+      "path": "/tmp/muse-installed-routing-3xhefx62/.qwen-pipeline/tool-lock.json",
+      "sha256": "af2dfe5e69b9bf70b60331c460ba19bffcc8165063f87dbd4c2b6a24af825cf4"
+    },
+    {
+      "path": "/tmp/muse-installed-routing-3xhefx62/animation-work/brief.json",
+      "sha256": "392b9bbeb086fec9f83c1982d2435d402b2828d797567c39de59a30dc04b08ee"
+    },
+    {
+      "path": "/tmp/muse-installed-routing-3xhefx62/animation-work/icon.png",
+      "sha256": "9db7dfdeb706af3c69cea2b9feec2506a7b4f42e65c740eac216f43f625234d7"
+    },
+    {
+      "path": "/tmp/muse-installed-routing-3xhefx62/edit-work/generation-preflight.json",
+      "sha256": "f5e943736effb0b5467459acbda67772e54c99cc315d3e423b873a1b00342f6a"
+    },
+    {
+      "path": "/tmp/muse-installed-routing-3xhefx62/edit-work/prompt.txt",
+      "sha256": "7701aa1b99390e7e37c3d3236b439213063044bd597a4d5f44b37896f6564fcd"
+    },
+    {
+      "path": "/tmp/muse-installed-routing-3xhefx62/edit-work/recipe.json",
+      "sha256": "d8eb00316012cd3519953159b41e0f375d6d34c2879a697baf46c6f1f32ee0df"
+    },
+    {
+      "path": "/tmp/muse-installed-routing-3xhefx62/edit-work/ui-source.png",
+      "sha256": "e0003d9801a9ef96541c5c5d0991ad6d772a6d831fcd4ef46f5fc1c5f928f06a"
+    },
+    {
+      "path": "/tmp/muse-installed-routing-3xhefx62/image-work/prompt.txt",
+      "sha256": "e3d556bc5fa8650311259809c6c75b7b9049bd77f29d9e315437cb058b86b867"
+    },
+    {
+      "path": "/tmp/muse-installed-routing-3xhefx62/image-work/recipe.json",
+      "sha256": "fdd77faeb2ee3a671f557420da62efb7f8985a96b04c80eb9fd5d058af03a5d7"
+    },
+    {
+      "path": "/tmp/muse-installed-routing-3xhefx62/product-work/packet.json",
+      "sha256": "60160779ab42c9ddc4e20c39669f79438664cbb57165b3fd5829440b446bac7d"
+    },
+    {
+      "path": "/tmp/muse-installed-routing-3xhefx62/product-work/prompt.txt",
+      "sha256": "f30f2a67c9677cefa8e0c457c92e9e92aec4fefe83f190de3095a9b60db7b14e"
+    },
+    {
+      "path": "/tmp/muse-installed-routing-3xhefx62/product-work/recipe.json",
+      "sha256": "13d04ad52bee250505a93bfcd0f42883b69818faef0ff14be201f12d9dd4c023"
+    }
+  ],
+  "edit_recheck": {
+    "application": "/tmp/muse-installed-edit-recheck-s5q6zs4j",
+    "tool_identity": {
+      "release": "v0.3.0",
+      "commit": "018bddde501bff068d7984999cef852996b96fb4",
+      "artifactSha256": "d81dfffe9c0f67dc05726567ec5969384a147f7bc56d5b5c3959bee743f6fd45",
+      "procedureVersion": "1",
+      "runSchemaVersion": "3",
+      "adapterProtocolVersion": "1"
+    },
+    "documentation": "/home/reidsurmeier/Image-generation-pipline/procedures/muse/README.md",
+    "documentation_sha256": "2a17d002c6f8edd6e0997b6c2a77611b148b6e632473929e54ff12a989189a5c",
+    "commands": [
+      {
+        "command": "/home/reidsurmeier/Image-generation-pipline/bin/image-pipeline identity",
+        "cwd": "/tmp/muse-installed-edit-recheck-s5q6zs4j",
+        "exit_code": 0,
+        "stdout": "{\n  \"release\": \"v0.3.0\",\n  \"commit\": \"018bddde501bff068d7984999cef852996b96fb4\",\n  \"artifactSha256\": \"d81dfffe9c0f67dc05726567ec5969384a147f7bc56d5b5c3959bee743f6fd45\",\n  \"procedureVersion\": \"1\",\n  \"runSchemaVersion\": \"3\",\n  \"adapterProtocolVersion\": \"1\"\n}\n",
+        "stderr": ""
+      },
+      {
+        "command": "/home/reidsurmeier/Image-generation-pipline/bin/image-pipeline prepare --application /tmp/muse-installed-edit-recheck-s5q6zs4j --recipe edit-work/recipe.json --unit-cost 0.01 --budget 0.01",
+        "cwd": "/tmp/muse-installed-edit-recheck-s5q6zs4j",
+        "exit_code": 0,
+        "stdout": "{\n  \"procedure\": \"edit\",\n  \"model\": \"meta/muse-image\",\n  \"objective\": \".qwen-pipeline/muse-d8eb00316012cd351995.json\",\n  \"paidRequests\": 0,\n  \"nextAction\": \"Run image with this objective to inspect the plan; add --execute only for authorized spending.\"\n}\n",
+        "stderr": ""
+      },
+      {
+        "command": "/home/reidsurmeier/Image-generation-pipline/bin/image-pipeline image --application /tmp/muse-installed-edit-recheck-s5q6zs4j --objective .qwen-pipeline/muse-d8eb00316012cd351995.json",
+        "cwd": "/tmp/muse-installed-edit-recheck-s5q6zs4j",
+        "exit_code": 0,
+        "stdout": "{\n  \"_tag\": \"Planned\",\n  \"run\": {\n    \"state\": \"planned\",\n    \"request\": {\n      \"schemaVersion\": \"3\",\n      \"applicationId\": \"app-e9723496e2eb\",\n      \"objectiveId\": \"muse-d8eb00316012cd351995\",\n      \"objective\": \"Soften the background while keeping every UI control, label position, and layout unchanged.\\n\",\n      \"procedureId\": \"muse-d8eb00316012cd351995\",\n      \"mode\": \"muse-image\",\n      \"provider\": \"openrouter\",\n      \"model\": \"meta/muse-image\",\n      \"sourceInputs\": [\n        {\n          \"applicationPath\": \"edit-work/recipe.json\",\n          \"sha256\": \"d8eb00316012cd3519953159b41e0f375d6d34c2879a697baf46c6f1f32ee0df\"\n        },\n        {\n          \"applicationPath\": \"edit-work/generation-preflight.json\",\n          \"sha256\": \"e28a25a3b1297cd190d17d44d4b4cc109b7e650a5ccf067ec9dd88e0a2299447\"\n        },\n        {\n          \"applicationPath\": \"edit-work/prompt.txt\",\n          \"sha256\": \"7701aa1b99390e7e37c3d3236b439213063044bd597a4d5f44b37896f6564fcd\"\n        }\n      ],\n      \"museParameters\": {\n        \"size\": \"128x96\"\n      },\n      \"adapterProtocolVersion\": \"1\",\n      \"requestedCount\": 1,\n      \"estimatedMaximumCostUsd\": \"0.01\",\n      \"budgetCeilingUsd\": \"0.01\",\n      \"maximumCorrectionRuns\": 0,\n      \"artifactRoot\": \"artifacts/image-generation\",\n      \"outputRoot\": \"generated\",\n      \"references\": [\n        {\n          \"slot\": \"reference-000\",\n          \"applicationPath\": \"edit-work/ui-source.png\",\n          \"sha256\": \"e0003d9801a9ef96541c5c5d0991ad6d772a6d831fcd4ef46f5fc1c5f928f06a\",\n          \"byteLength\": 387,\n          \"kind\": \"image\",\n          \"mediaType\": \"image/png\",\n          \"authorityReason\": \"Ordered input from the hash-locked saved Muse recipe\",\n          \"payloadDestination\": \"/input_references/0/image_url/url\",\n          \"inspectedMedia\": {\n            \"kind\": \"image\",\n            \"mediaType\": \"image/png\",\n            \"width\": 128,\n            \"height\": 96\n          }\n        }\n      ],\n      \"tool\": {\n        \"release\": \"v0.3.0\",\n        \"commit\": \"018bddde501bff068d7984999cef852996b96fb4\",\n        \"artifactSha256\": \"d81dfffe9c0f67dc05726567ec5969384a147f7bc56d5b5c3959bee743f6fd45\",\n        \"procedureVersion\": \"1\",\n        \"runSchemaVersion\": \"3\",\n        \"adapterProtocolVersion\": \"1\"\n      }\n    },\n    \"canonicalRequest\": \"{\\\"adapterProtocolVersion\\\":\\\"1\\\",\\\"applicationId\\\":\\\"app-e9723496e2eb\\\",\\\"artifactRoot\\\":\\\"artifacts/image-generation\\\",\\\"budgetCeilingUsd\\\":\\\"0.01\\\",\\\"estimatedMaximumCostUsd\\\":\\\"0.01\\\",\\\"maximumCorrectionRuns\\\":0,\\\"mode\\\":\\\"muse-image\\\",\\\"model\\\":\\\"meta/muse-image\\\",\\\"museParameters\\\":{\\\"size\\\":\\\"128x96\\\"},\\\"objective\\\":\\\"Soften the background while keeping every UI control, label position, and layout unchanged.\\\\n\\\",\\\"objectiveId\\\":\\\"muse-d8eb00316012cd351995\\\",\\\"outputRoot\\\":\\\"generated\\\",\\\"procedureId\\\":\\\"muse-d8eb00316012cd351995\\\",\\\"provider\\\":\\\"openrouter\\\",\\\"references\\\":[{\\\"applicationPath\\\":\\\"edit-work/ui-source.png\\\",\\\"authorityReason\\\":\\\"Ordered input from the hash-locked saved Muse recipe\\\",\\\"byteLength\\\":387,\\\"inspectedMedia\\\":{\\\"height\\\":96,\\\"kind\\\":\\\"image\\\",\\\"mediaType\\\":\\\"image/png\\\",\\\"width\\\":128},\\\"kind\\\":\\\"image\\\",\\\"mediaType\\\":\\\"image/png\\\",\\\"payloadDestination\\\":\\\"/input_references/0/image_url/url\\\",\\\"sha256\\\":\\\"e0003d9801a9ef96541c5c5d0991ad6d772a6d831fcd4ef46f5fc1c5f928f06a\\\",\\\"slot\\\":\\\"reference-000\\\"}],\\\"requestedCount\\\":1,\\\"schemaVersion\\\":\\\"3\\\",\\\"sourceInputs\\\":[{\\\"applicationPath\\\":\\\"edit-work/recipe.json\\\",\\\"sha256\\\":\\\"d8eb00316012cd3519953159b41e0f375d6d34c2879a697baf46c6f1f32ee0df\\\"},{\\\"applicationPath\\\":\\\"edit-work/generation-preflight.json\\\",\\\"sha256\\\":\\\"e28a25a3b1297cd190d17d44d4b4cc109b7e650a5ccf067ec9dd88e0a2299447\\\"},{\\\"applicationPath\\\":\\\"edit-work/prompt.txt\\\",\\\"sha256\\\":\\\"7701aa1b99390e7e37c3d3236b439213063044bd597a4d5f44b37896f6564fcd\\\"}],\\\"tool\\\":{\\\"adapterProtocolVersion\\\":\\\"1\\\",\\\"artifactSha256\\\":\\\"d81dfffe9c0f67dc05726567ec5969384a147f7bc56d5b5c3959bee743f6fd45\\\",\\\"commit\\\":\\\"018bddde501bff068d7984999cef852996b96fb4\\\",\\\"procedureVersion\\\":\\\"1\\\",\\\"release\\\":\\\"v0.3.0\\\",\\\"runSchemaVersion\\\":\\\"3\\\"}}\",\n    \"requestSha256\": \"3a3c3f72264d35051557096d4d7b9e0f2b20da2f882ceea0b26602138819c759\"\n  },\n  \"normalView\": {\n    \"objective\": \"Soften the background while keeping every UI control, label position, and layout unchanged.\\n\",\n    \"evidence\": \"1 authoritative reference matched the recorded path, kind, hash, media properties, and provider payload destination.\",\n    \"nextAction\": \"Advance this exact immutable Planned Run to reservation only when execution is requested.\",\n    \"spendRisk\": \"Planning made no provider request, created no attempt, and spent $0. A later advance may spend up to the locked ceiling.\",\n    \"humanDecision\": \"No human decision remains before reservation; subjective final visual approval remains after execution.\"\n  }\n}\n",
+        "stderr": ""
+      }
+    ],
+    "old_application_and_lock_preserved": true,
+    "paid_requests": 0,
+    "provider_requests": 0,
+    "cost_usd": "0",
+    "status": "unpaid_plan_passed",
+    "checks": [
+      "Complete documented attempts wrapper with id selector accepted",
+      "Exact saved prompt preserved",
+      "Muse/OpenRouter selected",
+      "One ordered UI source reference retained",
+      "All file inputs hash-locked by installed planner"
+    ],
+    "objective": ".qwen-pipeline/muse-d8eb00316012cd351995.json",
+    "assets": [
+      {
+        "path": "/tmp/muse-installed-edit-recheck-s5q6zs4j/.qwen-pipeline/muse-d8eb00316012cd351995.json",
+        "sha256": "d81e3c91d2461cba8ba87a3d81a05e5313a8a31eaaf9abca8906359b70ca019c"
+      },
+      {
+        "path": "/tmp/muse-installed-edit-recheck-s5q6zs4j/.qwen-pipeline/project-contract.json",
+        "sha256": "d176df4c64938c10ba649986a5058e9fc4c043650e82673f78c8aa14b28e13a8"
+      },
+      {
+        "path": "/tmp/muse-installed-edit-recheck-s5q6zs4j/.qwen-pipeline/tool-lock.json",
+        "sha256": "9e50079eedeb8c37562f24ee022851e25d74fccdf91ce4e7e9431ef739bb9288"
+      },
+      {
+        "path": "/tmp/muse-installed-edit-recheck-s5q6zs4j/edit-work/generation-preflight.json",
+        "sha256": "e28a25a3b1297cd190d17d44d4b4cc109b7e650a5ccf067ec9dd88e0a2299447"
+      },
+      {
+        "path": "/tmp/muse-installed-edit-recheck-s5q6zs4j/edit-work/prompt.txt",
+        "sha256": "7701aa1b99390e7e37c3d3236b439213063044bd597a4d5f44b37896f6564fcd"
+      },
+      {
+        "path": "/tmp/muse-installed-edit-recheck-s5q6zs4j/edit-work/recipe.json",
+        "sha256": "d8eb00316012cd3519953159b41e0f375d6d34c2879a697baf46c6f1f32ee0df"
+      },
+      {
+        "path": "/tmp/muse-installed-edit-recheck-s5q6zs4j/edit-work/ui-source.png",
+        "sha256": "e0003d9801a9ef96541c5c5d0991ad6d772a6d831fcd4ef46f5fc1c5f928f06a"
+      },
+      {
+        "path": "/tmp/muse-installed-edit-recheck-s5q6zs4j/proof/commands.json",
+        "sha256": "f2dd6a2fa0a93978af1b904daaca38fe4d385972fe868d736e12bd22fd5e5d10"
+      }
+    ]
+  }
+}

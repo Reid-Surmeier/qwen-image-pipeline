@@ -50,6 +50,7 @@ class QwenAdapterTests(unittest.TestCase):
     def test_reads_the_hash_locked_sanitized_historical_response_fixture(self):
         fixture_path = (
             Path(__file__).resolve().parents[1]
+            / "tests/fixtures/historical"
             / "artifacts"
             / "runs"
             / "museum-filter-retro-skin-v001"

@@ -219,6 +219,8 @@ const recordedRequest = (
     "budgetCeilingUsd",
     "estimatedMaximumCostUsd",
     "imageParameters",
+    "museParameters",
+    "sourceInputs",
     "linkedRun",
     "maximumCorrectionRuns",
     "mode",
@@ -262,12 +264,12 @@ const recordedRequest = (
     typeof request.objectiveId !== "string" || !isIdentifier(request.objectiveId) ||
     typeof request.objective !== "string" || request.objective.length === 0 ||
     typeof request.procedureId !== "string" || !isIdentifier(request.procedureId) ||
-    (request.mode !== "qwen-image" && request.mode !== "seedance-video") ||
+    (request.mode !== "qwen-image" && request.mode !== "muse-image" && request.mode !== "seedance-video") ||
     request.provider !== "openrouter" || typeof request.model !== "string" || request.model.length === 0 ||
     !Number.isSafeInteger(request.requestedCount) || Number(request.requestedCount) < 1 ||
     typeof request.estimatedMaximumCostUsd !== "string" || typeof request.budgetCeilingUsd !== "string" ||
     !Number.isSafeInteger(request.maximumCorrectionRuns) || Number(request.maximumCorrectionRuns) < 0 ||
-    !safeRecordedPath(request.outputRoot) || !Array.isArray(request.references) || request.references.length === 0 ||
+    !safeRecordedPath(request.outputRoot) || !Array.isArray(request.references) || (request.mode !== "muse-image" && request.references.length === 0) ||
     typeof toolIdentity.release !== "string" || typeof toolIdentity.commit !== "string" ||
     typeof toolIdentity.artifactSha256 !== "string" || typeof toolIdentity.procedureVersion !== "string" ||
     typeof toolIdentity.runSchemaVersion !== "string" || typeof toolIdentity.adapterProtocolVersion !== "string" ||
@@ -276,10 +278,19 @@ const recordedRequest = (
     toolIdentity.procedureVersion !== "1" ||
     toolIdentity.adapterProtocolVersion !== "1" ||
     !imageParametersValid ||
+    (request.sourceInputs !== undefined && (request.mode !== "muse-image" || !Array.isArray(request.sourceInputs) ||
+      request.sourceInputs.some(value => value === null || typeof value !== "object" ||
+        Object.keys(value).sort().join(",") !== "applicationPath,sha256" || !safeRecordedPath(value.applicationPath) || !isSha256(value.sha256)))) ||
+    (request.mode === "muse-image" ? (
+      toolIdentity.runSchemaVersion !== "3" || request.model !== "meta/muse-image" || request.requestedCount !== 1 ||
+      request.museParameters === null || typeof request.museParameters !== "object" ||
+      Object.keys(request.museParameters).join(",") !== "size" ||
+      !/^[1-9][0-9]{0,4}x[1-9][0-9]{0,4}$/.test(String((request.museParameters as Record<string, unknown>).size))
+    ) : request.museParameters !== undefined) ||
     (
       toolIdentity.runSchemaVersion === "1"
         ? (!allowHistorical || "artifactRoot" in request)
-        : toolIdentity.runSchemaVersion === "2"
+        : (toolIdentity.runSchemaVersion === "2" || toolIdentity.runSchemaVersion === "3")
           ? !safeRecordedPath(request.artifactRoot)
           : true
     )
@@ -329,6 +340,8 @@ const correctionMaterial = (request: CanonicalRunRequest): JsonValue => ({
   budgetCeilingUsd: request.budgetCeilingUsd,
   estimatedMaximumCostUsd: request.estimatedMaximumCostUsd,
   imageParameters: request.imageParameters ?? null,
+  ...(request.sourceInputs === undefined ? {} : { sourceInputs: request.sourceInputs }),
+  ...(request.museParameters === undefined ? {} : { museParameters: request.museParameters }),
   mode: request.mode,
   model: request.model,
   objective: request.objective,
@@ -441,7 +454,7 @@ type AssemblyBindings = Readonly<{
 type Raster = Readonly<{ width: number; height: number; pixels: ReadonlyArray<number> }>
 
 const requestAssemblyPlan = (request: CanonicalRunRequest): NonNullable<CanonicalRunRequest["assemblyPlan"]> => {
-  if (request.mode !== "qwen-image" || request.assemblyPlan?.required !== true) {
+  if (request.mode === "seedance-video" || request.assemblyPlan?.required !== true) {
     throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Assembly evidence requires an immutable Qwen Assembly plan.", "repair-evidence")
   }
   return request.assemblyPlan
@@ -541,7 +554,7 @@ const classifiedFailureProofMatches = (
         context.phase === "submission_may_have_started" ||
         context.phase === "provider_evidence_received" ||
         (
-          context.runRequest.mode === "qwen-image" && context.phase === "generated_outputs_received" &&
+          context.runRequest.mode !== "seedance-video" && context.phase === "generated_outputs_received" &&
           context.evidence.filter((item) => item.applicationPath.startsWith("outputs/")).length < context.runRequest.requestedCount
         )
       )
@@ -1230,6 +1243,7 @@ const replay = (
   let completedCount: number | undefined
   let costState: "actual" | "estimated-only" | "unknown" | undefined
   let actualCostUsd: string | undefined
+  let museOutputSha256: string | undefined
   let providerEvidenceIntent: Readonly<{
     completionOperationId: string
     sha256: string
@@ -1316,8 +1330,15 @@ const replay = (
           throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Seedance provider evidence must bind one sanitized submitted job.", "repair-evidence")
         }
         providerJobId = provider.job_id
-      } else if (!isSanitizedProviderDocument("qwen", providerDocument)) {
+      } else if (!isSanitizedProviderDocument(runRequest.mode === "muse-image" ? "muse" : "qwen", providerDocument)) {
         throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Qwen provider evidence must match its sanitized receipt schema.", "repair-evidence")
+      }
+      if (runRequest.mode === "muse-image") {
+        const receipt = providerDocument as { source_images: Array<{ normalized_sha256: string }>; cost: { state: "actual" | "unknown"; actual_cost_usd?: string } }
+        museOutputSha256 = receipt.source_images[0]!.normalized_sha256
+        completedCount = 1
+        costState = receipt.cost.state
+        actualCostUsd = receipt.cost.actual_cost_usd
       }
       phase = "provider_evidence_received"
       providerEvidenceIntent = undefined
@@ -1425,7 +1446,7 @@ const replay = (
     }
     if (event.kind === "generated_output_persisted") {
       if (
-        runRequest.mode !== "qwen-image" ||
+        runRequest.mode === "seedance-video" ||
         (phase !== "provider_evidence_received" && phase !== "generated_outputs_received")
       ) {
         throw new RunRecordError("ILLEGAL_TRANSITION", "Generated output evidence was recorded before provider evidence.")
@@ -1438,6 +1459,7 @@ const replay = (
       if (
         !/^outputs\/[a-z0-9][a-z0-9._-]*\.rgba\.json$/.test(applicationPath) ||
         mediaType !== "application/vnd.qwen.rgba+json" ||
+        (runRequest.mode === "muse-image" && evidenceSha256 !== museOutputSha256) ||
         !isSha256(evidenceSha256) ||
         evidence.some((item) =>
           item.applicationPath === applicationPath ||
@@ -1462,7 +1484,7 @@ const replay = (
       continue
     }
     if (event.kind === "donor_choice_opened") {
-      if (runRequest.mode !== "qwen-image" || phase !== "generated_outputs_received") {
+      if (runRequest.mode === "seedance-video" || phase !== "generated_outputs_received") {
         throw new RunRecordError("ILLEGAL_TRANSITION", "A donor choice was opened before generated outputs were persisted.")
       }
       const candidates = stringArrayPayload(event.payload, "candidateSha256s")
@@ -2250,7 +2272,7 @@ const validateProviderEvidenceForRequest = (
 ): void => {
   const parsed = validateProviderEvidence(operation)
   if (runRequest.mode !== "seedance-video") {
-    if (!isSanitizedProviderDocument("qwen", parsed)) {
+    if (!isSanitizedProviderDocument(runRequest.mode === "muse-image" ? "muse" : "qwen", parsed)) {
       throw new RunRecordError("EVIDENCE_HASH_MISMATCH", "Qwen provider evidence must match its sanitized receipt schema.", "repair-evidence")
     }
     return
@@ -2601,7 +2623,7 @@ export const recordOperation = (
   }
   if (operation._tag === "CommitGeneratedOutput") {
     if (
-      runRequest.mode !== "qwen-image" ||
+      runRequest.mode === "seedance-video" ||
       (current.phase !== "provider_evidence_received" && current.phase !== "generated_outputs_received")
     ) {
       return yield* Effect.fail(new RunRecordError("ILLEGAL_TRANSITION", "Generated output evidence requires provider evidence."))
@@ -2874,7 +2896,7 @@ export const recordOperation = (
     return { _tag: "Recorded" as const, view: next }
   }
   if (operation._tag === "OpenDonorChoice") {
-    if (runRequest.mode !== "qwen-image" || current.phase !== "generated_outputs_received") {
+    if (runRequest.mode === "seedance-video" || current.phase !== "generated_outputs_received") {
       return yield* Effect.fail(new RunRecordError("ILLEGAL_TRANSITION", "A donor choice requires persisted generated output evidence."))
     }
     const generatedOutputSha256s = current.evidence
@@ -3467,4 +3489,34 @@ export const readRunEvidence = (
     return yield* Effect.fail(new RunRecordError("EVIDENCE_MISSING", `${applicationPath} is missing.`, "repair-evidence"))
   }
   return Uint8Array.from(value)
+})
+
+/** Materialize the receipt's original image bytes for viewing; this does not approve it. */
+export const materializeMuseImage = (runId: string): Effect.Effect<Readonly<{ applicationPath: string; mediaType: string; sha256: string }>, RunRecordError, RunRecordStoreService> => Effect.gen(function*() {
+  const diagnostics = yield* readRunDiagnostics(runId)
+  const request = JSON.parse(Buffer.from(diagnostics.request).toString("utf8")) as CanonicalRunRequest
+  if (request.mode !== "muse-image") return yield* Effect.fail(new RunRecordError("ILLEGAL_TRANSITION", "Only a recorded Muse image can be materialized."))
+  const bytes = yield* readRunEvidence(runId, "provider-response.json")
+  const receipt = JSON.parse(Buffer.from(bytes).toString("utf8"))
+  if (!isSanitizedProviderDocument("muse", receipt)) return yield* Effect.fail(new RunRecordError("EVIDENCE_HASH_MISMATCH", "The Muse source image receipt is invalid."))
+  const source = receipt.source_images[0] as { media_type: string; sha256: string; body_base64: string; normalized_sha256: string }
+  if (!diagnostics.view.evidence.some(item => item.applicationPath.startsWith("outputs/") && item.sha256 === source.normalized_sha256)) {
+    return yield* Effect.fail(new RunRecordError("EVIDENCE_MISSING", "The complete normalized Muse output is not yet recorded."))
+  }
+  // Decode the actual receipt bytes, rather than trusting an adapter's claimed association.
+  const checked = yield* Effect.try({
+    try: () => spawnSync("/usr/bin/python3", ["-I", "-c", "import sys,io,json,hashlib; from PIL import Image; im=Image.open(io.BytesIO(sys.stdin.buffer.read())).convert('RGBA'); print(hashlib.sha256(json.dumps({'height':im.height,'pixels':list(im.tobytes()),'width':im.width},sort_keys=True,separators=(',',':')).encode()).hexdigest())"], {
+      input: Buffer.from(source.body_base64, "base64"), encoding: "utf8", timeout: 30_000, maxBuffer: 65_536,
+      env: { LANG: "C", LC_ALL: "C", PATH: "/usr/bin:/bin" },
+    }),
+    catch: () => new RunRecordError("EVIDENCE_HASH_MISMATCH", "Native Muse image decoding could not be checked."),
+  })
+  if (checked.status !== 0 || checked.stdout.trim() !== source.normalized_sha256) {
+    return yield* Effect.fail(new RunRecordError("EVIDENCE_HASH_MISMATCH", "The native Muse image differs from its recorded raster."))
+  }
+  const extension = source.media_type === "image/jpeg" ? "jpg" : source.media_type === "image/webp" ? "webp" : "png"
+  const applicationPath = `materialized/image-01.${extension}`
+  const store = yield* RunRecordStore
+  yield* store.writeEvidence(runId, applicationPath, Buffer.from(source.body_base64, "base64"))
+  return { applicationPath, mediaType: source.media_type, sha256: source.sha256 }
 })

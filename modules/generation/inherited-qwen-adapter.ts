@@ -32,7 +32,8 @@ const protocolRequest = (prepared: PreparedGeneration): Uint8Array => {
   if (!Array.isArray(inputReferences) || inputReferences.length !== prepared.request.references.length) {
     throw new GenerationError("ADAPTER_RESULT_INVALID", "Prepared Qwen references are incomplete.")
   }
-  const references = prepared.request.references.map((locked, index) => {
+  const references = [...prepared.request.references].sort((a, b) => Number(a.payloadDestination.split("/")[2]) - Number(b.payloadDestination.split("/")[2])).map((locked) => {
+    const index = Number(locked.payloadDestination.split("/")[2])
     const input = record(inputReferences[index])
     const image = input === undefined ? undefined : record(input.image_url)
     const url = image === undefined ? undefined : record(image.url)
@@ -61,7 +62,7 @@ const protocolRequest = (prepared: PreparedGeneration): Uint8Array => {
     model: prepared.request.model,
     objective: prepared.request.objective,
     requested_count: prepared.request.requestedCount,
-    parameters: prepared.request.imageParameters === undefined
+    parameters: prepared.request.mode === "muse-image" ? prepared.request.museParameters : prepared.request.imageParameters === undefined
       ? undefined
       : {
           resolution: prepared.request.imageParameters.resolution,
@@ -140,6 +141,14 @@ const protocolResponse = (bytes: Uint8Array): GenerationResult => {
 export const inheritedQwenAdapter = (
   transport: QwenKernelTransport,
 ): GenerationAdapterService => ({
+  recover: (prepared, evidence) => Effect.gen(function*() {
+    if (prepared.request.mode !== "muse-image") return yield* Effect.fail(new GenerationError("ADAPTER_RESULT_INVALID", "Native recovery is available for Muse receipts only."))
+    const response = yield* transport.exchange(Buffer.from(JSON.stringify({
+      adapter_protocol_version: "1", operation: "recover", model: "meta/muse-image",
+      provider_evidence: { media_type: evidence.mediaType, body_base64: Buffer.from(evidence.body).toString("base64"), sha256: evidence.sha256 },
+    })))
+    return yield* Effect.try({ try: () => protocolResponse(response), catch: () => new GenerationError("ADAPTER_RESULT_INVALID", "Muse receipt recovery failed.") })
+  }),
   invoke: (prepared) => Effect.gen(function*() {
     const request = yield* Effect.try({
       try: () => protocolRequest(prepared),

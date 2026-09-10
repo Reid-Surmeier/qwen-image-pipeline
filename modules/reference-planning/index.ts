@@ -51,3 +51,5 @@ export type {
   ReferencePlanningInput,
   ReferenceRequirement,
 } from "./types.js"
+
+export { pythonImageInspector } from "./python-image-inspector.js"

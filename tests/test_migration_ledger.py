@@ -273,24 +273,20 @@ class MigrationLedgerTests(unittest.TestCase):
             return Response(b'{"data":[]}')
 
         OpenRouterImageClient("probe-key", opener=openrouter_transport).generate(
-            {"model": "qwen/qwen-image-3-pro", "prompt": "probe"}
+            {"model": "meta/muse-image", "prompt": "probe"}
         )
 
-        def alibaba_transport(request, *, timeout):
-            observed.add(
-                "qwen_ui_pipeline/providers/alibaba.py:AlibabaImageClient.generate->self._opener"
-            )
-            if isinstance(request, str):
-                response = Response(b"probe-image")
-                response.headers = {"Content-Type": "image/png"}
-                return response
-            return Response(
-                b'{"output":{"choices":[{"message":{"content":[{"image":"https://example.test/probe.png"}]}}]}}'
-            )
-
-        AlibabaImageClient("probe-key", opener=alibaba_transport).generate(
-            {"model": "qwen-image-3.0-pro", "input": {}, "parameters": {}}
-        )
+        from qwen_ui_pipeline.muse_adapter import invoke_muse_kernel
+        from PIL import Image
+        image = io.BytesIO()
+        Image.new("RGB", (1, 1)).save(image, "PNG")
+        class MuseClient:
+            def generate(self, request):
+                observed.add("qwen_ui_pipeline/muse_adapter.py:invoke_muse_kernel->client.generate")
+                return {"data": [{"b64_json": base64.b64encode(image.getvalue()).decode()}]}
+        invoke_muse_kernel({"adapter_protocol_version":"1", "operation":"invoke", "provider":"openrouter",
+                            "model":"meta/muse-image", "objective":"probe", "requested_count":1,
+                            "parameters":{"size":"1x1"}, "references":[]}, client=MuseClient())
 
         def vision_transport(_request, *, timeout):
             observed.add(

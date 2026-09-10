@@ -120,3 +120,23 @@ test("the inherited Qwen adapter preserves typed ambiguity and rejects malformed
   const failure = await Effect.runPromise(Effect.flip(malformed.invoke(prepared)))
   assert.equal(failure.code, "ADAPTER_RESULT_INVALID")
 })
+
+test("Muse wire reference order follows destination index rather than alphabetical slot names", async () => {
+  const initial = await Effect.runPromise(await preparedFixture())
+  const first = initial.request.references[0]!
+  const input = (initial.payload.input_references as Array<unknown>)[0]
+  const prepared = { ...initial, request: { ...initial.request, mode: "muse-image" as const, model: "meta/muse-image", museParameters:{size:"2x1"}, references: [
+    {...first,slot:"a",payloadDestination:"/input_references/1/image_url/url"},
+    {...first,slot:"z",payloadDestination:"/input_references/0/image_url/url"},
+  ] }, payload: {...initial.payload,input_references:[input,input]} }
+  let captured = false
+  const adapter = inheritedQwenAdapter({exchange: bytes => Effect.sync(() => {
+    const document=JSON.parse(Buffer.from(bytes).toString("utf8"))
+    assert.deepEqual(document.references.map((ref: {slot:string})=>ref.slot),["z","a"])
+    assert.deepEqual(document.parameters,{size:"2x1"})
+    captured=true
+    return Buffer.from("{}")
+  })})
+  await Effect.runPromise(Effect.flip(adapter.invoke(prepared)))
+  assert.equal(captured,true)
+})

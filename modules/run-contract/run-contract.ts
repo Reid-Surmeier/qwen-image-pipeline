@@ -18,6 +18,7 @@ import { RunContractError } from "./errors.js"
 import { isVerifiedPlanningIdentity, refreshVerifiedPlanningIdentity } from "./file-planning-identity.js"
 import {
   planReferences,
+  ApplicationFiles,
   type ApplicationFilesService,
   type MediaInspectorService,
   type MediaKind,
@@ -78,9 +79,19 @@ const qwenAspectRatios = new Set([
   "4:1", "4:3", "4:5", "5:4", "9:16", "16:9",
 ])
 
+const decodeMuseParameters = (procedure: JsonRecord, mode: string): Readonly<{ size: string }> | undefined => {
+  if (mode !== "muse-image") return undefined
+  const parameters = recordField(procedure, "parameters")
+  const size = stringField(parameters, "size")
+  if (Object.keys(parameters).join(",") !== "size" || !/^[1-9][0-9]{0,4}x[1-9][0-9]{0,4}$/.test(size) || procedure.model !== "meta/muse-image") {
+    throw new RunContractError("PROCEDURE_NOT_LOCKED", "Muse requires its explicit model and saved size, without a seed.")
+  }
+  return { size }
+}
+
 const decodeQwenImageParameters = (
   procedure: JsonRecord,
-  mode: "qwen-image" | "seedance-video",
+  mode: "qwen-image" | "muse-image" | "seedance-video",
 ): QwenImageParameters | undefined => {
   if (mode !== "qwen-image") return undefined
   const parameters = recordField(procedure, "parameters")
@@ -275,11 +286,11 @@ const assemblyPlanError = (message: string): RunContractError =>
 
 const decodeAssemblyPlan = (
   value: unknown,
-  mode: "qwen-image" | "seedance-video",
+  mode: "qwen-image" | "muse-image" | "seedance-video",
   references: CanonicalRunRequest["references"],
 ): AssemblyPlan | undefined => {
   if (value === undefined) return undefined
-  if (mode !== "qwen-image" || value === null || typeof value !== "object" || Array.isArray(value)) {
+  if (mode === "seedance-video" || value === null || typeof value !== "object" || Array.isArray(value)) {
     throw assemblyPlanError("Assembly plans are supported only for Qwen Image objectives.")
   }
   const plan = value as JsonRecord
@@ -367,9 +378,9 @@ const videoPlanError = (message: string): RunContractError =>
 
 const decodeVideoPlan = (
   value: unknown,
-  mode: "qwen-image" | "seedance-video",
+  mode: "qwen-image" | "muse-image" | "seedance-video",
 ): VideoPlan | undefined => {
-  if (mode === "qwen-image") {
+  if (mode !== "seedance-video") {
     if (value !== undefined) {
       throw videoPlanError("Video plans are supported only for Seedance objectives.")
     }
@@ -486,6 +497,7 @@ export const verifyPlannedRunIdentity = (
         stringField(procedure, "model") !== request.model ||
         request.schemaVersion !== decoded.lock.runSchemaVersion ||
         request.adapterProtocolVersion !== decoded.lock.adapterProtocolVersion ||
+        canonicalize(request.museParameters ?? null) !== canonicalize(decodeMuseParameters(procedure, request.mode) ?? null) ||
         canonicalize(request.imageParameters ?? null) !== canonicalize(decodeQwenImageParameters(procedure, request.mode) ?? null) ||
         request.requestedCount < 1 || request.requestedCount > maximumCount ||
         formatCents(estimatedCost) !== request.estimatedMaximumCostUsd ||
@@ -550,7 +562,7 @@ export const compileDocuments = (
   }
   if (
     lock.procedureVersion !== "1" ||
-    lock.runSchemaVersion !== "2" ||
+    (lock.runSchemaVersion !== "2" && lock.runSchemaVersion !== "3") ||
     lock.adapterProtocolVersion !== "1"
   ) {
     return yield* Effect.fail(new RunContractError(
@@ -571,10 +583,13 @@ export const compileDocuments = (
         throw new RunContractError("PROCEDURE_NOT_LOCKED", "The objective Procedure is not allowed by the Project Contract.")
       }
       const modeValue = stringField(procedure, "mode")
-      if (modeValue !== "qwen-image" && modeValue !== "seedance-video") {
+      if (modeValue !== "qwen-image" && modeValue !== "muse-image" && modeValue !== "seedance-video") {
         throw new RunContractError("PROCEDURE_NOT_LOCKED", "The locked Procedure mode is unsupported.")
       }
-      const mode: "qwen-image" | "seedance-video" = modeValue
+      const mode: "qwen-image" | "muse-image" | "seedance-video" = modeValue
+      if (mode === "muse-image" && (lock.runSchemaVersion !== "3" || numberField(objective, "requestedCount") !== 1)) {
+        throw new RunContractError("PROCEDURE_NOT_LOCKED", "Muse requires schema 3 and the saved one-image procedure.")
+      }
       if (stringField(procedure, "version") !== lock.procedureVersion) {
         throw new RunContractError(
           "PROCEDURE_NOT_LOCKED",
@@ -619,7 +634,9 @@ export const compileDocuments = (
         procedureId,
         mode,
         model: stringField(procedure, "model"),
+        sourceInputs: objective.sourceInputs,
         imageParameters: decodeQwenImageParameters(procedure, mode),
+        museParameters: decodeMuseParameters(procedure, mode),
         referenceRoots,
         artifactRoot,
         outputRoot,
@@ -639,6 +656,27 @@ export const compileDocuments = (
       : new RunContractError("DOCUMENT_INVALID", "Project Contract or Objective fields are invalid."),
   })
 
+  const sourceInputs = yield* Effect.try({
+    try: () => {
+      if (decoded.sourceInputs === undefined) return undefined
+      if (decoded.mode !== "muse-image" || !Array.isArray(decoded.sourceInputs)) throw new Error("unsupported source inputs")
+      return decoded.sourceInputs.map(value => {
+        if (value === null || typeof value !== "object" || Object.keys(value).sort().join(",") !== "applicationPath,sha256" ||
+            typeof value.applicationPath !== "string" || !isSafePath(value.applicationPath) ||
+            typeof value.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(value.sha256)) throw new Error("invalid source input")
+        return { applicationPath: value.applicationPath as string, sha256: value.sha256 as string }
+      })
+    }, catch: () => new RunContractError("DOCUMENT_INVALID", "The saved Muse recipe input inventory is invalid."),
+  })
+  if (sourceInputs !== undefined) {
+    const files = yield* ApplicationFiles
+    for (const input of sourceInputs) {
+      const snapshot = yield* files.read(input.applicationPath)
+      if (createHash("sha256").update(snapshot.bytes).digest("hex") !== input.sha256) {
+        return yield* Effect.fail(new RunContractError("DOCUMENT_INVALID", "A saved Muse prompt, plan or recipe changed."))
+      }
+    }
+  }
   const referencePlan = yield* planReferences({
     mode: decoded.mode,
     referenceRoots: decoded.referenceRoots,
@@ -677,6 +715,8 @@ export const compileDocuments = (
     mode: decoded.mode,
     provider: "openrouter",
     model: decoded.model,
+    ...(sourceInputs === undefined ? {} : { sourceInputs }),
+    ...(decoded.museParameters === undefined ? {} : { museParameters: decoded.museParameters }),
     ...(decoded.imageParameters === undefined ? {} : { imageParameters: decoded.imageParameters }),
     adapterProtocolVersion: lock.adapterProtocolVersion,
     requestedCount: decoded.requestedCount,
