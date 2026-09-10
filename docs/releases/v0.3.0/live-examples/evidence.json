@@ -1,0 +1,753 @@
+{
+  "issue": 94,
+  "followupIssue": 95,
+  "classification": "comparison evidence; unapproved generated candidates",
+  "applicationRoot": "/home/reidsurmeier/vibe-dis-composites-five-source/docs/prototypes/pipeline-live-proof-20260910",
+  "tool": {
+    "release": "v0.3.0",
+    "commit": "7713960a7f1a88424e655d0f0ac013872259158f",
+    "artifactSha256": "2b9539945fad934f9126324da4d65c05008c98a5b05d92874b91fbe9f8544534",
+    "procedureVersion": "1",
+    "runSchemaVersion": "3",
+    "adapterProtocolVersion": "1"
+  },
+  "spend": {
+    "issue": "https://github.com/Reid-Surmeier/Image-generation-pipline/issues/94",
+    "createdUtc": "2026-09-10T16:50:11.466024+00:00",
+    "requested": {
+      "muse": 1,
+      "seedance": 1
+    },
+    "provider": "openrouter",
+    "muse": {
+      "model": "meta/muse-image",
+      "estimateMaximumUsd": "0.05",
+      "basis": "Saved reconciled Muse runs cost $0.01 per image; reserve $0.05 including reference processing contingency. Live image model catalog confirms model; endpoint catalog exposes no price."
+    },
+    "seedance": {
+      "model": "bytedance/seedance-2.0-mini",
+      "durationSeconds": 4,
+      "size": "720x720",
+      "estimate": "0.1021",
+      "run": "animation/runs/20260910T165030Z-dis-hover",
+      "costAcknowledgementAuthority": "Owner explicitly requested one live icon animation in current session; standing owner instruction authorizes agent discretion below USD 5."
+    },
+    "totalSpendCeilingUsd": "4.99",
+    "stopRule": "One submission per plan; no blind retries; ambiguous failures counted as possibly spent. No strategy waiver. Human visual acceptance pending.",
+    "inputs": {
+      "inputs/ad-source.jpg": "645dea8523080fe5c6581d85b39529345897d779e72ce043540a427ceee2fd5a",
+      "inputs/dis-560-763.jpg": "3e5153f7c47b69458bff98b47db6b779114dfb4a5fe44de6c9c7854f9890eaf4",
+      "inputs/dis-mark.jpg": "bb3fb61400844d684c83542aa0364842985ed7bf49d17b091c9a86187d89b2ab",
+      "animation/dis-anchor.png": "fcf485fce0f2bcaa39579050d1bebb1bedfcbb2d62e5684eea14e3e5fe4e25b6",
+      "docs/evidence/board-icons-test/references/ref-textbox-arrow-bob.mp4": "f18cd3006605b92ac8ac82cb02a377b34d17067e8c1f17ef5370c94ec5f53f57"
+    },
+    "anchorPreparation": "Crop 40 pixels off existing logo page border, fit remaining image within 680x680 and center on 720x720 white square; no generative redraw.",
+    "actualSpend": {
+      "museUsd": "0.010000",
+      "seedanceUsd": "0.30555",
+      "totalUsd": "0.315550",
+      "submittedOutputs": {
+        "muse": 1,
+        "seedance": 1
+      },
+      "retries": 0
+    }
+  },
+  "muse": {
+    "recipe": {
+      "procedure": "dis-composite",
+      "spec": "muse/spec.json"
+    },
+    "spec": {
+      "slug": "safety-becomes-spectacle",
+      "size": "2000x1198",
+      "references": [
+        "../inputs/ad-source.jpg",
+        "../inputs/dis-560-763.jpg",
+        "../inputs/dis-mark.jpg"
+      ],
+      "prompt": "Replace every suited person in the first image with the blue-clad traffic-safety worker from the second image. It is the same photographed DIS character, with the same blue hood, blue clothing, white shoes, face and expression, repeated at the exact scale and position of each person in the original advertisement. The huge cropped foreground person on the left becomes a correspondingly cropped close-up of that worker. The middle-distance and distant figures become full-length copies at their original depths. Do not retain any original face, suit or tie. Replace each floating burning tie with one small orange traffic cone from the second image, floating at the same position and perspective. No flames remain.\n\nThe first image supplies the two-page landscape format, horizon, cracked white salt flat, dusk sky, central gutter and curved white right-hand copy panel. Preserve that composition, the framing, the photographic grain, the subdued dusk palette and the existing hierarchy of large photographic field versus quiet white copy panel. Blend the supplied worker and cones into the source light and print softness. Preserve the worker's photographic identity and slightly awkward stock-photo presence. Do not turn the result into a polished 3D render or modern poster.\n\nReplace the web address on the right with exactly: www.disimages.com\nReplace the small lower-right paragraph, retaining its placement and approximate type size, with these three lines:\nBusiness as usual? Not with\nDIS Images for the Web.\nGo. See for yourself.\nReplace the colored line beneath with: Safety becomes spectacle.\nReplace the original manufacturer symbol and name with the grey three-dimensional DIS mark from the third reference, small and in the same lower-right brand position. No extra bottom lockup. No new headline. No invented text. Keep all new copy confined to the existing white copy panel. Produce one complete two-page advertisement, without a presentation mockup or extra margins.",
+      "dis_photos": [
+        560
+      ],
+      "source_note": "Fresh combination for Image-generation-pipline issue 94; not a replay of earlier generated output."
+    },
+    "request": {
+      "adapterProtocolVersion": "1",
+      "applicationId": "app-6e4423c3064d",
+      "artifactRoot": "artifacts/image-generation",
+      "budgetCeilingUsd": "0.05",
+      "estimatedMaximumCostUsd": "0.05",
+      "maximumCorrectionRuns": 0,
+      "mode": "muse-image",
+      "model": "meta/muse-image",
+      "museParameters": {
+        "size": "2000x1198"
+      },
+      "objective": "Replace every suited person in the first image with the blue-clad traffic-safety worker from the second image. It is the same photographed DIS character, with the same blue hood, blue clothing, white shoes, face and expression, repeated at the exact scale and position of each person in the original advertisement. The huge cropped foreground person on the left becomes a correspondingly cropped close-up of that worker. The middle-distance and distant figures become full-length copies at their original depths. Do not retain any original face, suit or tie. Replace each floating burning tie with one small orange traffic cone from the second image, floating at the same position and perspective. No flames remain.\n\nThe first image supplies the two-page landscape format, horizon, cracked white salt flat, dusk sky, central gutter and curved white right-hand copy panel. Preserve that composition, the framing, the photographic grain, the subdued dusk palette and the existing hierarchy of large photographic field versus quiet white copy panel. Blend the supplied worker and cones into the source light and print softness. Preserve the worker's photographic identity and slightly awkward stock-photo presence. Do not turn the result into a polished 3D render or modern poster.\n\nReplace the web address on the right with exactly: www.disimages.com\nReplace the small lower-right paragraph, retaining its placement and approximate type size, with these three lines:\nBusiness as usual? Not with\nDIS Images for the Web.\nGo. See for yourself.\nReplace the colored line beneath with: Safety becomes spectacle.\nReplace the original manufacturer symbol and name with the grey three-dimensional DIS mark from the third reference, small and in the same lower-right brand position. No extra bottom lockup. No new headline. No invented text. Keep all new copy confined to the existing white copy panel. Produce one complete two-page advertisement, without a presentation mockup or extra margins.\n\nDo not copy any character, mascot, toy, figure, person, logo, wordmark or artwork that appears in the advertisement reference. That reference is the authority for the photograph's own language -- its lens, light, grain, palette, layout and typesetting -- and for nothing else.",
+      "objectiveId": "muse-8676103e9a278d9eaf94",
+      "outputRoot": "generated",
+      "procedureId": "muse-8676103e9a278d9eaf94",
+      "provider": "openrouter",
+      "references": [
+        {
+          "applicationPath": "inputs/ad-source.jpg",
+          "authorityReason": "Ordered input from the hash-locked saved Muse recipe",
+          "byteLength": 337983,
+          "inspectedMedia": {
+            "height": 1016,
+            "kind": "image",
+            "mediaType": "image/jpeg",
+            "width": 1697
+          },
+          "kind": "image",
+          "mediaType": "image/jpeg",
+          "payloadDestination": "/input_references/0/image_url/url",
+          "sha256": "645dea8523080fe5c6581d85b39529345897d779e72ce043540a427ceee2fd5a",
+          "slot": "reference-000"
+        },
+        {
+          "applicationPath": "inputs/dis-560-763.jpg",
+          "authorityReason": "Ordered input from the hash-locked saved Muse recipe",
+          "byteLength": 442210,
+          "inspectedMedia": {
+            "height": 1300,
+            "kind": "image",
+            "mediaType": "image/jpeg",
+            "width": 866
+          },
+          "kind": "image",
+          "mediaType": "image/jpeg",
+          "payloadDestination": "/input_references/1/image_url/url",
+          "sha256": "3e5153f7c47b69458bff98b47db6b779114dfb4a5fe44de6c9c7854f9890eaf4",
+          "slot": "reference-001"
+        },
+        {
+          "applicationPath": "inputs/dis-mark.jpg",
+          "authorityReason": "Ordered input from the hash-locked saved Muse recipe",
+          "byteLength": 134600,
+          "inspectedMedia": {
+            "height": 1006,
+            "kind": "image",
+            "mediaType": "image/jpeg",
+            "width": 1620
+          },
+          "kind": "image",
+          "mediaType": "image/jpeg",
+          "payloadDestination": "/input_references/2/image_url/url",
+          "sha256": "bb3fb61400844d684c83542aa0364842985ed7bf49d17b091c9a86187d89b2ab",
+          "slot": "reference-002"
+        }
+      ],
+      "requestedCount": 1,
+      "schemaVersion": "3",
+      "sourceInputs": [
+        {
+          "applicationPath": "muse/recipe.json",
+          "sha256": "8676103e9a278d9eaf9400ae611cf0334f068dd7f57bb95b7df56defb2cd26c3"
+        },
+        {
+          "applicationPath": "muse/spec.json",
+          "sha256": "0294b3a384ec4d05810400caf112e3e6d18db3a2e9f593dd71b4d568846f28cc"
+        }
+      ],
+      "tool": {
+        "adapterProtocolVersion": "1",
+        "artifactSha256": "2b9539945fad934f9126324da4d65c05008c98a5b05d92874b91fbe9f8544534",
+        "commit": "7713960a7f1a88424e655d0f0ac013872259158f",
+        "procedureVersion": "1",
+        "release": "v0.3.0",
+        "runSchemaVersion": "3"
+      }
+    },
+    "events": [
+      {
+        "eventSha256": "a47950394fe84739b8f0ba9852e8432669982929294f240627ba1213d034d986",
+        "kind": "attempt_reserved",
+        "operationId": "reserve-run-1c8a596decb3f96ebdf648f7",
+        "payload": {
+          "attemptId": "attempt-1c8a596decb3f96ebdf648f7-1",
+          "correctionDepth": 0,
+          "estimatedMaximumCostUsd": "0.05",
+          "linkedFrom": null,
+          "maximumCorrectionRuns": 0,
+          "maximumCount": 1,
+          "maximumSpendUsd": "0.05",
+          "payloadSha256": "3337c733eb6bbd474757d2082b5b349c50be0696704919ce10e50909bfcc3bdb",
+          "requestSha256": "1c8a596decb3f96ebdf648f77e9fae381e1fc5210625d6cd03d6e3a45952da85"
+        },
+        "previousEventSha256": null,
+        "runId": "run-1c8a596decb3f96ebdf648f7",
+        "schemaVersion": "1",
+        "sequence": 1,
+        "timestamp": "2026-09-10T16:50:53.481Z"
+      },
+      {
+        "eventSha256": "2d6878346a03a39b55db20775120a651d4a4c8d21a30c742ca5dae25b9a4b875",
+        "kind": "submission_may_have_started",
+        "operationId": "conductor-submit-once",
+        "payload": {
+          "attemptId": "attempt-1c8a596decb3f96ebdf648f7-1",
+          "retryState": "reconcile-only",
+          "spendState": "possibly_spent"
+        },
+        "previousEventSha256": "a47950394fe84739b8f0ba9852e8432669982929294f240627ba1213d034d986",
+        "runId": "run-1c8a596decb3f96ebdf648f7",
+        "schemaVersion": "1",
+        "sequence": 2,
+        "timestamp": "2026-09-10T16:50:53.501Z"
+      },
+      {
+        "eventSha256": "97874e76c46b7a214b21a6e32e07a92844e418d080e1b2616c7d34041049d215",
+        "kind": "provider_evidence_intent",
+        "operationId": "provider-intent-aebf8b2037998995f087ae46",
+        "payload": {
+          "byteLength": 582957,
+          "completionOperationId": "conductor-provider-evidence",
+          "mediaType": "application/json",
+          "sha256": "81a233a59558e0a486d7895f42d4a282a613fc94e6660d3eb7c79fb32b2bde0d"
+        },
+        "previousEventSha256": "2d6878346a03a39b55db20775120a651d4a4c8d21a30c742ca5dae25b9a4b875",
+        "runId": "run-1c8a596decb3f96ebdf648f7",
+        "schemaVersion": "1",
+        "sequence": 3,
+        "timestamp": "2026-09-10T16:51:16.664Z"
+      },
+      {
+        "eventSha256": "3c43b2e1c7bb31791c09acbd4cc0240782d62a1e724d5a61365851e9a2702552",
+        "kind": "provider_evidence_received",
+        "operationId": "conductor-provider-evidence",
+        "payload": {
+          "applicationPath": "provider-response.json",
+          "byteLength": 582957,
+          "mediaType": "application/json",
+          "sha256": "81a233a59558e0a486d7895f42d4a282a613fc94e6660d3eb7c79fb32b2bde0d"
+        },
+        "previousEventSha256": "97874e76c46b7a214b21a6e32e07a92844e418d080e1b2616c7d34041049d215",
+        "runId": "run-1c8a596decb3f96ebdf648f7",
+        "schemaVersion": "1",
+        "sequence": 4,
+        "timestamp": "2026-09-10T16:51:16.664Z"
+      },
+      {
+        "eventSha256": "f3f7ca062e22bafe3032f83ebe6c57d31a19a03018f597daa23451e1578e17c3",
+        "kind": "generated_output_persisted",
+        "operationId": "conductor-generated-output-1",
+        "payload": {
+          "applicationPath": "outputs/donor-01.rgba.json",
+          "byteLength": 37463594,
+          "mediaType": "application/vnd.qwen.rgba+json",
+          "sha256": "6d01cecf52e505b2b151212c83eda8abb6b6a75bec4f84f44a2c64ca8b537a29"
+        },
+        "previousEventSha256": "3c43b2e1c7bb31791c09acbd4cc0240782d62a1e724d5a61365851e9a2702552",
+        "runId": "run-1c8a596decb3f96ebdf648f7",
+        "schemaVersion": "1",
+        "sequence": 5,
+        "timestamp": "2026-09-10T16:51:18.197Z"
+      },
+      {
+        "eventSha256": "e3a79f432ee0e5ac7986897565f7322dc8a8df730ce3d857457a05cf8d161bd5",
+        "kind": "donor_choice_opened",
+        "operationId": "conductor-open-donor-choice",
+        "payload": {
+          "candidateSha256s": [
+            "6d01cecf52e505b2b151212c83eda8abb6b6a75bec4f84f44a2c64ca8b537a29"
+          ]
+        },
+        "previousEventSha256": "f3f7ca062e22bafe3032f83ebe6c57d31a19a03018f597daa23451e1578e17c3",
+        "runId": "run-1c8a596decb3f96ebdf648f7",
+        "schemaVersion": "1",
+        "sequence": 6,
+        "timestamp": "2026-09-10T16:51:21.982Z"
+      }
+    ],
+    "checks": {
+      "model": "meta/muse-image",
+      "provider": "openrouter",
+      "tool": {
+        "adapterProtocolVersion": "1",
+        "artifactSha256": "2b9539945fad934f9126324da4d65c05008c98a5b05d92874b91fbe9f8544534",
+        "commit": "7713960a7f1a88424e655d0f0ac013872259158f",
+        "procedureVersion": "1",
+        "release": "v0.3.0",
+        "runSchemaVersion": "3"
+      },
+      "referenceCount": 3,
+      "allInputHashesMatch": true,
+      "eventKinds": [
+        "attempt_reserved",
+        "submission_may_have_started",
+        "provider_evidence_intent",
+        "provider_evidence_received",
+        "generated_output_persisted",
+        "donor_choice_opened"
+      ],
+      "oneReservation": true,
+      "oneSubmission": true,
+      "nativeFormat": "WEBP",
+      "nativeDimensions": [
+        2032,
+        1216
+      ],
+      "sourceDimensions": [
+        1697,
+        1016
+      ],
+      "nativeSha256": "f3ac0e4a4681d174e44b1430ab3c5f797ba79008d38d0c114ca19ec8d463880b",
+      "costUsd": "0.010000",
+      "providerId": null,
+      "exactPixelPreservation": "unverified: no deterministic Assembly requested for this full-canvas DIS composite",
+      "humanAcceptance": "pending"
+    },
+    "blindReview": {
+      "verdict": "fail",
+      "candidateSha256": "f3ac0e4a4681d174e44b1430ab3c5f797ba79008d38d0c114ca19ec8d463880b",
+      "reviewer": "fresh packet-only reviewer live_muse_blind_review",
+      "packetSha256": "636e0e7a03158677a0a746b90952f0ce4acc49b1ef35935c464b5d4f1f881c96",
+      "allListedHashesMatch": true,
+      "toolIdentityMatched": true,
+      "findings": [
+        {
+          "expected": "Exact source figure scale and position",
+          "actual": "Figure immediately right of gutter has both feet visible in the candidate; original figure extends below the page."
+        },
+        {
+          "expected": "Photographic reference subject retains face/expression",
+          "actual": "Turned over-shoulder reference becomes frontal faces with changed expressions/stance; literal photographic identity is unverified."
+        },
+        {
+          "expected": "Requested 2000x1198",
+          "actual": "Provider returned 2032x1216. Muse does not guarantee exact dimensions; recorded as request/result difference, not a newly invented tool guarantee."
+        }
+      ],
+      "observedPresent": [
+        "Seven replacement subjects",
+        "Orange cones instead of burning ties",
+        "Dusk salt flat, horizon, gutter and curved copy panel",
+        "Requested website, replacement paragraph, red tagline and grey DIS mark"
+      ],
+      "humanAcceptance": "pending"
+    },
+    "fullRecord": "/home/reidsurmeier/vibe-dis-composites-five-source/docs/prototypes/pipeline-live-proof-20260910/artifacts/image-generation/runs/run-1c8a596decb3f96ebdf648f7"
+  },
+  "seedance": {
+    "brief": {
+      "grammar": "smooth",
+      "motion_kind": "translate",
+      "source_authority": "The supplied first and last frame show the exact grey three-dimensional lowercase DIS mark on white. The complete d, i and s and their existing side faces are the identity authority. Keep this same mark, its spacing, proportions, grey values and viewing angle throughout the shot. This is a single small interface icon, not a new logo design.",
+      "style_lock": [
+        "The mark remains one rigid group; every letter travels by the same amount at the same time.",
+        "Keep the existing neutral grey fronts and darker side faces. Do not recolor or relight the sculpture.",
+        "Preserve the negative space inside the d and the s, the upright stem of the i and its separate dot.",
+        "All three letters must remain readable as dis, complete and uncropped, inside the white square."
+      ],
+      "motion": "One quiet hover acknowledgement: the whole mark rises slightly, pauses, and returns to its captured position. Beat 1: hold the supplied anchor unchanged from zero to 0.6 seconds. Beat 2: from 0.6 to 1.2 seconds move the entire mark upward by 14 pixels at this 720-pixel output size, using a gentle ease out; the same fixed drawing is simply translated. Beat 3: hold that raised position from 1.2 to 1.6 seconds with absolutely no motion. Beat 4: from 1.6 to 2.4 seconds settle straight downward to the original anchor position, using a gentle ease in and out and no overshoot. Beat 5: hold the original anchor from 2.4 through 4.0 seconds. The reference clip shows the appropriate movement family: a whole icon translating vertically and returning home. Borrow only that vertical translation and return, not the arrow artwork, pixel style or repeated rapid cadence. The mark never rotates about any axis, leans, enlarges, contracts, morphs or separates. Its only animated coordinate is the shared vertical position of the complete group.",
+      "camera": "Locked front three-quarter view exactly as captured in the source. No zoom, pan, roll, orbit, dolly, perspective change, rack focus or reframing. The square frame does not move with the mark.",
+      "background": "Uniform clean white background for the full duration. Preserve the source white rather than adding a key color. No scenery, horizon, surface texture, vignette, drop shadow, new reflection or environmental lighting. Native alpha is not requested.",
+      "negative_constraints": [
+        "Do not invent characters, symbols, objects, confetti, particles, words or extra letters.",
+        "Do not change the geometry, extrusion depth, letter spacing, proportions or face colors.",
+        "No tilting, spinning, stretching, squashing, elastic wobble, pulsing, motion blur or trails.",
+        "No motion is allowed after the final return; the last frame must match the first anchor.",
+        "Do not reproduce the reference arrow anywhere. The video reference establishes the translation family only."
+      ],
+      "timing": "Four seconds total, silent. One action only, with long still holds at both ends. Smooth restrained motion suited to a small hover icon, followed by the exact starting pose for a loop.",
+      "motion_basis": "Vertical translation and return are demonstrated by the supplied Pokemon Emerald textbox arrow reference, reconstructed from the actual text.c sDownArrowYCoords offsets 0, 1, 2, 1. This logo example borrows the movement family and deliberately uses a slower smooth hover timing.",
+      "real_reference": "docs/evidence/board-icons-test/references/ref-textbox-arrow-bob.mp4; source identity and reconstruction are recorded in the neighboring provenance.json.",
+      "input_limitation": "Existing experimental mixed-input mode: both frame anchors and the actual matching video reference are sent. OpenRouter frame precedence means influence of the video reference is uncertain; no claim that the model used it."
+    },
+    "request": {
+      "model": "bytedance/seedance-2.0-mini",
+      "prompt": "SOURCE AUTHORITY:\nThe supplied first and last frame show the exact grey three-dimensional lowercase DIS mark on white. The complete d, i and s and their existing side faces are the identity authority. Keep this same mark, its spacing, proportions, grey values and viewing angle throughout the shot. This is a single small interface icon, not a new logo design.\n\nLOCKED STYLE:\n- The mark remains one rigid group; every letter travels by the same amount at the same time.\n- Keep the existing neutral grey fronts and darker side faces. Do not recolor or relight the sculpture.\n- Preserve the negative space inside the d and the s, the upright stem of the i and its separate dot.\n- All three letters must remain readable as dis, complete and uncropped, inside the white square.\n\nMOTION:\nOne quiet hover acknowledgement: the whole mark rises slightly, pauses, and returns to its captured position. Beat 1: hold the supplied anchor unchanged from zero to 0.6 seconds. Beat 2: from 0.6 to 1.2 seconds move the entire mark upward by 14 pixels at this 720-pixel output size, using a gentle ease out; the same fixed drawing is simply translated. Beat 3: hold that raised position from 1.2 to 1.6 seconds with absolutely no motion. Beat 4: from 1.6 to 2.4 seconds settle straight downward to the original anchor position, using a gentle ease in and out and no overshoot. Beat 5: hold the original anchor from 2.4 through 4.0 seconds. The reference clip shows the appropriate movement family: a whole icon translating vertically and returning home. Borrow only that vertical translation and return, not the arrow artwork, pixel style or repeated rapid cadence. The mark never rotates about any axis, leans, enlarges, contracts, morphs or separates. Its only animated coordinate is the shared vertical position of the complete group.\n\nTIMING:\nFour seconds total, silent. One action only, with long still holds at both ends. Smooth restrained motion suited to a small hover icon, followed by the exact starting pose for a loop.\n\nCAMERA:\nLocked front three-quarter view exactly as captured in the source. No zoom, pan, roll, orbit, dolly, perspective change, rack focus or reframing. The square frame does not move with the mark.\n\nBACKGROUND / MATTE:\nUniform clean white background for the full duration. Preserve the source white rather than adding a key color. No scenery, horizon, surface texture, vignette, drop shadow, new reflection or environmental lighting. Native alpha is not requested.\n\nMUST NOT:\n- Do not invent characters, symbols, objects, confetti, particles, words or extra letters.\n- Do not change the geometry, extrusion depth, letter spacing, proportions or face colors.\n- No tilting, spinning, stretching, squashing, elastic wobble, pulsing, motion blur or trails.\n- No motion is allowed after the final return; the last frame must match the first anchor.\n- Do not reproduce the reference arrow anywhere. The video reference establishes the translation family only.",
+      "duration": 4,
+      "size": "720x720",
+      "generate_audio": false,
+      "seed": 1,
+      "frame_images": [
+        {
+          "type": "image_url",
+          "image_url": {
+            "url": "<data-url sha256=ebf78bccc6c3cc0d85a41d9b973dbf1f9bc08f8d1e5bfa790ce1531244d9e7c1>"
+          },
+          "frame_type": "first_frame"
+        },
+        {
+          "type": "image_url",
+          "image_url": {
+            "url": "<data-url sha256=ebf78bccc6c3cc0d85a41d9b973dbf1f9bc08f8d1e5bfa790ce1531244d9e7c1>"
+          },
+          "frame_type": "last_frame"
+        }
+      ],
+      "input_references": [
+        {
+          "type": "video_url",
+          "video_url": {
+            "url": "https://raw.githubusercontent.com/Reid-Surmeier/Image-generation-pipline/7713960a7f1a88424e655d0f0ac013872259158f/seedance/docs/evidence/board-icons-test/references/ref-textbox-arrow-bob.mp4"
+          }
+        }
+      ]
+    },
+    "plan": {
+      "model": "bytedance/seedance-2.0-mini",
+      "canonical_slug": "bytedance/seedance-2.0-mini-20260811",
+      "request_sha256": "be40cc649b56cc8e162421e9638ce149f360f98de8d686de2e7ac7119b8aa675",
+      "estimated_cost_usd": "0.1021",
+      "estimate_only_not_invoice": true,
+      "paid_submission_performed": true,
+      "strategy_gate": {
+        "grammar": "smooth",
+        "passed": true,
+        "violations": []
+      },
+      "submission_status": "accepted",
+      "billing_status": "possibly_spent",
+      "safe_to_retry": false
+    },
+    "capabilities": {
+      "models": [
+        {
+          "id": "bytedance/seedance-2.0-mini",
+          "canonical_slug": "bytedance/seedance-2.0-mini-20260811",
+          "name": "ByteDance: Seedance 2.0 Mini",
+          "supported_resolutions": [
+            "480p",
+            "720p"
+          ],
+          "supported_aspect_ratios": [
+            "1:1",
+            "3:4",
+            "9:16",
+            "4:3",
+            "16:9",
+            "21:9",
+            "9:21"
+          ],
+          "supported_sizes": [
+            "480x480",
+            "480x640",
+            "480x854",
+            "640x480",
+            "854x480",
+            "1120x480",
+            "720x720",
+            "720x960",
+            "720x1280",
+            "720x1680",
+            "960x720",
+            "1280x720",
+            "1680x720"
+          ],
+          "supported_durations": [
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15
+          ],
+          "supported_frame_images": [
+            "first_frame",
+            "last_frame"
+          ],
+          "generate_audio": true,
+          "seed": true,
+          "pricing_skus": {
+            "video_tokens": "0.0000035",
+            "video_tokens_without_audio": "0.0000035",
+            "video_tokens_with_video_input": "0.0000021"
+          },
+          "allowed_passthrough_parameters": [
+            "watermark",
+            "req_key",
+            "return_last_frame"
+          ]
+        }
+      ]
+    },
+    "providerCompletion": {
+      "id": "u2bTXgvCN9U5gGd7GWQA",
+      "status": "completed",
+      "usage": {
+        "cost": 0.30555,
+        "is_byok": false
+      }
+    },
+    "checks": {
+      "duration": {
+        "expected_seconds": 4,
+        "actual_seconds": 4.041667,
+        "pass": true
+      },
+      "dimensions": {
+        "expected": [
+          720,
+          720
+        ],
+        "actual": [
+          960,
+          960
+        ],
+        "pass": false
+      },
+      "audio": {
+        "expected": false,
+        "actual": false,
+        "pass": true
+      },
+      "first_anchor_rmse": 2.179843891888617,
+      "last_anchor_rmse": 17.86705430037162,
+      "loop_seam_rmse": 15.900364858944886,
+      "machine_checks_pass": false,
+      "requires_human_style_review": true
+    },
+    "motionDiagnostics": {
+      "measurement": "All decoded frames normalized to 720x720 for comparison, mask any RGB channel below 200; original output unchanged. Diagnostic measurements, not automatic visual acceptance.",
+      "frameCount": 97,
+      "verticalExcursionPx": 133.15,
+      "requestedExcursionPx": 14,
+      "firstCenter": {
+        "frame": 0,
+        "centerX": 357.63,
+        "centerY": 383.47,
+        "box": [
+          229,
+          212,
+          498,
+          499
+        ]
+      },
+      "lastCenter": {
+        "frame": 96,
+        "centerX": 357.75,
+        "centerY": 384.9,
+        "box": [
+          228,
+          211,
+          499,
+          500
+        ]
+      },
+      "samples": [
+        {
+          "frame": 0,
+          "centerX": 357.63,
+          "centerY": 383.47,
+          "box": [
+            229,
+            212,
+            498,
+            499
+          ]
+        },
+        {
+          "frame": 8,
+          "centerX": 357.75,
+          "centerY": 385.06,
+          "box": [
+            228,
+            211,
+            498,
+            500
+          ]
+        },
+        {
+          "frame": 16,
+          "centerX": 357.8,
+          "centerY": 383.12,
+          "box": [
+            228,
+            209,
+            499,
+            498
+          ]
+        },
+        {
+          "frame": 24,
+          "centerX": 358.25,
+          "centerY": 349.51,
+          "box": [
+            228,
+            172,
+            501,
+            464
+          ]
+        },
+        {
+          "frame": 32,
+          "centerX": 358.44,
+          "centerY": 290.76,
+          "box": [
+            228,
+            109,
+            502,
+            404
+          ]
+        },
+        {
+          "frame": 40,
+          "centerX": 358.26,
+          "centerY": 256.86,
+          "box": [
+            228,
+            73,
+            501,
+            370
+          ]
+        },
+        {
+          "frame": 48,
+          "centerX": 358.28,
+          "centerY": 254.29,
+          "box": [
+            228,
+            70,
+            501,
+            367
+          ]
+        },
+        {
+          "frame": 56,
+          "centerX": 358.29,
+          "centerY": 254.45,
+          "box": [
+            228,
+            70,
+            501,
+            368
+          ]
+        },
+        {
+          "frame": 64,
+          "centerX": 358.55,
+          "centerY": 281.95,
+          "box": [
+            228,
+            98,
+            502,
+            396
+          ]
+        },
+        {
+          "frame": 72,
+          "centerX": 358.48,
+          "centerY": 345.6,
+          "box": [
+            228,
+            167,
+            501,
+            461
+          ]
+        },
+        {
+          "frame": 80,
+          "centerX": 358.05,
+          "centerY": 387.3,
+          "box": [
+            228,
+            215,
+            500,
+            502
+          ]
+        },
+        {
+          "frame": 88,
+          "centerX": 357.82,
+          "centerY": 385.16,
+          "box": [
+            228,
+            211,
+            499,
+            500
+          ]
+        },
+        {
+          "frame": 96,
+          "centerX": 357.75,
+          "centerY": 384.9,
+          "box": [
+            228,
+            211,
+            499,
+            500
+          ]
+        }
+      ]
+    },
+    "endFrameDiagnostics": {
+      "trueFinalFrame": 96,
+      "anchorRmse": 17.847570629975817,
+      "seamRmse": 15.857120006067662,
+      "retainedVerifierLastSample": "ffmpeg -sseof -0.08 (near-end sample, not necessarily final decoded frame)",
+      "candidateModified": false
+    },
+    "fullRecord": "/home/reidsurmeier/vibe-dis-composites-five-source/docs/prototypes/pipeline-live-proof-20260910/animation/runs/20260910T165030Z-dis-hover",
+    "blindReview": {
+      "verdict": "fail",
+      "reviewer": "fresh packet-only reviewer live_seedance_blind_review",
+      "allListedHashesMatch": true,
+      "toolIdentityMatched": true,
+      "candidateSha256": "ae35633c3c24c060836b87697c1321e9c573f0e7971c84aa239bd0d4c7f82843",
+      "packetSha256": "c39f8a3262eac91d7de0dd44d67af3a80557aedc267add8474f0920d05c1f2a6",
+      "findings": [
+        {
+          "expected": "720x720",
+          "actual": "960x960; required machine verification fails"
+        },
+        {
+          "expected": "14-pixel vertical rise",
+          "actual": "Independent all-frame analysis: 133.16 pixel vertical excursion after normalization to 720x720"
+        },
+        {
+          "expected": "Raised hold 1.2\u20131.6 seconds, return by 2.4 seconds",
+          "actual": "Mark rises during intended hold and remains about 125 pixels above start at 2.417 seconds"
+        },
+        {
+          "expected": "Keep source colors, lighting and white background",
+          "actual": "Darker letter fronts, brighter side faces, grey uneven background; visible by 0.583 seconds"
+        },
+        {
+          "expected": "Finish on supplied anchor",
+          "actual": "Final decoded frame 96 at 4.000s retains shading/background changes; independent FFmpeg-scaled anchor RMSE 18.55, seam RMSE 15.65"
+        }
+      ],
+      "passedObservations": [
+        "Silent video",
+        "Duration inside 0.35-second tolerance",
+        "Readable uncropped dis",
+        "No added letters, scenery, objects or reference arrow"
+      ],
+      "measurementNote": "FFmpeg scaling in independent review and OpenCV/Pillow scaling in retained evidence yield slightly different RMSE. Both independently show the same drift.",
+      "humanAcceptance": "pending"
+    }
+  },
+  "originalPortReplay": "port-replay.json",
+  "exports": {
+    "dis-reference.jpg": "3e5153f7c47b69458bff98b47db6b779114dfb4a5fe44de6c9c7854f9890eaf4",
+    "muse-before-after.jpg": "270a07d7c0596e7bcb5a48e7b19e77c1ab1a8f44eaf26eeff045558c907d9477",
+    "muse-result.webp": "f3ac0e4a4681d174e44b1430ab3c5f797ba79008d38d0c114ca19ec8d463880b",
+    "muse-source.jpg": "645dea8523080fe5c6581d85b39529345897d779e72ce043540a427ceee2fd5a",
+    "port-replay.json": "debafda4b7651664364af22fa6a5598554f00ee9828b19276d31674695a1411e",
+    "seedance-anchor.png": "fcf485fce0f2bcaa39579050d1bebb1bedfcbb2d62e5684eea14e3e5fe4e25b6",
+    "seedance-frames.jpg": "a6cb4dde7cd30965f57bd41c75185cd9e2d9db6e03056a1e20a05b70c94863e1",
+    "seedance-original.mp4": "ae35633c3c24c060836b87697c1321e9c573f0e7971c84aa239bd0d4c7f82843",
+    "seedance-preview.gif": "1e9a6c387e33662156454d2ef3491a602fbf8b08bfdb08ba43081855da1fa803"
+  },
+  "humanAcceptance": "pending",
+  "codeChanges": false,
+  "paidRetries": 0,
+  "repositoryVerification": {
+    "command": "scripts/verify.sh",
+    "exitCode": 0,
+    "log": "/tmp/pipeline-live-proof-verify.log",
+    "secretScan": "gitleaks dir docs/releases/v0.3.0/live-examples --redact --no-banner: no leaks",
+    "specificationReview": "Example delivery requirements satisfied; candidates remain unapproved and failure follow-up is issue 95.",
+    "engineeringReview": "No runtime changes; exact installed identity, source replay, one-shot paid records and unchanged failed media evidence verified."
+  }
+}
