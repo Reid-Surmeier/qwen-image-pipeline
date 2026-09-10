@@ -140,10 +140,11 @@ if (command === "help") {
     if (planned._tag !== "Planned") { console.log(JSON.stringify(planned, null, 2)); process.exitCode = 2; return }
     if (planned.run.request.mode !== "muse-image") throw new Error("The image command requires the saved Muse procedure. Use animation for Seedance.")
     if (!values.execute) { console.log(JSON.stringify(planned, null, 2)); return }
+    if (values.run === "") throw new Error("A non-empty recorded Run identity is required.")
     // Python runs from the verified distribution, while all file services retain the application root.
     process.chdir(toolRoot)
     const store = yield* fileRunRecordLayer(applicationRoot)
-    if (values.run) {
+    if (values.run !== undefined) {
       const saved = yield* readDiagnostics(values.run).pipe(Effect.provide(store))
       if (saved.view.requestSha256 !== planned.run.requestSha256 || !saved.view.evidence.some(item => item.applicationPath === "provider-response.json")) throw new Error("Unpaid resume requires this objective's authenticated provider receipt.")
     }

@@ -17,6 +17,8 @@ prepared=call('prepare','--application',str(app),'--recipe',product['recipe'],'-
 planned=call('image','--application',str(app),'--objective',prepared['objective']);assert planned['_tag']=='Planned'
 no_key=subprocess.run([cli,'image','--application',str(app),'--objective',prepared['objective'],'--execute'],env={'PATH':'/usr/bin:/bin'},capture_output=True)
 assert no_key.returncode==2 and not (app/'artifacts/image-generation/runs').exists()
+empty_run=subprocess.run([cli,'image','--application',str(app),'--objective',prepared['objective'],'--execute','--run='],env={'PATH':'/usr/bin:/bin'},capture_output=True)
+assert empty_run.returncode==2 and not (app/'artifacts/image-generation/runs').exists()
 old_home=source/'docs/prototypes/issue-41-invented-product-gallery';run=json.loads((old_home/'attempts/001/run.json').read_text());raw=(source/run['images'][0]['file']).read_bytes()
 class Client:
  def generate(self,request):
