@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -202,7 +203,10 @@ def test_inner_margin_catches_an_anchor_with_nowhere_to_move() -> None:
     assert inner_margin(with_margin, matte) >= MIN_INNER_MARGIN
 
 
-@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is required")
+@pytest.mark.skipif(
+    shutil.which("ffmpeg") is None or os.environ.get("QWEN_BASELINE_OFFLINE") == "1",
+    reason="the fixture encoder is unavailable in the deterministic offline baseline",
+)
 def test_conform_states_emits_four_certified_state_directories(tmp_path: Path) -> None:
     """Exercise the public artifact path, including ffmpeg extraction and reports."""
     from PIL import Image

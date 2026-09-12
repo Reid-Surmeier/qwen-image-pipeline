@@ -130,6 +130,12 @@
       "evidence": "tests/test_cli.py proves saved input remains readable and the command performs no provider submission."
     },
     {
+      "material": "legacy-seedance-submit-command",
+      "path": "seedance/src/seedance_icons/cli.py",
+      "disposition": "compatibility adapter",
+      "evidence": "seedance/tests/test_submit_gate.py proves new submission is refused before provider access while exact recorded job polling remains available."
+    },
+    {
       "material": "neutral-qwen-adapter-fixtures",
       "path": "tests/test_qwen_adapter.py and modules/generation/inherited-qwen-adapter.test.ts",
       "disposition": "neutral fixture",
@@ -146,6 +152,12 @@
       "path": "qwen_ui_pipeline/cli.py before Issue #28",
       "disposition": "Git-history only",
       "evidence": "The build branch parent of the Issue #28 implementation preserves the prior direct provider caller for reversal and audit."
+    },
+    {
+      "material": "seedance-conductor-openrouter-kernel",
+      "path": "scripts/seedance-python-adapter.ts and seedance/src/seedance_icons/adapter_host.py",
+      "disposition": "retained implementation",
+      "evidence": "Issue #96 routes this closed stdio kernel only through Generation and Conductor; local fixtures prove exact references, one submission, exact-job polling, completion, rejection, ambiguity, and malformed evidence without provider calls."
     }
   ],
   "directProviderBypasses": [

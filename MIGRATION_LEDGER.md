@@ -34,7 +34,7 @@ These new version-1 surfaces delegate to Conductor now. The inherited callers ab
 | comfyui.QwenImage3TextToImage | Issue #29 migrates the ComfyUI node and proves saved-workflow compatibility. |
 | python-cli.generate | Issue #30 may remove the deprecated command after saved-input callers adopt Conductor plan and advance. |
 
-## Qwen material dispositions
+## Migration material dispositions
 
 These records keep implementation, compatibility, fixture, application evidence, and removed history distinct during migration.
 
@@ -43,8 +43,10 @@ These records keep implementation, compatibility, fixture, application evidence,
 | historical-application-generations | migration/muse-retirement.json and tests/fixtures/historical | application-owned | Issue #93 records per-file SHA-256 and exact history commit before retiring active demos; required fixture bytes are preserved. |
 | inherited-qwen-openrouter-kernel | qwen_ui_pipeline/qwen_adapter.py, qwen_ui_pipeline/qwen_adapter_host.py, and modules/generation/python-qwen-kernel-transport.ts | retained implementation | Tests prove a repository-owned stdio route, missing-key preflight, closed protocol input, exact model/count/resolution/aspect/seed/references, success, rejection, secret-context removal, and count mismatch. |
 | legacy-python-generate-command | qwen_ui_pipeline/cli.py | compatibility adapter | tests/test_cli.py proves saved input remains readable and the command performs no provider submission. |
+| legacy-seedance-submit-command | seedance/src/seedance_icons/cli.py | compatibility adapter | seedance/tests/test_submit_gate.py proves new submission is refused before provider access while exact recorded job polling remains available. |
 | neutral-qwen-adapter-fixtures | tests/test_qwen_adapter.py and modules/generation/inherited-qwen-adapter.test.ts | neutral fixture | A SHA-256-locked sanitized historical response plus hand-authored one-pixel RGBA truth and local dummy transports prove read compatibility, success, rejection, count, protocol, and credential mutations without provider calls. |
 | pre-conductor-python-direct-generate-body | qwen_ui_pipeline/cli.py before Issue #28 | Git-history only | The build branch parent of the Issue #28 implementation preserves the prior direct provider caller for reversal and audit. |
+| seedance-conductor-openrouter-kernel | scripts/seedance-python-adapter.ts and seedance/src/seedance_icons/adapter_host.py | retained implementation | Issue #96 routes this closed stdio kernel only through Generation and Conductor; local fixtures prove exact references, one submission, exact-job polling, completion, rejection, ambiguity, and malformed evidence without provider calls. |
 
 ## Direct-provider bypasses still present
 

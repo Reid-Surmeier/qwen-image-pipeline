@@ -27,6 +27,7 @@ PYTHON_COMMANDS = {
     ("scripts/validate_migration_ledger.py",),
     ("scripts/generate_module_map.py", "--check"),
     ("-m", "unittest", "discover", "-s", "tests"),
+    ("-m", "pytest", "-q", "seedance/tests"),
     ("-m", "compileall", "-q", "qwen_ui_pipeline", "tests", "scripts"),
 }
 NODE_COMMANDS = {
@@ -210,7 +211,7 @@ def build_environment(source: Mapping[str, str], repository: Path) -> dict[str, 
             "GIT_CONFIG_NOSYSTEM": "1",
             "LD_PRELOAD": str(_native_guard(repository)),
             "NODE_OPTIONS": f"--require={guard_directory / 'no_external_effects.cjs'}",
-            "PYTHONPATH": str(guard_directory),
+            "PYTHONPATH": os.pathsep.join((str(guard_directory), str(repository / "seedance/src"))),
             "PYTHONUTF8": "1",
             "QWEN_BASELINE_OFFLINE": "1",
             "QWEN_BASELINE_REPOSITORY": str(repository.resolve()),

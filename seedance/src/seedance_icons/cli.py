@@ -136,6 +136,11 @@ def cmd_wait(args: argparse.Namespace) -> None:
     client = OpenRouterVideoClient()
     try:
         job = client.wait(job_id, interval=args.interval, timeout=args.timeout)
+        if not isinstance(job, dict):
+            raise SystemExit("Provider polling returned no exact job identity")
+        nested = job.get("data") if isinstance(job.get("data"), dict) else {}
+        if (job.get("id") or nested.get("id")) != job_id:
+            raise SystemExit("Provider polling substituted the saved exact job identity")
         digest = client.download(job_id, run / "outputs" / "output.mp4")
     finally:
         client.close()
