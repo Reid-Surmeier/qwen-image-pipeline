@@ -76,6 +76,10 @@ _Avoid_: Reference list, Markdown attachment
 The Seedance-only immutable proof that no authoritative pixel ownership requires Assembly, together with expected output dimensions, duration, and audio presence.
 _Avoid_: “Assembly not needed” in prose, adapter default
 
+**Inferred Motion Waiver**:
+The exact `inferred-motion/v1` record shared by locked first/last image anchors when no authoritative motion video exists. It records provenance, behavior, timing, spatial permissions, cancel/restart behavior, and `historicalFidelity: false`.
+_Avoid_: Silent image-only Seedance input, claimed historical motion
+
 **Run Request**:
 The canonical provider-independent instructions produced from a valid Objective, Project Contract, Tool Lock, and Reference Plan.
 _Avoid_: Provider payload, loose request blob
@@ -145,6 +149,7 @@ _Avoid_: Retry token, persisted credential
 - A **Tool Lock** must exactly match one verified **Installed Tool Artifact** before planning. Before every advancement, the artifact bytes are reverified and the current **Project Contract**, selected **Procedure**, Tool Lock, and immutable Planned Run must still agree on application ownership, model, mode, provider, versions, count, cost, budget, paths, and reference requirements; Muse uses `1/3/1` while the retained Seedance procedure uses its existing profile; historical `1/2/1` and `1/1/1` records keep their recorded shapes.
 - One durable submission-may-have-started event may issue one in-process **Submission Permit**; replay issues none.
 - One Seedance **Submission Permit** may create one persisted provider job identity; every later advance polls only that identity and cannot submit another job.
+- A Seedance **Reference Plan** uses authoritative video by default. Exactly two locked still anchors may substitute only with one valid shared **Inferred Motion Waiver**; this records an inference and never upgrades it to historical fidelity.
 - A definitively failed pre-submit **Run Record** remains immutable and may be named by a distinct **Linked Run** whose relationship is fixed in its Run Request before reservation.
 - A **Linked Run** increments its replayed correction depth; a child cannot change the application or raise the inherited correction ceiling.
 - Possibly-spent or unknown work permits **Reconciliation** of its existing provider identity only. Ambiguity, malformed paid evidence, and output-count symptoms become the evidence-backed `submission_unreconciled` finding unless exact provider evidence proves more; they and interrupted post-submit persistence never authorize another paid submission. Repetition means verified failures across linked Runs, never multiple unverified artifacts in one Run; the inherited correction ceiling stops it. Budget exhaustion fails before reservation.

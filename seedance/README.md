@@ -5,18 +5,16 @@ storyboards into style-locked motion with OpenRouter and ByteDance Seedance.
 
 ## Addon boundary
 
-This directory is a self-contained addon to Qwen-3-pro-Pipeline (Issue #83), the same
-pattern as the `godot/` addon: it shares the repository, not the runtime.
+This directory retains the Seedance provider client and compatibility utilities used by
+the repository-owned animation adapter.
 
-- **Isolation**: everything the addon needs lives under `seedance/` — its own
-  `pyproject.toml`, package (`src/seedance_icons`), tests, templates, schemas, skills,
-  ADRs, and evidence. There are no imports in either direction between `qwen_ui_pipeline`
-  and `seedance_icons`, and `scripts/verify.sh` (the repo baseline) neither runs nor
-  depends on anything here.
+- **Execution**: new paid submissions enter through `image-pipeline animation`, Conductor,
+  and the application-owned Run Record. `seedance-icons submit` is retained only to issue
+  a deterministic retirement refusal before provider access.
 - **Paid policy**: the core repo's ADR 0003 allowance (`qwen/qwen-image-3-pro` image
   verification) does not cover this addon, and this addon does not extend it. Seedance
   video runs are governed by their own explicit cost gate (`docs/run-contract.md` here):
-  live estimate, human approval of the exact decimal, one submission per approval.
+  exact application budget, one durable submission permit, and one provider job identity.
 - **Skills**: agent skills live in `seedance/skills/` (not `.agents/skills/`, whose
   `to-spec` name is already taken by the locked skill set). Read them directly:
   `seedance/skills/to-spec/SKILL.md` is the entry point for spec-driven iteration.
@@ -58,15 +56,24 @@ seedance-icons plan templates/favicon-loop.json \
   --slug favicon-loop --capabilities capabilities.json
 ```
 
-The plan command prints an estimated upper-level request cost from OpenRouter's live video-token
-metadata. It does **not** submit. After inspecting the run and explicitly approving that exact
-amount:
+The retained plan command prints an estimated upper-level request cost from OpenRouter's live
+video-token metadata. It does **not** submit. New execution uses an application Project Contract,
+Tool Lock, and Objective:
 
 ```bash
-seedance-icons submit runs/<run> --acknowledge-cost <exact-estimate>
+image-pipeline animation --application /path/to/application --objective objectives/animation.json
+image-pipeline animation --application /path/to/application --objective objectives/animation.json \
+  --execute --acknowledge-cost <exact-planned-USD>
+
+# Existing recorded jobs only:
 seedance-icons wait runs/<run>
 seedance-icons verify runs/<run> --loop --first-anchor path/to/favicon.png
 ```
+
+Repeating the public command resumes the same hash-identified Run and never obtains another
+Submission Permit. An image-only Objective needs exactly `first-frame` and `last-frame` references
+with the same closed `inferred-motion/v1` authority reason; the record must name provenance,
+behavior, timing, spatial permissions, cancel/restart behavior, and `historicalFidelity: false`.
 
 `OPENROUTER_API_KEY` is read only for submit/poll/download. Do not commit it. See
 [the run contract](docs/run-contract.md), [model routing](docs/model-routing.md), and
@@ -101,4 +108,3 @@ This is an independent video-focused successor to the source-locked design philo
 `2a890169e6f2293676d06f2c1bdb6e8b67978de3`. It does not use Qwen. It preserves the useful
 Figma/ComfyUI principles: source authority, non-destructive variants, visible provenance,
 focused readback, and explicit acceptance gates.
-

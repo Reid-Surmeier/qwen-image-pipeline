@@ -16,14 +16,13 @@ from .capabilities import (
     validate_request,
 )
 from .openrouter import (
-    OpenRouterHTTPError,
     OpenRouterVideoClient,
     asset_reference,
     request_digest,
     sanitized_request,
 )
 from .runs import create_run, read_job_id, write_json
-from .strategy import DEFAULT_GRAMMAR, check_strategy, gate_record, submit_allowed
+from .strategy import DEFAULT_GRAMMAR, check_strategy, gate_record
 from .verify import verify_video
 
 
@@ -125,60 +124,10 @@ def cmd_plan(args: argparse.Namespace) -> None:
 
 
 def cmd_submit(args: argparse.Namespace) -> None:
-    run = Path(args.run)
-    payload_path = run / "request.payload.json"
-    if not payload_path.exists():
-        raise SystemExit(
-            "Missing request.payload.json; recreate the run plan from its source assets"
-        )
-    request = json.loads(payload_path.read_text())
-    plan = json.loads((run / "plan.json").read_text())
-    planned_digest = plan.get("request_sha256")
-    actual_digest = request_digest(request)
-    if not isinstance(planned_digest, str) or actual_digest != planned_digest:
-        raise SystemExit(
-            "Request payload changed since planning; recreate the plan and obtain a "
-            "new exact cost acknowledgement"
-        )
-    allowed, reason = submit_allowed(plan)
-    if not allowed:
-        raise SystemExit(f"Strategy gate refuses submission: {reason}")
-    required = Decimal(plan["estimated_cost_usd"])
-    acknowledged = Decimal(args.acknowledge_cost)
-    if acknowledged != required:
-        raise SystemExit(
-            f"Cost acknowledgement mismatch: pass --acknowledge-cost {required} after explicit approval"
-        )
-    profiles = fetch_profiles()
-    profile = profiles[request["model"]]
-    if profile.canonical_slug != plan["canonical_slug"]:
-        raise SystemExit(
-            "Live canonical model changed since planning; create and approve a new plan"
-        )
-    validate_request(request, profile)
-    client = OpenRouterVideoClient()
-    try:
-        plan.update(
-            {
-                "paid_submission_performed": True,
-                "submission_status": "submitting",
-                "billing_status": "possibly_spent",
-                "safe_to_retry": False,
-            }
-        )
-        write_json(run / "plan.json", plan)
-        job = client.submit(request)
-    except OpenRouterHTTPError as error:
-        plan["submission_status"] = "failed"
-        write_json(run / "plan.json", plan)
-        write_json(run / "provider-error.json", error.to_record())
-        raise
-    finally:
-        client.close()
-    write_json(run / "job.json", job)
-    plan["submission_status"] = "accepted"
-    write_json(run / "plan.json", plan)
-    print(json.dumps(job, indent=2))
+    raise SystemExit(
+        "Legacy Seedance submission is retired; use image-pipeline animation "
+        "--application PATH --objective PATH --execute."
+    )
 
 
 def cmd_wait(args: argparse.Namespace) -> None:
@@ -187,6 +136,11 @@ def cmd_wait(args: argparse.Namespace) -> None:
     client = OpenRouterVideoClient()
     try:
         job = client.wait(job_id, interval=args.interval, timeout=args.timeout)
+        if not isinstance(job, dict):
+            raise SystemExit("Provider polling returned no exact job identity")
+        nested = job.get("data") if isinstance(job.get("data"), dict) else {}
+        if (job.get("id") or nested.get("id")) != job_id:
+            raise SystemExit("Provider polling substituted the saved exact job identity")
         digest = client.download(job_id, run / "outputs" / "output.mp4")
     finally:
         client.close()
@@ -301,7 +255,7 @@ def parser() -> argparse.ArgumentParser:
         ),
     )
     plan.set_defaults(func=cmd_plan)
-    submit = sub.add_parser("submit", help="Submit exactly one approved paid request")
+    submit = sub.add_parser("submit", help="Retired compatibility command; always refuses")
     submit.add_argument("run")
     submit.add_argument("--acknowledge-cost", required=True)
     submit.set_defaults(func=cmd_submit)

@@ -9,6 +9,7 @@ import { Effect } from "effect"
 import { advance, plan, ApplicationFiles, MediaInspector, PlanningIdentity, byteMediaInspector, fileApplicationFiles, filePlanningIdentity } from "../modules/conductor/index.js"
 import { GenerationAdapter, inheritedQwenPythonAdapter } from "../modules/generation/index.js"
 import { fileRunRecordLayer, RunRecordClock, materializeMuseImage, readDiagnostics } from "../modules/run-record/index.js"
+import { seedancePythonAdapter } from "./seedance-python-adapter.js"
 
 import { assembleProductRecipe } from "../modules/assembly/index.js"
 import { pythonImageInspector } from "../modules/reference-planning/index.js"
@@ -16,13 +17,12 @@ import { pythonImageInspector } from "../modules/reference-planning/index.js"
 const toolRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const [command = "help", ...arguments_] = process.argv.slice(2)
 if (command === "help") {
-  console.log("image-pipeline identity | prepare --application PATH --recipe PATH --unit-cost USD --budget USD | image --application PATH --objective PATH [--execute] [--select-donor SHA] | export-donor --application PATH --run ID --recipe PATH --output PATH | product <packet options> | assemble --application PATH --recipe PATH | animation <seedance-icons arguments>")
+  console.log("image-pipeline identity | prepare --application PATH --recipe PATH --unit-cost USD --budget USD | image --application PATH --objective PATH [--execute] [--select-donor SHA] | export-donor --application PATH --run ID --recipe PATH --output PATH | product <packet options> | assemble --application PATH --recipe PATH | animation --application PATH --objective PATH [--execute --acknowledge-cost USD] | animation plan|wait|retro-conform|retro-conform-states|verify <legacy utility arguments>")
 } else if (command === "product") {
   await Effect.runPromise(filePlanningIdentity(toolRoot))
   const child = spawnSync(process.execPath, [join(toolRoot, "procedures/muse/product-plan.mjs"), ...arguments_], { stdio: "inherit" })
   process.exitCode = child.status ?? 1
-} else if (command === "animation") {
-  // Preserve the existing Seedance CLI, including its explicit cost and strategy gates.
+} else if (command === "animation" && !arguments_.includes("--application")) {
   await Effect.runPromise(filePlanningIdentity(toolRoot))
   const child = spawnSync("/usr/bin/python3", ["-m", "seedance_icons.cli", ...arguments_], {
     env: { ...process.env, PYTHONPATH: join(toolRoot, "seedance/src"), PYTHONDONTWRITEBYTECODE: "1" }, stdio: "inherit",
@@ -32,9 +32,9 @@ if (command === "help") {
   const program = Effect.gen(function*() {
     const identity = yield* filePlanningIdentity(toolRoot)
     if (command === "identity") { console.log(JSON.stringify(identity.installedTool, null, 2)); return }
-    if (command !== "image" && command !== "prepare" && command !== "assemble" && command !== "export-donor") throw new Error("Unknown command; use help.")
+    if (command !== "image" && command !== "animation" && command !== "prepare" && command !== "assemble" && command !== "export-donor") throw new Error("Unknown command; use help.")
     const { values } = parseArgs({ args: arguments_, options: {
-      run: { type: "string" }, output: { type: "string" }, recipe: { type: "string" }, "unit-cost": { type: "string" }, budget: { type: "string" }, application: { type: "string" }, objective: { type: "string" }, execute: { type: "boolean" }, "select-donor": { type: "string" },
+      run: { type: "string" }, output: { type: "string" }, recipe: { type: "string" }, "unit-cost": { type: "string" }, budget: { type: "string" }, application: { type: "string" }, objective: { type: "string" }, execute: { type: "boolean" }, "select-donor": { type: "string" }, "acknowledge-cost": { type: "string" },
     } })
     if (!values.application) throw new Error("An application root is required.")
     const applicationRoot = resolve(values.application)
@@ -132,14 +132,20 @@ if (command === "help") {
       console.log(JSON.stringify({ procedure: recipe.procedure, model: "meta/muse-image", objective: objectivePath, paidRequests: 0, nextAction: "Run image with this objective to inspect the plan; add --execute only for authorized spending." }, null, 2))
       return
     }
-    if (!values.objective) throw new Error("Image requires an application-relative Objective path.")
+    if (!values.objective) throw new Error(`${command === "animation" ? "Animation" : "Image"} requires an application-relative Objective path.`)
     const files = yield* fileApplicationFiles(applicationRoot)
     const planned = yield* plan({ objectivePath: values.objective }).pipe(
-      Effect.provideService(ApplicationFiles, files), Effect.provideService(MediaInspector, pythonImageInspector(toolRoot)), Effect.provideService(PlanningIdentity, identity),
+      Effect.provideService(ApplicationFiles, files), Effect.provideService(MediaInspector, command === "animation" ? byteMediaInspector : pythonImageInspector(toolRoot)), Effect.provideService(PlanningIdentity, identity),
     )
     if (planned._tag !== "Planned") { console.log(JSON.stringify(planned, null, 2)); process.exitCode = 2; return }
-    if (planned.run.request.mode !== "muse-image") throw new Error("The image command requires the saved Muse procedure. Use animation for Seedance.")
+    if (command === "animation" ? planned.run.request.mode !== "seedance-video" : planned.run.request.mode !== "muse-image") {
+      throw new Error(command === "animation" ? "The animation command requires a Seedance procedure." : "The image command requires the saved Muse procedure. Use animation for Seedance.")
+    }
+    if (command === "animation" && planned.run.request.requestedCount !== 1) throw new Error("The public animation command produces exactly one video output.")
     if (!values.execute) { console.log(JSON.stringify(planned, null, 2)); return }
+    if (command === "animation" && values["acknowledge-cost"] !== planned.run.request.estimatedMaximumCostUsd) {
+      throw new Error(`Animation execution requires --acknowledge-cost ${planned.run.request.estimatedMaximumCostUsd} after explicit approval.`)
+    }
     if (values.run === "") throw new Error("A non-empty recorded Run identity is required.")
     // Python runs from the verified distribution, while all file services retain the application root.
     process.chdir(toolRoot)
@@ -148,7 +154,7 @@ if (command === "help") {
       const saved = yield* readDiagnostics(values.run).pipe(Effect.provide(store))
       if (saved.view.requestSha256 !== planned.run.requestSha256 || !saved.view.evidence.some(item => item.applicationPath === "provider-response.json")) throw new Error("Unpaid resume requires this objective's authenticated provider receipt.")
     }
-    const adapter = yield* inheritedQwenPythonAdapter(values.run !== undefined)
+    const adapter = command === "animation" ? yield* seedancePythonAdapter(toolRoot) : yield* inheritedQwenPythonAdapter(values.run !== undefined)
     const decision = yield* advance({ run: planned.run, ...(values["select-donor"] ? { selectedDonorSha256: values["select-donor"] } : {}) }).pipe(
       Effect.provideService(ApplicationFiles, files), Effect.provideService(PlanningIdentity, identity),
       Effect.provideService(GenerationAdapter, adapter), Effect.provide(store),
@@ -156,7 +162,7 @@ if (command === "help") {
     )
     const diagnostics = "diagnostics" in decision ? decision.diagnostics : undefined
     const runRoot = "runId" in decision ? join(applicationRoot, planned.run.request.artifactRoot, "runs", decision.runId) : undefined
-    const native = diagnostics !== undefined && runRoot !== undefined && (decision._tag === "HumanDecisionRequired" || decision._tag === "VerifiedCandidate")
+    const native = command !== "animation" && diagnostics !== undefined && runRoot !== undefined && (decision._tag === "HumanDecisionRequired" || decision._tag === "VerifiedCandidate")
       ? yield* materializeMuseImage(diagnostics.view.runId).pipe(Effect.provide(store)) : undefined
     console.log(JSON.stringify({
       source: planned.run.request.references.map(reference => join(applicationRoot, reference.applicationPath)),
@@ -169,5 +175,5 @@ if (command === "help") {
     }, null, 2))
     if (decision._tag !== "HumanDecisionRequired" && decision._tag !== "VerifiedCandidate") process.exitCode = 2
   })
-  await Effect.runPromise(program).catch(() => { console.error("The image procedure stopped. Check the application contract, tool lock and saved run; never blindly resubmit a possibly spent run."); process.exitCode = 2 })
+  await Effect.runPromise(program).catch(() => { console.error(`The ${command} procedure stopped. Check the application contract, tool lock and saved run; never blindly resubmit a possibly spent run.`); process.exitCode = 2 })
 }

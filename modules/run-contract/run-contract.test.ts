@@ -15,7 +15,7 @@ import {
   filePlanningIdentity,
   verifyPlannedRunIdentity,
 } from "./index.js"
-import { FIXTURE_TOOL, UNSUPPORTED_FIXTURE_IDENTITY, UPGRADED_FIXTURE_IDENTITY, makeFixture } from "../../tests/control-plane-fixture.js"
+import { FIXTURE_TOOL, UNSUPPORTED_FIXTURE_IDENTITY, UPGRADED_FIXTURE_IDENTITY, makeFixture, sha256 } from "../../tests/control-plane-fixture.js"
 
 const compileFixture = (
   fixture: ReturnType<typeof makeFixture>,
@@ -439,6 +439,57 @@ test("locks an explicit no-Assembly proof and expected media into a Seedance Run
       audioExpected: false,
     },
   })
+})
+
+const inferredMotionFixture = (authorityReason: string) => {
+  let image: Uint8Array<ArrayBufferLike> = new Uint8Array()
+  makeFixture("qwen-image", { files: (files) => { image = files.get("references/neutral.png")! } })
+  return makeFixture("seedance-video", {
+    contract: (contract) => {
+      const procedure = (contract.procedures as Array<Record<string, unknown>>).find((item) => item.id === "seedance-neutral")!
+      procedure.referenceRequirements = [
+        { slot: "first-frame", kind: "image", payloadDestination: "/input_references/0/image_url/url" },
+        { slot: "last-frame", kind: "image", payloadDestination: "/input_references/1/image_url/url" },
+      ]
+    },
+    objective: (objective) => {
+      objective.references = ["first-frame", "last-frame"].map((slot, index) => ({
+        slot,
+        path: `references/${slot}.png`,
+        sha256: sha256(image),
+        kind: "image",
+        authorityReason,
+        payloadDestination: `/input_references/${index}/image_url/url`,
+        declaredMedia: { width: 1, height: 1 },
+      }))
+    },
+    files: (files) => {
+      files.delete("references/neutral.mp4")
+      files.set("references/first-frame.png", image)
+      files.set("references/last-frame.png", image)
+    },
+  })
+}
+
+test("admits only a versioned inferred-motion waiver with locked first and last still anchors", async () => {
+  const waiver = "inferred-motion/v1:" + JSON.stringify({
+    provenance: "No authoritative motion capture exists; behavior is inferred from the interaction contract.",
+    behavior: "Translate the intact control upward and return without deformation.",
+    timing: "Hold 0.6s, move 0.6s, return 0.8s, then hold through 4.0s.",
+    spatialPermissions: "Only the shared vertical position may change by at most 14 pixels.",
+    cancelRestart: "Cancellation restores the first anchor; restart begins from the first anchor.",
+    historicalFidelity: false,
+  })
+  const planned = await compileFixture(inferredMotionFixture(waiver))
+  assert.deepEqual(planned.request.references.map((reference) => reference.slot), ["first-frame", "last-frame"])
+  assert.equal(planned.request.references.every((reference) => reference.authorityReason === waiver), true)
+
+  await assert.rejects(
+    compileFixture(inferredMotionFixture("inferred-motion/v1:" + JSON.stringify({
+      provenance: "Inferred.", behavior: "Move.", timing: "Four seconds.", spatialPermissions: "Vertical only.", historicalFidelity: false,
+    }))),
+    (error: unknown) => error instanceof Error && "code" in error && error.code === "SEEDANCE_VIDEO_REFERENCE_REQUIRED",
+  )
 })
 
 test("refuses Seedance when no validated no-Assembly proof reaches the Run Request", async (context) => {

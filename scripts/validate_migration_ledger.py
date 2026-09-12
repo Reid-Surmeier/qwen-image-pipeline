@@ -246,7 +246,7 @@ def render_markdown(document: dict[str, Any]) -> str:
             "| --- | --- |",
             *compatibility_rows,
             "",
-            "## Qwen material dispositions",
+            "## Migration material dispositions",
             "",
             "These records keep implementation, compatibility, fixture, application evidence, and removed history distinct during migration.",
             "",

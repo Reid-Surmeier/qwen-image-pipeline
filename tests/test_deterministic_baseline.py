@@ -47,6 +47,7 @@ class DeterministicBaselineTests(unittest.TestCase):
 
     def test_only_the_documented_baseline_commands_are_allowed(self) -> None:
         validate_command(("@python", "-m", "unittest", "discover", "-s", "tests"))
+        validate_command(("@python", "-m", "pytest", "-q", "seedance/tests"))
         validate_command(("@git", "diff", "--check"))
         validate_command(("@node", "node_modules/typescript/bin/tsc", "-p", "tsconfig.json"))
         validate_command(
@@ -81,6 +82,7 @@ class DeterministicBaselineTests(unittest.TestCase):
         self.assertNotIn("BWS_ACCESS_TOKEN", environment)
         self.assertEqual(environment["QWEN_BASELINE_OFFLINE"], "1")
         self.assertIn("baseline_guard", environment["PYTHONPATH"])
+        self.assertIn("seedance/src", environment["PYTHONPATH"])
         self.assertIn("no_external_effects.cjs", environment["NODE_OPTIONS"])
         self.assertIn("no_external_effects-", environment["LD_PRELOAD"])
         self.assertTrue(environment["PATH"].endswith(":/usr/bin:/bin"))
