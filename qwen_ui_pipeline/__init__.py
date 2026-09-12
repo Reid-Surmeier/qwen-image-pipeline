@@ -59,6 +59,11 @@ from .providers.openrouter import (
     build_openrouter_request,
     write_run_artifacts,
 )
+from .qwen_adapter import (
+    QWEN_ADAPTER_PROTOCOL_VERSION,
+    QwenKernelError,
+    invoke_qwen_kernel,
+)
 
 __all__ = [
     "PaletteComparison",
@@ -107,6 +112,9 @@ __all__ = [
     "compile_edit_brief",
     "write_run_artifacts",
     "generate_with_provider",
+    "QWEN_ADAPTER_PROTOCOL_VERSION",
+    "QwenKernelError",
+    "invoke_qwen_kernel",
     "plan_capacity_scenarios",
     "plan_worker_capacity",
 ]

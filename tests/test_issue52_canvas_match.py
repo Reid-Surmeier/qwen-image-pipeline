@@ -9,7 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 
-SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "issue52_canvas_match.py"
+SCRIPT = Path(__file__).resolve().parent / "fixtures" / "historical" / "scripts" / "issue52_canvas_match.py"
 SPEC = importlib.util.spec_from_file_location("issue52_canvas_match", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)
 assert SPEC.loader is not None

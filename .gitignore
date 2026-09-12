@@ -2,8 +2,14 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .pytest_cache/
+node_modules/
+.control-tests-*/
 
 # Discovery screenshots are reproducible from the Figma board.
 artifacts/figma/candidates/
 artifacts/figma/uploaded-node-4-146.png
 artifacts/figma/uploaded-node-4-147.png
+
+.tool-builds/
+.tool-current
+.tool-current-*.tmp

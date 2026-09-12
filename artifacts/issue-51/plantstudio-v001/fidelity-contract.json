@@ -1,8 +1,0 @@
-{
-  "width": 474,
-  "height": 403,
-  "approvedBaseline": "../../references/plantstudio-main-window.png",
-  "mutableRegions": [
-    { "name": "title-bar-caption", "x": 4, "y": 4, "width": 466, "height": 18 }
-  ]
-}

@@ -103,6 +103,8 @@ class OpenRouterImageClient:
         self._timeout = timeout
 
     def generate(self, request_body: Mapping[str, Any]) -> dict[str, Any]:
+        if request_body.get("model") != "meta/muse-image":
+            raise ValueError("Qwen image generation is retired; use the saved Muse procedure through image-pipeline")
         body = json.dumps(dict(request_body)).encode("utf-8")
         request = urllib.request.Request(
             self._endpoint,

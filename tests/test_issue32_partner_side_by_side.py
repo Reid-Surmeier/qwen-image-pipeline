@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[1] / "tests/fixtures/historical"
 RUN = ROOT / "artifacts/issue-32/partner-side-by-side-v001"
 
 

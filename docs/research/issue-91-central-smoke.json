@@ -1,0 +1,41 @@
+{
+  "application": "/home/reidsurmeier/orca/workspaces/vibe-dis-composites/issue-41-30-ad-gallery/.muse-central-smoke-n28t1zos",
+  "paidCalls": 0,
+  "injectedRecordedResponse": true,
+  "runId": "run-f504d62092d1e2eb015692e3",
+  "pipeline": [
+    "product",
+    "prepare",
+    "plan",
+    "advance with recorded response",
+    "export-donor",
+    "assemble",
+    "resume without key"
+  ],
+  "outputSha256": "29ac88a3439e9635a12752669213c9cf60d328ffd457e477e0cfeb70bf869073",
+  "checks": {
+    "assembly": "passed",
+    "finalOcrThreshold": "passed",
+    "independentVisualReview": "unverified"
+  },
+  "compactReport": {
+    "source": [],
+    "result": [
+      {
+        "path": "/home/reidsurmeier/orca/workspaces/vibe-dis-composites/issue-41-30-ad-gallery/.muse-central-smoke-n28t1zos/artifacts/image-generation/runs/run-f504d62092d1e2eb015692e3/materialized/image-01.png",
+        "mediaType": "image/png",
+        "sha256": "6e1b099caa3fbd7c2470265122259e78e6e46d8ee7d648d2ee340cd9d19284fb"
+      }
+    ],
+    "changesRequested": "Create one serious late-1990s commercial product photograph of PrivacyBlock 120 Plus, manufactured by DIS Closure Technologies. It is a broad charcoal office printer with a stainless mixing drum, concrete cartridge bay, reinforced output cradle and wheeled block trolley. Its visible hardware must make this function materially believable: it casts every printed page inside a numbered quick-setting concrete block before it leaves the machine. Show convincing injection-molded or fabricated parts, seams, controls, fasteners, accessories and service panels. Neutral white studio sweep, catalog lighting, complete product visible, realistic mass-manufactured industrial design. No people. No surreal sculpture. No comedy styling. Do not design an advertisement, page layout, logo, headline or readable body text.\n\nPresentation strategy:\nShow a dominant three-quarter hero view and one smaller matching side or closed view of the exact same manufactured model. Keep both complete, coherent and clearly related. Include only mechanically relevant accessories.\nUse one continuous neutral white late-1990s catalog studio sweep. Keep generous clean white space around every object. Do not crop the product. Do not render a page, border, caption, measurement, arrow, logo, brand mark or any readable text.",
+    "checks": {
+      "outcome": "human_decision_required",
+      "evidence": "The image and provider receipt are saved. Visual fidelity and approval remain unverified.",
+      "visualReview": "unverified"
+    },
+    "cost": "0.010000",
+    "nextAction": "Inspect the saved image beside its source. Record visual review in the application.",
+    "fullRecord": "/home/reidsurmeier/orca/workspaces/vibe-dis-composites/issue-41-30-ad-gallery/.muse-central-smoke-n28t1zos/artifacts/image-generation/runs/run-f504d62092d1e2eb015692e3"
+  },
+  "savedAssemblyRecipe": "/home/reidsurmeier/orca/workspaces/vibe-dis-composites/issue-41-30-ad-gallery/.muse-central-smoke-n28t1zos/assembly-recipe.json"
+}

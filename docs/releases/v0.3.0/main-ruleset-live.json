@@ -1,0 +1,79 @@
+{
+  "id": 21881100,
+  "name": "main is release-only",
+  "target": "branch",
+  "source_type": "Repository",
+  "source": "Reid-Surmeier/qwen-image-pipeline",
+  "enforcement": "active",
+  "conditions": {
+    "ref_name": {
+      "exclude": [],
+      "include": [
+        "refs/heads/main"
+      ]
+    }
+  },
+  "rules": [
+    {
+      "type": "deletion"
+    },
+    {
+      "type": "non_fast_forward"
+    },
+    {
+      "type": "pull_request",
+      "parameters": {
+        "required_approving_review_count": 0,
+        "dismiss_stale_reviews_on_push": true,
+        "required_reviewers": [],
+        "require_code_owner_review": false,
+        "require_last_push_approval": false,
+        "required_review_thread_resolution": false,
+        "require_extra_approval_for_unattributed_changes": true,
+        "allowed_merge_methods": [
+          "merge"
+        ]
+      }
+    },
+    {
+      "type": "required_status_checks",
+      "parameters": {
+        "strict_required_status_checks_policy": true,
+        "do_not_enforce_on_create": false,
+        "required_status_checks": [
+          {
+            "context": "release-train",
+            "integration_id": 15368
+          }
+        ]
+      }
+    },
+    {
+      "type": "required_deployments",
+      "parameters": {
+        "required_deployment_environments": [
+          "release-train"
+        ]
+      }
+    }
+  ],
+  "node_id": "RRS_lACqUmVwb3NpdG9yec5Qj4ZezgFN4Qw",
+  "created_at": "2026-08-30T17:51:27.729-04:00",
+  "updated_at": "2026-08-30T18:23:58.669-04:00",
+  "bypass_actors": [
+    {
+      "actor_id": 304586061,
+      "actor_type": "User",
+      "bypass_mode": "always"
+    }
+  ],
+  "current_user_can_bypass": "always",
+  "_links": {
+    "self": {
+      "href": "https://api.github.com/repos/Reid-Surmeier/qwen-image-pipeline/rulesets/21881100"
+    },
+    "html": {
+      "href": "https://github.com/Reid-Surmeier/qwen-image-pipeline/rules/21881100"
+    }
+  }
+}

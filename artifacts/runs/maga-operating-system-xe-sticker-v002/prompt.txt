@@ -1,6 +1,0 @@
-Use case: precise-object-edit
-Asset type: OEM laptop certification sticker variant
-Input image: edit target; preserve it as the exact source for everything except the vertical height of the American-flag symbol.
-Primary request: Make ONLY the American-flag symbol at the top noticeably shorter vertically and flatter, approximately 30 percent less tall, while keeping its current width, horizontal position, waving outer silhouette, blue canton, stars, red-and-white stripes, and continuous single-piece construction. The result should read as a shallow, wide waving flag rather than a tall flag.
-Invariants: Keep the entire metallic silver-pearl sticker, portrait proportions, rounded corners, inset border, lighting, texture, TM placement, exact text "Designed for", divider line, exact text "MAGA®", and exact text "Operating System XE" unchanged. Preserve the current typography, spelling, sizing, alignment, and spacing. Keep the flag free of Windows-style cross gaps or pane dividers.
-Avoid: any other redesign, text changes, cropping, added text, Microsoft/Windows/XP wording, four separated panes, internal cross lines, or changing the sticker dimensions.

@@ -12,7 +12,8 @@ import unittest
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-ANNOTATIONS = REPO / "artifacts" / "issue-26" / "annotations"
+FIXTURES = REPO / "tests/fixtures/historical"
+ANNOTATIONS = FIXTURES / "artifacts" / "issue-26" / "annotations"
 TAXONOMY = REPO / "docs" / "research" / "visual-failure-taxonomy.md"
 
 ALLOWED_ROLES = {
@@ -61,7 +62,7 @@ class VisualFailureAnnotationTests(unittest.TestCase):
                 self.assertIn(record["disposition"], ALLOWED_DISPOSITIONS)
                 self.assertTrue(record["annotator"], "annotator is required")
 
-                artifact = REPO / record["artifact_path"]
+                artifact = FIXTURES / record["artifact_path"]
                 self.assertTrue(artifact.is_file(), f"missing artifact {record['artifact_path']}")
                 digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
                 self.assertEqual(digest, record["sha256"], f"hash drift for {record['artifact_path']}")

@@ -131,31 +131,6 @@ class AlibabaImageClientTests(unittest.TestCase):
         self.assertEqual(request["parameters"]["size"], "2048*1152")
         self.assertNotIn("negative_prompt", request["parameters"])
 
-    def test_normalizes_expiring_result_urls_to_image_bytes_immediately(self):
-        captured = {}
-
-        def open_request(request, *, timeout):
-            if isinstance(request, str):
-                return _Response(b"png-bytes", "image/png")
-            captured["authorization"] = request.get_header("Authorization")
-            payload = {
-                "output": {
-                    "choices": [
-                        {"message": {"content": [{"image": "https://result/image.png"}]}}
-                    ]
-                },
-                "usage": {"output_image_count": 1},
-                "request_id": "request-1",
-            }
-            return _Response(json.dumps(payload).encode())
-
-        client = AlibabaImageClient("test-key", opener=open_request)
-        response = client.generate({"model": "qwen-image-3.0-pro"})
-
-        self.assertEqual(captured["authorization"], "Bearer test-key")
-        self.assertEqual(response["data"][0]["b64_json"], "cG5nLWJ5dGVz")
-        self.assertEqual(response["data"][0]["media_type"], "image/png")
-        self.assertEqual(response["request_id"], "request-1")
 
 
 if __name__ == "__main__":
@@ -187,27 +162,3 @@ class AlibabaTimeout(unittest.TestCase):
             raise urllib.error.URLError("stop here")
 
         return seen, opener
-
-    def test_the_override_reaches_the_request(self) -> None:
-        os.environ["QWEN_OPENROUTER_TIMEOUT_SECONDS"] = "900"
-        seen, opener = self._capture()
-        client = AlibabaImageClient("k", opener=opener)
-        with self.assertRaises(Exception):
-            client.generate({"model": "qwen-image-3.0-pro", "input": {}})
-        self.assertEqual(seen["timeout"], 900.0)
-
-    def test_an_explicit_timeout_wins(self) -> None:
-        seen, opener = self._capture()
-        client = AlibabaImageClient("k", opener=opener, timeout=42)
-        with self.assertRaises(Exception):
-            client.generate({"model": "qwen-image-3.0-pro", "input": {}})
-        self.assertEqual(seen["timeout"], 42.0)
-
-    def test_the_default_is_no_longer_a_literal(self) -> None:
-        from qwen_ui_pipeline.providers.openrouter import DEFAULT_TIMEOUT_SECONDS
-
-        seen, opener = self._capture()
-        client = AlibabaImageClient("k", opener=opener)
-        with self.assertRaises(Exception):
-            client.generate({"model": "qwen-image-3.0-pro", "input": {}})
-        self.assertEqual(seen["timeout"], float(DEFAULT_TIMEOUT_SECONDS))

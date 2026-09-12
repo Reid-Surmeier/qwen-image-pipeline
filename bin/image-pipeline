@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+pipeline_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ ! -f "$pipeline_root/.tool-current/scripts/image-pipeline.js" ]]; then
+  echo "Build the callable tool first: node scripts/package-tool.mjs" >&2
+  exit 2
+fi
+exec node "$pipeline_root/.tool-current/scripts/image-pipeline.js" "$@"

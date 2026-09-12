@@ -3,10 +3,14 @@ requires = ["setuptools>=75"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "qwen-ui-pipeline"
-version = "0.1.0"
-description = "Reference-preserving Qwen Image UI generation pipeline"
+name = "image-generation-pipline"
+version = "0.3.0"
+description = "Saved Muse image procedures and reference-preserving Assembly"
 requires-python = ">=3.12"
+dependencies = ["Pillow>=10,<12"]
+
+[project.optional-dependencies]
+product-ads = ["numpy>=1.24,<3", "opencv-python-headless>=4.6,<6"]
 
 [project.scripts]
 qwen-ui-pipeline = "qwen_ui_pipeline.cli:main"

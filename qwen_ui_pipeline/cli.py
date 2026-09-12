@@ -7,8 +7,6 @@ import base64
 import hashlib
 import json
 import mimetypes
-import os
-from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
@@ -19,13 +17,10 @@ from .comfyui_workflow import (
 )
 from .prompt_manifest import compile_edit_brief
 from .providers.openrouter import (
-    OpenRouterImageClient,
-    resolve_timeout_seconds,
     build_openrouter_request,
     write_run_artifacts,
 )
-from .providers.alibaba import AlibabaImageClient, build_alibaba_request
-from .providers.router import generate_with_provider
+from .providers.alibaba import build_alibaba_request
 
 
 def image_data_url(path: Path) -> str:
@@ -39,11 +34,6 @@ def _load_brief(path: Path) -> dict:
     if not isinstance(value, dict):
         raise ValueError("Edit Brief must be a JSON object")
     return value
-
-
-def _default_run_directory() -> Path:
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    return Path("artifacts/runs") / timestamp
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -159,6 +149,28 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(args.output)
         return 0
 
+    if args.command == "generate":
+        print(
+            json.dumps(
+                {
+                    "schema_version": "1",
+                    "adapter_protocol_version": "1",
+                    "surface": "python-cli.generate",
+                    "status": "deprecated",
+                    "replacement": ["Conductor.plan", "Conductor.advance"],
+                    "saved_input": brief,
+                    "next_action": (
+                        "Place this objective in the application repository with its Project "
+                        "Contract, Tool Lock, and references, then use Conductor.plan and "
+                        "Conductor.advance. This compatibility command performs no submission."
+                    ),
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 2
+
     reference_urls = [image_data_url(path) for path in args.reference]
 
     if args.command == "record-comfy":
@@ -196,32 +208,4 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps({"output_directory": str(args.output_dir), **record}, indent=2))
         return 0
 
-    openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
-    alibaba_key = os.environ.get("DASHSCOPE_API_KEY", "")
-    result = generate_with_provider(
-        brief,
-        reference_urls=reference_urls,
-        openrouter_client=(
-            OpenRouterImageClient(openrouter_key, timeout=resolve_timeout_seconds())
-            if openrouter_key
-            else None
-        ),
-        alibaba_client=(
-            AlibabaImageClient(alibaba_key, timeout=resolve_timeout_seconds())
-            if alibaba_key
-            else None
-        ),
-    )
-    output_directory = args.output_dir or _default_run_directory()
-    record = write_run_artifacts(
-        output_directory,
-        brief,
-        result.request,
-        result.response,
-        provenance={
-            "provider": result.provider,
-            "prompt_id": result.response.get("request_id"),
-        },
-    )
-    print(json.dumps({"output_directory": str(output_directory), **record}, indent=2))
-    return 0
+    raise AssertionError(f"unhandled command: {args.command}")

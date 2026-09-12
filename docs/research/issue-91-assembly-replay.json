@@ -1,0 +1,11 @@
+{
+  "sourceCommit": "6c1ac2cad9213823183d23823fe30d50b882678d",
+  "sourceOutput": ".muse-port-replay-any5aj3h/original/final/01-privacyblock-120-plus-kodak-hero.webp",
+  "portedOutput": ".muse-port-replay-any5aj3h/ported/final/01-privacyblock-120-plus-kodak-hero.webp",
+  "outputSha256": "29ac88a3439e9635a12752669213c9cf60d328ffd457e477e0cfeb70bf869073",
+  "equalPixels": true,
+  "changedPixelsOutsideDeclaredMasks": 0,
+  "ocrTokenCoverage": 0.975,
+  "visualApproval": "unverified",
+  "paidCalls": 0
+}

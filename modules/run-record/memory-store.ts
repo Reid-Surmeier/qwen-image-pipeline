@@ -1,0 +1,145 @@
+import { Effect, Layer } from "effect"
+
+import { RunRecordError } from "./errors.js"
+import { RunRecordStore } from "./types.js"
+import type {
+  RunRecordStoreService,
+  StoredRunRecord,
+  StoreOperation,
+} from "./types.js"
+
+export type MemoryRunRecordHarness = Readonly<{
+  layer: Layer.Layer<RunRecordStoreService>
+  failNext: (operation: StoreOperation, count?: number) => Effect.Effect<void>
+  failAfter: (operation: StoreOperation, successfulCalls: number, count?: number) => Effect.Effect<void>
+  mutate: (runId: string, mutation: (record: {
+    request: Uint8Array
+    events: Uint8Array
+    state?: Uint8Array
+    evidence: Record<string, Uint8Array>
+  }) => void) => Effect.Effect<void, RunRecordError>
+}>
+
+export const makeMemoryRunRecordHarness = (): Effect.Effect<MemoryRunRecordHarness> => Effect.sync(() => {
+  const records = new Map<string, {
+    request: Uint8Array
+    events: Uint8Array
+    state?: Uint8Array
+    evidence: Record<string, Uint8Array>
+  }>()
+  let failing: Readonly<{ operation: StoreOperation; successfulCalls: number; remaining: number }> | undefined
+
+  const check = (operation: StoreOperation): Effect.Effect<void, RunRecordError> => {
+    if (failing?.operation !== operation) return Effect.void
+    if (failing.successfulCalls > 0) {
+      failing = { ...failing, successfulCalls: failing.successfulCalls - 1 }
+      return Effect.void
+    }
+    const remaining = failing.remaining - 1
+    failing = remaining === 0 ? undefined : { ...failing, remaining }
+    return Effect.fail(new RunRecordError("DURABILITY_FAILURE", `${operation} was interrupted.`))
+  }
+
+  const get = (runId: string) => {
+    const record = records.get(runId)
+    if (!record) throw new RunRecordError("RUN_NOT_FOUND", `${runId} does not exist.`)
+    return record
+  }
+
+  const service: RunRecordStoreService = {
+    create: (runId, request, firstEvent, state) => check("create").pipe(
+      Effect.flatMap(() => {
+        if (records.has(runId)) {
+          return Effect.fail(new RunRecordError("RUN_ID_CONFLICT", `${runId} already exists.`))
+        }
+        records.set(runId, {
+          request: Uint8Array.from(request),
+          events: Uint8Array.from(firstEvent),
+          state: Uint8Array.from(state),
+          evidence: {},
+        })
+        return Effect.void
+      }),
+    ),
+    read: (runId) => check("read").pipe(
+      Effect.flatMap(() => Effect.try({
+        try: () => {
+          const value = get(runId)
+          return {
+            request: Uint8Array.from(value.request),
+            events: Uint8Array.from(value.events),
+            evidence: Object.fromEntries(
+              Object.entries(value.evidence).map(([path, bytes]) => [path, Uint8Array.from(bytes)]),
+            ),
+            ...(value.state === undefined ? {} : { state: Uint8Array.from(value.state) }),
+          } satisfies StoredRunRecord
+        },
+        catch: (error) => error instanceof RunRecordError
+          ? error
+          : new RunRecordError("DURABILITY_FAILURE", "Memory Run Record could not be read."),
+      })),
+    ),
+    appendEvent: (runId, expectedHeadSha256, event) => check("append-event").pipe(
+      Effect.flatMap(() => Effect.try({
+        try: () => {
+          const value = get(runId)
+          const lines = Buffer.from(value.events).toString("utf8").trimEnd().split("\n")
+          const head = JSON.parse(lines.at(-1) ?? "null") as { eventSha256?: unknown } | null
+          if (head?.eventSha256 !== expectedHeadSha256) {
+            throw new RunRecordError("IDEMPOTENCY_CONFLICT", "The event head changed before append.")
+          }
+          const combined = new Uint8Array(value.events.length + event.length)
+          combined.set(value.events)
+          combined.set(event, value.events.length)
+          value.events = combined
+        },
+        catch: (error) => error instanceof RunRecordError
+          ? error
+          : new RunRecordError("DURABILITY_FAILURE", "Memory event append failed."),
+      })),
+    ),
+    writeEvidence: (runId, applicationPath, body) => check("write-evidence").pipe(
+      Effect.flatMap(() => Effect.try({
+        try: () => {
+          const value = get(runId)
+          const existing = value.evidence[applicationPath]
+          if (existing !== undefined) {
+            if (Buffer.from(existing).equals(Buffer.from(body))) return "same" as const
+            throw new RunRecordError("EVIDENCE_REWRITE", `${applicationPath} is write-once.`)
+          }
+          value.evidence[applicationPath] = Uint8Array.from(body)
+          return "created" as const
+        },
+        catch: (error) => error instanceof RunRecordError
+          ? error
+          : new RunRecordError("DURABILITY_FAILURE", "Memory evidence could not be written."),
+      })),
+    ),
+    writeState: (runId, state) => check("write-state").pipe(
+      Effect.flatMap(() => Effect.sync(() => {
+        get(runId).state = Uint8Array.from(state)
+      })),
+    ),
+  }
+
+  return {
+    layer: Layer.succeed(RunRecordStore, service),
+    failNext: (operation, count = 1) => Effect.sync(() => {
+      if (!Number.isSafeInteger(count) || count < 1) throw new Error("Failure count must be a positive safe integer.")
+      failing = { operation, successfulCalls: 0, remaining: count }
+    }),
+    failAfter: (operation, successfulCalls, count = 1) => Effect.sync(() => {
+      if (!Number.isSafeInteger(successfulCalls) || successfulCalls < 0) {
+        throw new Error("Successful call count must be a non-negative safe integer.")
+      }
+      if (!Number.isSafeInteger(count) || count < 1) throw new Error("Failure count must be a positive safe integer.")
+      failing = { operation, successfulCalls, remaining: count }
+    }),
+    mutate: (runId, mutation) => Effect.try({
+      try: () => mutation(get(runId)),
+      catch: (error) => error instanceof RunRecordError
+        ? error
+        : new RunRecordError("DURABILITY_FAILURE", "The memory Run Record mutation failed."),
+    }),
+  }
+})

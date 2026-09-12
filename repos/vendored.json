@@ -1,0 +1,18 @@
+{
+  "_generated_by": "vendor-source",
+  "repos": [
+    {
+      "name": "effect",
+      "url": "https://github.com/Effect-TS/effect",
+      "prefix": "repos/effect",
+      "ref": "effect@4.0.0-rc.112",
+      "commit": "2600f62f4532026928454dcea8d1c48557b3f942",
+      "vendored_at": "2026-08-30T22:49:11.914Z",
+      "size_mb": 38.5,
+      "pins": {
+        "package": "effect",
+        "from": "package.json"
+      }
+    }
+  ]
+}
