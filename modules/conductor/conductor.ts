@@ -369,7 +369,7 @@ const verifiedVideoDecision = (
   }
 }
 
-const terminalFailureDecision = (
+const failureDecision = (
   diagnostics: RunRecordDiagnostics,
   objective: string,
   finding: Extract<AdvanceDecision, { _tag: "Blocked" | "Failed" }>["finding"],
@@ -408,19 +408,27 @@ const replayedTerminalDecision = (
   ) {
     throw new ConductorError("RUN_STATE_UNSUPPORTED", "The terminal Run has no replay-verified failure classification.")
   }
-  return terminalFailureDecision(diagnostics, objective, {
+  return failureDecision(diagnostics, objective, {
     code: finding.class,
     message: finding.message,
     correctionOwner: finding.correctionOwner,
   }, diagnostics.view.classification)
 }
 
-const unresolvedSubmissionDecision = (diagnostics: RunRecordDiagnostics, objective: string): AdvanceDecision =>
-  terminalFailureDecision(diagnostics, objective, {
+const unresolvedSubmissionDecision = (diagnostics: RunRecordDiagnostics, objective: string): AdvanceDecision => {
+  const decision = failureDecision(diagnostics, objective, {
     code: "submission_unreconciled",
     message: "A durable submission marker has no provider receipt yet. The original caller may still be running; this observation does not declare a terminal Run failure.",
     correctionOwner: "Generation",
   }, "blocked")
+  return {
+    ...decision,
+    normalView: {
+      ...decision.normalView,
+      nextAction: "Reconcile the existing Run only. No provider identity is recorded: preserve evidence and check the original caller; do not submit again, poll, search for jobs, or start a successor Run.",
+    },
+  }
+}
 
 const classifyRunFailure = (
   runId: string,

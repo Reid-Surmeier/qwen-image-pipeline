@@ -170,6 +170,9 @@ if (command === "help") {
       changesRequested: planned.run.request.objective,
       checks: { outcome: "outcome" in decision ? decision.outcome : "pending", evidence: decision.normalView.evidence, visualReview: "unverified" },
       cost: diagnostics?.view.actualCostUsd ?? "unknown",
+      runId: "runId" in decision ? decision.runId : undefined,
+      spendState: "spendState" in decision ? decision.spendState : diagnostics?.view.spendState,
+      retryState: "retryState" in decision ? decision.retryState : diagnostics?.view.retryState,
       nextAction: decision.normalView.nextAction,
       fullRecord: runRoot,
     }, null, 2))

@@ -7,7 +7,7 @@
 
 If a sanitized Seedance submission response became write-once durable before its journal event, the next advance lets Run Record reconcile it during reservation reload and continues from the recovered job identity without another submission.
 
-A reloaded submission marker without a provider receipt returns a read-only `Blocked` observation (`submission_unreconciled`) with the recorded Run identity, possibly-spent state, and reconciliation-only guidance. This applies to image and Seedance Runs. It writes no terminal failure: the original caller may still be running and must remain able to persist its valid receipt. Replays never recreate a permit, invent a provider identity, or submit again.
+A reloaded submission marker without a provider receipt returns a read-only `Blocked` observation (`submission_unreconciled`) with the recorded Run identity, possibly-spent state, and reconciliation-only guidance. This applies to image and Seedance Runs. It writes no terminal failure: the original caller may still be running and must remain able to persist its valid receipt. Replays never recreate a permit, invent a provider identity, or submit again. The public command includes explicit `runId`, `spendState`, and `retryState` fields for recorded Runs, including interrupted persistence; unknown cost alone is not a spend classification.
 
 `plan` discovers the fixed Project Contract and Tool Lock, reads one application-relative Objective, delegates evidence and contract proof, and returns either a Planned Run or a refusal. Both results contain the five-question Normal View. Planning has no Generation, credential, network, Run Record writer, attempt reservation, clock, or randomness capability.
 

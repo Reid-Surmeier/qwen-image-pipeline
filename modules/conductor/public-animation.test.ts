@@ -152,6 +152,10 @@ for (const interrupted of [false, true]) test(`the public animation command subm
         assert.match(response.checks.evidence, /submission_unreconciled/)
         assert.match(response.nextAction, /reconcile.*do not submit again/i)
         assert.equal(response.cost, "unknown")
+        assert.equal(response.runId, runs[0])
+        assert.equal(response.spendState, "possibly_spent")
+        assert.equal(response.retryState, "reconcile-only")
+        assert.match(response.nextAction, /no provider identity is recorded/i)
         assert.equal(response.fullRecord, runRoot)
         assert.deepEqual(response.result, [])
       }
