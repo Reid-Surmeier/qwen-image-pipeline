@@ -7,7 +7,7 @@ import { GenerationAdapter, GenerationError } from "../generation/index.js"
 import { RunRecordClock, makeMemoryRunRecordHarness, materializeMuseImage } from "../run-record/index.js"
 import { makeFixture, sha256 } from "../../tests/control-plane-fixture.js"
 
-for (const scenario of ["normal", "interrupted", "ambiguous", "mismatched-native"] as const) test(`Muse text generation: ${scenario}`, async () => {
+for (const scenario of ["normal", "in-flight", "interrupted", "ambiguous", "mismatched-native"] as const) test(`Muse text generation: ${scenario}`, async () => {
   const identity = await Effect.runPromise(filePlanningIdentity(join(process.cwd(), "tests/fixtures/tool-artifacts/muse-v3")))
   const fixture = makeFixture("qwen-image", {
     toolLock: lock => Object.assign(lock, identity.installedTool),
@@ -24,6 +24,10 @@ for (const scenario of ["normal", "interrupted", "ambiguous", "mismatched-native
   if (planned._tag !== "Planned") return
   const memory = await Effect.runPromise(makeMemoryRunRecordHarness())
   let calls = 0
+  let entered!: () => void
+  let release!: () => void
+  const submitting = new Promise<void>((resolve) => { entered = resolve })
+  const receiptReady = new Promise<void>((resolve) => { release = resolve })
   const body = Buffer.from(JSON.stringify({height:1,pixels:scenario === "mismatched-native" ? [99,99,99,255] : [12,34,56,255],width:1}))
   const native = Buffer.from("UklGRh4AAABXRUJQVlA4TBEAAAAvAAAAAAdQkTIUp/+BiOh/AAA=", "base64")
   const receipt = Buffer.from(JSON.stringify({id: null, status: "completed", completed_count: 1, cost: { state: "actual", actual_cost_usd: "0.010000" }, source_images: [{media_type:"image/webp",sha256:sha256(native),body_base64:native.toString("base64"),normalized_sha256:sha256(body)}]}))
@@ -36,6 +40,10 @@ for (const scenario of ["normal", "interrupted", "ambiguous", "mismatched-native
       recover: (_prepared, evidence) => Effect.sync(() => { recoveryCalls++; assert.equal(evidence.sha256,sha256(receipt)); return result }),
       invoke: prepared => Effect.gen(function*() {
         calls++
+        if (scenario === "in-flight") {
+          entered()
+          yield* Effect.promise(() => receiptReady)
+        }
         assert.equal(prepared.request.objective, "A brass listening device.\n")
         if (scenario === "ambiguous") return yield* Effect.fail(new GenerationError("PROVIDER_AMBIGUOUS", "captured timeout"))
         return result
@@ -43,7 +51,30 @@ for (const scenario of ["normal", "interrupted", "ambiguous", "mismatched-native
     }), Effect.provide(memory.layer),
     Effect.provideService(RunRecordClock, { now: () => Effect.succeed("2026-09-09T19:00:00.000Z") }),
   ))
-  let first = await execute()
+  const original = execute()
+  if (scenario === "in-flight") {
+    await submitting
+    try {
+      let head: string | undefined
+      for (let repeat = 0; repeat < 2; repeat++) {
+        const unresolved = await execute()
+        assert.equal(unresolved._tag, "Blocked")
+        if (unresolved._tag !== "Blocked") continue
+        assert.equal(unresolved.finding.code, "submission_unreconciled")
+        assert.equal(unresolved.diagnostics.view.phase, "submission_may_have_started")
+        assert.equal(unresolved.diagnostics.view.classification, undefined)
+        assert.equal(unresolved.diagnostics.view.spendState, "possibly_spent")
+        assert.equal(unresolved.diagnostics.view.retryState, "reconcile-only")
+        assert.equal(unresolved.diagnostics.view.chainHeadSha256, head ?? unresolved.diagnostics.view.chainHeadSha256)
+        head = unresolved.diagnostics.view.chainHeadSha256
+        assert.equal(calls, 1)
+        assert.equal(recoveryCalls, 0)
+      }
+    } finally {
+      release()
+    }
+  }
+  let first = await original
   if (scenario === "ambiguous") {
     assert.notEqual(first._tag, "HumanDecisionRequired")
     await execute(); assert.equal(calls,1); return

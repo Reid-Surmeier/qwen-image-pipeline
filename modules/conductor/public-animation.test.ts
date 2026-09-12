@@ -23,7 +23,7 @@ const rehashTool = (root: string): void => {
   writeFileSync(join(root, "tool-artifact.json"), JSON.stringify({ schemaVersion: "1", files, artifactSha256: hash(JSON.stringify({ files })) }) + "\n")
 }
 
-test("the public animation command submits once and replays the same Run", {
+for (const interrupted of [false, true]) test(`the public animation command submits once and replays the same Run (interrupted=${interrupted})`, {
   skip: process.env.QWEN_BASELINE_OFFLINE === "1"
     ? "ordinary CI forbids descendant processes; run this local fake-provider command replay separately"
     : false,
@@ -48,6 +48,7 @@ test("the public animation command submits once and replays the same Run", {
     const providerCalls = join(scratch, "provider-calls")
     writeFileSync(join(distribution, "seedance/src/httpx.py"), [
       "import base64",
+      "import os, signal",
       `CALLS = ${JSON.stringify(providerCalls)}`,
       `VIDEO = base64.b64decode(${JSON.stringify(Buffer.from(video).toString("base64"))})`,
       "class Response:",
@@ -58,6 +59,7 @@ test("the public animation command submits once and replays the same Run", {
       "    def __init__(self, **_kwargs): pass",
       "    def post(self, _path, json=None):",
       "        with open(CALLS, 'a') as handle: handle.write('submit\\n')",
+      ...(interrupted ? ["        os.kill(os.getppid(), signal.SIGKILL)", "        os._exit(0)"] : []),
       "        return Response({'id':'fixture-job-1','status':'pending'})",
       "    def get(self, path):",
       "        return Response(content=VIDEO) if path.endswith('/content') else Response({'id':'fixture-job-1','status':'completed'})",
@@ -132,14 +134,29 @@ test("the public animation command submits once and replays the same Run", {
     assert.equal(existsSync(join(application, "artifacts/qwen-pipeline/runs")), false)
     const run = () => invoke(true)
     const first = run()
-    assert.equal(first.status, 2, first.stderr)
+    assert.equal(first.status, interrupted ? null : 2, first.stderr)
+    if (interrupted) assert.equal(first.signal, "SIGKILL")
     assert.equal(existsSync(join(application, "artifacts/qwen-pipeline/runs")), true, first.stdout + first.stderr)
     const replay = run()
-    assert.equal(replay.status, 0, replay.stdout + replay.stderr)
-    assert.equal(run().status, 0)
+    assert.equal(replay.status, interrupted ? 2 : 0, replay.stdout + replay.stderr)
+    const again = run()
+    assert.equal(again.status, interrupted ? 2 : 0)
 
     const runs = readdirSync(join(application, "artifacts/qwen-pipeline/runs"))
     assert.equal(runs.length, 1)
+    if (interrupted) {
+      const runRoot = join(application, "artifacts/qwen-pipeline/runs", runs[0]!)
+      for (const result of [replay, again]) {
+        const response = JSON.parse(result.stdout)
+        assert.equal(response.checks.outcome, "blocked")
+        assert.match(response.checks.evidence, /submission_unreconciled/)
+        assert.match(response.nextAction, /reconcile.*do not submit again/i)
+        assert.equal(response.cost, "unknown")
+        assert.equal(response.fullRecord, runRoot)
+        assert.deepEqual(response.result, [])
+      }
+      assert.equal(existsSync(join(runRoot, "failure.json")), false)
+    }
     const events = readFileSync(join(application, "artifacts/qwen-pipeline/runs", runs[0]!, "events.jsonl"), "utf8")
       .trimEnd().split("\n").map((line) => JSON.parse(line) as { kind: string })
     assert.equal(events.filter((event) => event.kind === "submission_may_have_started").length, 1, JSON.stringify(events))

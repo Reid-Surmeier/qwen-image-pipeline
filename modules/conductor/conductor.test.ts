@@ -1219,10 +1219,16 @@ test("advances one Seedance Run by submitting once and polling the same job to v
   }))
   let submitCalls = 0
   let pollCalls = 0
+  let entered!: () => void
+  let release!: () => void
+  const submitting = new Promise<void>((resolve) => { entered = resolve })
+  const receiptReady = new Promise<void>((resolve) => { release = resolve })
   const adapter: GenerationAdapterService = {
     invoke: () => Effect.die("Qwen Generation must not run for Seedance"),
-    submitSeedance: (prepared) => Effect.sync(() => {
+    submitSeedance: (prepared) => Effect.promise(async () => {
       submitCalls += 1
+      entered()
+      await receiptReady
       const destination = (
         prepared.payload.input_references as ReadonlyArray<{
           video_url: { url: { applicationPath: string; bytesBase64: string; mediaType: string; sha256: string } }
@@ -1295,7 +1301,28 @@ test("advances one Seedance Run by submitting once and polling the same job to v
     ),
   )
 
-  const submitted = await executeAdvance()
+  const original = executeAdvance()
+  await submitting
+  try {
+    let head: string | undefined
+    for (let repeat = 0; repeat < 2; repeat++) {
+      const unresolved = await executeAdvance()
+      assert.equal(unresolved._tag, "Blocked")
+      if (unresolved._tag !== "Blocked") continue
+      assert.equal(unresolved.finding.code, "submission_unreconciled")
+      assert.equal(unresolved.diagnostics.view.phase, "submission_may_have_started")
+      assert.equal(unresolved.diagnostics.view.classification, undefined)
+      assert.equal(unresolved.diagnostics.view.spendState, "possibly_spent")
+      assert.equal(unresolved.diagnostics.view.retryState, "reconcile-only")
+      assert.equal(unresolved.diagnostics.view.chainHeadSha256, head ?? unresolved.diagnostics.view.chainHeadSha256)
+      head = unresolved.diagnostics.view.chainHeadSha256
+      assert.equal(submitCalls, 1)
+      assert.equal(pollCalls, 0)
+    }
+  } finally {
+    release()
+  }
+  const submitted = await original
   assert.equal(submitted._tag, "ProviderPending")
   if (submitted._tag !== "ProviderPending") return
   assert.equal(submitted.jobId, "seedance-job-1")

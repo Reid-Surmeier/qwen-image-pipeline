@@ -415,6 +415,13 @@ const replayedTerminalDecision = (
   }, diagnostics.view.classification)
 }
 
+const unresolvedSubmissionDecision = (diagnostics: RunRecordDiagnostics, objective: string): AdvanceDecision =>
+  terminalFailureDecision(diagnostics, objective, {
+    code: "submission_unreconciled",
+    message: "A durable submission marker has no provider receipt yet. The original caller may still be running; this observation does not declare a terminal Run failure.",
+    correctionOwner: "Generation",
+  }, "blocked")
+
 const classifyRunFailure = (
   runId: string,
   objective: string,
@@ -610,6 +617,15 @@ const advanceSeedanceRun = (
       "RUN_RECORD_FAILURE",
       "The immutable Seedance Run could not be reserved or reloaded.",
     )))
+
+    if (current.phase === "submission_may_have_started") {
+      const diagnostics = yield* readDiagnostics(current.runId).pipe(Effect.mapError(asConductorError(
+        "RUN_RECORD_FAILURE", "The unresolved submission evidence could not be replayed.",
+      )))
+      current = diagnostics.view
+      // Observe only: the original caller may still persist its receipt concurrently.
+      if (current.phase === "submission_may_have_started") return unresolvedSubmissionDecision(diagnostics, request.objective)
+    }
 
     if (current.phase === "definitive_pre_submit_failure" || current.phase === "blocked" || current.phase === "failed") {
       const diagnostics = yield* readDiagnostics(current.runId).pipe(Effect.mapError(asConductorError(
@@ -874,6 +890,14 @@ export const advanceRun = (
       "The immutable Planned Run could not be reserved or reloaded.",
     )))
     let generated: GenerationResult | undefined
+
+    if (current.phase === "submission_may_have_started") {
+      const diagnostics = yield* readDiagnostics(current.runId).pipe(Effect.mapError(asConductorError(
+        "RUN_RECORD_FAILURE", "The unresolved submission evidence could not be replayed.",
+      )))
+      current = diagnostics.view
+      if (current.phase === "submission_may_have_started") return unresolvedSubmissionDecision(diagnostics, request.objective)
+    }
 
     if (current.phase === "definitive_pre_submit_failure" || current.phase === "blocked" || current.phase === "failed") {
       const diagnostics = yield* readDiagnostics(current.runId).pipe(Effect.mapError(asConductorError(
