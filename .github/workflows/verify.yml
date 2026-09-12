@@ -31,7 +31,7 @@ jobs:
       - name: Install deterministic image and video prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends ffmpeg python3-pil python3-numpy python3-opencv
+          sudo apt-get install --yes --no-install-recommends ffmpeg python3-pil python3-numpy python3-opencv python3-pytest
 
       - name: Set up Python
         uses: actions/setup-python@v5
