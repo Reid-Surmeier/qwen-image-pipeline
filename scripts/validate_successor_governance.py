@@ -108,7 +108,7 @@ jobs:
       - name: Install deterministic image and video prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install --yes --no-install-recommends ffmpeg python3-pil python3-numpy python3-opencv python3-pytest
+          sudo apt-get install --yes --no-install-recommends ffmpeg python3-httpx python3-numpy python3-opencv python3-pil python3-pytest python3-yaml
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -219,7 +219,7 @@ def validate_repository(root: Path) -> list[str]:
             "      - name: Install deterministic image and video prerequisites",
             "        run: |",
             "          sudo apt-get update",
-            "          sudo apt-get install --yes --no-install-recommends ffmpeg python3-pil python3-numpy python3-opencv python3-pytest",
+            "          sudo apt-get install --yes --no-install-recommends ffmpeg python3-httpx python3-numpy python3-opencv python3-pil python3-pytest python3-yaml",
         ]
         ffmpeg_step_valid = False
         for index, line in enumerate(verify_lines):
