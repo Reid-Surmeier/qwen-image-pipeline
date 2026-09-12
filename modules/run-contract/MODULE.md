@@ -11,6 +11,8 @@ A Qwen Image Objective may declare an Assembly plan. When present, `required` is
 
 A Seedance Objective must declare a Video Plan. Assembly may be absent only when its exact machine-readable decision says `required: false` and `pixelOwnership: "none-authoritative"`; a vague or missing assertion is refused. The same plan freezes expected width, height, duration, and audio presence for independent output verification. Qwen objectives cannot carry a Video Plan, and Seedance objectives cannot carry a Qwen Assembly plan.
 
+Seedance requires an authoritative locked video reference by default. If no such capture exists, exactly two locked image references named `first-frame` and `last-frame` are admitted only when their identical authority reason is a closed `inferred-motion/v1` JSON record containing non-empty provenance, behavior, timing, spatial permissions, and cancel/restart behavior plus `historicalFidelity: false`. The hashes remain ordinary Reference Plan evidence; the waiver records inference and cannot claim historical motion fidelity.
+
 Run Contract owns canonical serialization and the request SHA-256. It does not reserve an attempt or persist a Run Record.
 
 ## Muse port (Issues #90–93)

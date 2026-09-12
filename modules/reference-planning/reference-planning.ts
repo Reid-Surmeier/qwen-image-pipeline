@@ -464,7 +464,7 @@ const isProviderPayloadDestination = (
   const match = /^\/input_references\/(0|[1-9]\d*)\/(image_url|video_url)\/url$/.exec(destination)
   if (match === null) return false
   if (mode !== "seedance-video") return kind === "image" && match[2] === "image_url"
-  return kind === "video" && match[2] === "video_url"
+  return (kind === "video" && match[2] === "video_url") || (kind === "image" && match[2] === "image_url")
 }
 
 export const planReferenceInputs = (

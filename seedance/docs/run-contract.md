@@ -21,21 +21,11 @@ The request payload is local and ignored because data URLs can be large or priva
 request remains inspectable. If the payload is lost, recreate it from the brief and locked sources;
 do not reconstruct or guess a paid request from the sanitized record.
 
-Before submission, the CLI recomputes `request_sha256`, re-fetches capabilities, and
-refuses either a payload changed since planning or a changed canonical model version.
-The exact decimal estimate must be provided to `--acknowledge-cost`. This gate documents
-approval; it does not promise the provider invoice will equal the estimate.
-
-`submit` constructs the credentialed client first, then marks the paid action as performed
-immediately before sending the POST. A missing local credential therefore is not recorded as
-a provider attempt, while a rejected POST is never represented as an unpaid plan. HTTP failures retain the operation,
-status, endpoint, parsed provider error when the body is JSON, a size-capped sanitized
-response body, and only allowlisted response identifiers. The cap is 64 KiB after UTF-8
-encoding, redaction, and any invalid-byte replacement. Sensitive JSON fields and recognized
-authorization, bearer, token, key, cookie, password, secret, and credential-URL forms are
-redacted. Request headers are never written. A failed submission is classified
-`billing_status: possibly_spent` and `safe_to_retry: false`; it is not retried by the
-client.
+These directories are historical compatibility records. `seedance-icons submit` now refuses
+before reading a run or constructing a provider client. New paid work uses
+`image-pipeline animation --application PATH --objective PATH --execute
+--acknowledge-cost USD`, whose application-owned Run Record writes the one-use submission
+marker before the provider call. Existing jobs remain pollable by their saved exact identity.
 
 
 ## Strategy gate (enforced at plan time; owner instruction 2026-08-27)
@@ -60,8 +50,9 @@ A plan is refused unless:
    in the reference registry, its stable filename and `motion_kind` must match both the
    declaration and the URL that will be sent to OpenRouter.
 
-`submit` independently refuses any plan whose `plan.json` lacks a passing (or explicitly
-waived) `strategy_gate` record, so pre-gate plans cannot be submitted either.
+This retained strategy gate still governs compatibility planning. It does not authorize the
+retired submit command or bypass the public Conductor path. A public image-only animation needs
+the versioned inferred-motion waiver described in the repository's ADR 0009.
 
 The gate is profile-aware for sources outside game/pixel art. The brief declares
 `"grammar"`: **`retro-sprite`** (the default when undeclared — the full rules above,

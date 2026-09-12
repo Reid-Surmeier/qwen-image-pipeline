@@ -102,6 +102,22 @@ const isNormalizedRgbaRaster = (body: Uint8Array): boolean => {
 const isSafeJobId = (value: unknown): value is string =>
   typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)
 
+const inferredMotionWaiver = (references: CanonicalRunRequest["references"]): boolean => {
+  if (references.length !== 2 || references[0]?.slot !== "first-frame" || references[1]?.slot !== "last-frame" ||
+      references.some((reference, index) => reference.kind !== "image" || reference.payloadDestination !== `/input_references/${index}/image_url/url`) ||
+      references[0].authorityReason !== references[1].authorityReason) return false
+  const prefix = "inferred-motion/v1:"
+  const source = references[0].authorityReason
+  if (!source.startsWith(prefix)) return false
+  try {
+    const waiver = JSON.parse(source.slice(prefix.length)) as Record<string, unknown>
+    return Object.keys(waiver).sort().join(",") === "behavior,cancelRestart,historicalFidelity,provenance,spatialPermissions,timing" &&
+      waiver.historicalFidelity === false &&
+      [waiver.provenance, waiver.behavior, waiver.timing, waiver.spatialPermissions, waiver.cancelRestart]
+        .every((value) => typeof value === "string" && value.trim().length > 0)
+  } catch { return false }
+}
+
 const parseProviderDocument = (
   evidence: GenerationProviderEvidence,
   kind: SanitizedProviderDocumentKind,
@@ -538,9 +554,10 @@ export const submitSeedanceGeneration = (
       validatedPrepared.request.mode !== "seedance-video" ||
       validatedPrepared.request.videoPlan?.assembly.required !== false ||
       validatedPrepared.request.videoPlan.assembly.pixelOwnership !== "none-authoritative" ||
-      validatedPrepared.request.references.some((reference) =>
-        reference.kind !== "video" || reference.mediaType !== "video/mp4" ||
-        !/\/video_url\/url$/.test(reference.payloadDestination))
+      !(validatedPrepared.request.references.every((reference) =>
+        reference.kind === "video" && reference.mediaType === "video/mp4" &&
+        /\/video_url\/url$/.test(reference.payloadDestination)) ||
+        inferredMotionWaiver(validatedPrepared.request.references))
     ) {
       return yield* Effect.fail(new GenerationError(
         "ADAPTER_RESULT_INVALID",

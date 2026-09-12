@@ -25,7 +25,7 @@ The Objective names one allowed Procedure and records each reference's applicati
 2. Read the fixed Project Contract, Tool Lock, then Objective from the application root.
 3. Reject secrets, unsafe paths, tool drift, unapproved Procedures, count excess, or budget excess.
 4. Read each reference once, hash those bytes, detect its kind, inspect those same bytes, and compare declared properties and provider-payload destination.
-5. Canonicalize, hash, and recursively freeze the Planned Run; Seedance video must already be bound to `/input_references/0/video_url/url`.
+5. Canonicalize, hash, and recursively freeze the Planned Run. Seedance uses an authoritative video payload by default; without one, exactly two `first-frame`/`last-frame` image payloads must share a valid `inferred-motion/v1` authority record.
 
 To upgrade one application, install and verify the new tool artifact, update only that application's Tool Lock to the derived identity, and rerun this no-cost planning procedure. Other application repositories remain pinned. Existing Run Records are replayed under the Procedure, Run schema, and adapter protocol recorded in each immutable request; they are never rewritten into the current schema.
 

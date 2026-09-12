@@ -376,6 +376,22 @@ const decodeAssemblyPlan = (
 const videoPlanError = (message: string): RunContractError =>
   new RunContractError("VIDEO_PLAN_INVALID", message)
 
+const inferredMotionWaiver = (references: CanonicalRunRequest["references"]): boolean => {
+  if (references.length !== 2 || references[0]?.slot !== "first-frame" || references[1]?.slot !== "last-frame" ||
+      references.some((reference, index) => reference.kind !== "image" || reference.payloadDestination !== `/input_references/${index}/image_url/url`) ||
+      references[0].authorityReason !== references[1].authorityReason) return false
+  const prefix = "inferred-motion/v1:"
+  const source = references[0].authorityReason
+  if (!source.startsWith(prefix)) return false
+  try {
+    const waiver = JSON.parse(source.slice(prefix.length)) as Record<string, unknown>
+    return Object.keys(waiver).sort().join(",") === "behavior,cancelRestart,historicalFidelity,provenance,spatialPermissions,timing" &&
+      waiver.historicalFidelity === false &&
+      [waiver.provenance, waiver.behavior, waiver.timing, waiver.spatialPermissions, waiver.cancelRestart]
+        .every((value) => typeof value === "string" && value.trim().length > 0)
+  } catch { return false }
+}
+
 const decodeVideoPlan = (
   value: unknown,
   mode: "qwen-image" | "muse-image" | "seedance-video",
@@ -685,11 +701,12 @@ export const compileDocuments = (
   })
   if (
     decoded.mode === "seedance-video" &&
-    !referencePlan.references.some((reference) => reference.kind === "video")
+    !referencePlan.references.some((reference) => reference.kind === "video") &&
+    !inferredMotionWaiver(referencePlan.references)
   ) {
     return yield* Effect.fail(new RunContractError(
       "SEEDANCE_VIDEO_REFERENCE_REQUIRED",
-      "Seedance video mode requires a real video reference in the locked payload destination.",
+      "Seedance requires an authoritative video reference or one exact inferred-motion/v1 first/last-frame waiver.",
     ))
   }
 
